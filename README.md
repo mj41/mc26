@@ -19,14 +19,16 @@ Mojang jar ──► data-gen/ ──┬─► mc26-data      (releases)        
 
 ## The flow, locally
 
-Requirements: Go, podman or docker (the extractors run in `eclipse-temurin:25-jdk`), Java 25 on
-the host for the smoke test. Everything below writes only under `temp/`.
+Requirements: Go and podman or docker — the extractors and the vanilla test server both run in
+`eclipse-temurin:25-jdk` (`--runtime host` runs the server on the host's Java 25 instead).
+Everything below writes only under `temp/`.
 
 ```bash
-go run ./gen/cmd/mc26 pipeline --version 26.2 --smoke   # extract → build → vet/test → vanilla-server smoke
+go run ./gen/cmd/mc26 pipeline --version 26.2 --smoke --e2e   # extract → build → vet/test → smoke → example bots
 go run ./gen/cmd/mc26 extract  --version 26.2           # only the JSON: temp/data/26.2 (+ _meta.json)
 go run ./gen/cmd/mc26 build    --data 26.2              # only the library: temp/lib/26.2
-go run ./gen/cmd/mc26 smoke    --version 26.2           # only the smoke test against temp/lib/26.2
+go run ./gen/cmd/mc26 smoke    --version 26.2           # the library's smoke test against a vanilla server
+go run ./gen/cmd/mc26 e2e      --version 26.2           # the bots of ../go-mc26-examples (its mc-26.2 branch) against a vanilla server
 go run ./gen/cmd/schemacov 26.2                         # how much of the packet schema is typed
 go run ./gen/cmd/packetdiff 26.1 26.2                   # wire-layout changes between two versions
 go run ./gen/cmd/mcmeta diff 26.2 26.3-pre-2            # registry preview without Java (misode/mcmeta)
@@ -43,15 +45,31 @@ go run ./gen/cmd/mc26 release --version 26.2 --push
 ## The flow, in GitHub Actions
 
 - `pipeline` (`.github/workflows/pipeline.yml`): every pull request, and on demand for any
-  version — the local `pipeline --smoke`, plus the coverage report and the artifacts.
+  version — the local `pipeline --smoke --e2e` (the examples checked out at their `mc-<version>`
+  branch), plus the coverage report and the artifacts.
 - `release` (`.github/workflows/release.yml`): on demand with a version — the local `release
-  --push`, using the `MC26_PUSH_TOKEN` secret (contents: write on the three target repositories).
-  Tags are created only here.
+  --e2e --push`, using the `MC26_PUSH_TOKEN` secret (contents: write on the three target
+  repositories). Tags are created only here.
+
+The smoke test joins the server, waits for chunks and its own chat echo. The end-to-end run
+builds every example against the built library and checks: `mcping` reports the version;
+`daze` sees a broadcast, a private message and an item given over RCON while chunks stream in;
+two `daze` bots hear each other's chat (typed on their consoles), and one of them, made an
+operator, teleports itself to the other (checked with `data get entity … Pos`) and gives it a
+diamond the other bot sees in its inventory; `minimal` and `autofish` log in; `pressureTest`
+logs three bots in; `mcadump` reads a region file the server wrote.
 
 Versions: Minecraft 26.1 and later, release ids and pre-release ids alike (`26.3-pre-2` goes to
 `mc26-data-pre` and tags as `v0.263.0-pre2.<n>`). The three newest Minecraft versions receive
 fixes; older branches are frozen.
 
+## Docs
+
+[docs/](docs/README.md): [architecture](docs/architecture.md), [generated versus
+hand-written](docs/generated-vs-hand-written.md), [a new Minecraft version](docs/new-version.md),
+[testing](docs/testing.md), [releasing](docs/release.md); [gen/README.md](gen/README.md) for the
+commands, generators and packet structs; [data-gen/README.md](data-gen/README.md) for the extractors.
+
 Built with Claude Opus and Claude Fable. Carries code from
 [Tnze/go-mc](https://github.com/Tnze/go-mc) (MIT); `gen/src/COPIED` lists the origin of every
-hand-written library file.
+hand-written library file — `go run ./gen/cmd/mc26 report --version 26.2` measures the split.

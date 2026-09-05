@@ -3,8 +3,9 @@
 //
 //	mc26 extract  --version 26.2                 # jar → temp/data/26.2 (JSON + _meta.json)
 //	mc26 build    --data temp/data/26.2 --out temp/lib/26.2   # data → library tree, built and tested
-//	mc26 smoke    --version 26.2 --lib temp/lib/26.2          # vanilla server ↔ bot smoke test
-//	mc26 pipeline --version 26.2 [--smoke]       # extract + build + test (+ smoke), nothing committed
+//	mc26 smoke    --version 26.2 --lib temp/lib/26.2          # vanilla server (container) ↔ bot smoke test
+//	mc26 e2e      --version 26.2 --examples ../go-mc26-examples   # the example bots against a vanilla server
+//	mc26 pipeline --version 26.2 [--smoke] [--e2e]   # extract + build + test (+ smoke, + e2e), nothing committed
 //	mc26 release  --version 26.2 [--push]        # extract → mc26-data branch+tag → build → smoke → go-mc26 branch+tag
 //	mc26 commit   --repo DIR --branch B --from TREE --message M [--tag-base v0.262.]
 //	mc26 latest                                  # newest release and snapshot in Mojang's manifest
@@ -27,10 +28,12 @@ import (
 	"time"
 
 	"github.com/mj41/mc26/gen/internal/build"
+	"github.com/mj41/mc26/gen/internal/e2e"
 	"github.com/mj41/mc26/gen/internal/extract"
 	"github.com/mj41/mc26/gen/internal/gitx"
 	"github.com/mj41/mc26/gen/internal/importsrc"
 	"github.com/mj41/mc26/gen/internal/paths"
+	"github.com/mj41/mc26/gen/internal/report"
 	"github.com/mj41/mc26/gen/internal/smoke"
 )
 
@@ -52,8 +55,8 @@ func main() {
 	}
 	cmd, args := os.Args[1], os.Args[2:]
 	commands := map[string]func([]string) error{
-		"extract": cmdExtract, "build": cmdBuild, "commit": cmdCommit, "smoke": cmdSmoke,
-		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag,
+		"extract": cmdExtract, "build": cmdBuild, "commit": cmdCommit, "smoke": cmdSmoke, "e2e": cmdE2E,
+		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag, "report": cmdReport,
 		"import-src": cmdImportSrc, "import-examples": cmdImportExamples,
 	}
 	fn, ok := commands[cmd]
@@ -72,10 +75,12 @@ func usage() {
 
   extract   --version V [--runtime podman|docker] [--dry-run]
   build     --data DIR --out DIR [--version V] [--data-source S] [--no-test]
-  smoke     --version V --lib DIR [--port N]
-  pipeline  --version V [--data DIR] [--out DIR] [--smoke] [--skip-extract]
-  release   --version V [--data-repo DIR] [--data-pre-repo DIR] [--lib-repo DIR] [--skip-extract] [--no-smoke] [--push]
+  smoke     --version V [--lib DIR] [--port N] [--runtime podman|docker|host]
+  e2e       --version V [--lib DIR] [--examples DIR] [--port N] [--runtime …]
+  pipeline  --version V [--data DIR] [--out DIR] [--smoke] [--e2e] [--skip-extract]
+  release   --version V [--data-repo DIR] [--data-pre-repo DIR] [--lib-repo DIR] [--skip-extract] [--no-smoke] [--e2e] [--push]
   commit    --repo DIR --branch B --from TREE --message M [--tag-base v0.262.] [--push]
+  report    --version V | --lib DIR      generated vs hand-written lines of a built library
   latest
   tag       --version V
   import-src        --from GOMC [--owner NAME]
@@ -125,14 +130,27 @@ func buildLib(dataDir, outDir, version, dataSource string, test bool) (*build.In
 }
 
 // runSmoke starts a vanilla server of version and runs the library's smoke test.
-func runSmoke(version, libDir string, port int) error {
+func runSmoke(version, libDir string, port int, runtime string) error {
 	jar, err := extract.ServerJar(paths.Cache(), version, logf)
 	if err != nil {
 		return err
 	}
 	return smoke.Run(smoke.Options{
-		LibDir: libDir, JarPath: jar, WorkDir: filepath.Join(paths.Temp(), "smoke", version),
-		Port: port, Log: logf,
+		Version: version, LibDir: libDir, JarPath: jar, WorkDir: filepath.Join(paths.Temp(), "smoke", version),
+		Port: port, Runtime: runtime, Log: logf,
+	})
+}
+
+// runE2E builds the example bots against libDir and drives them against a
+// vanilla server of version.
+func runE2E(version, dataDir, libDir, examplesDir string, port int, runtime string) error {
+	jar, err := extract.ServerJar(paths.Cache(), version, logf)
+	if err != nil {
+		return err
+	}
+	return e2e.Run(e2e.Options{
+		Version: version, DataDir: dataDir, LibDir: libDir, ExamplesDir: examplesDir, JarPath: jar,
+		WorkDir: filepath.Join(paths.Temp(), "e2e", version), Port: port, Runtime: runtime, Log: logf,
 	})
 }
 
@@ -282,6 +300,7 @@ func cmdSmoke(args []string) error {
 	version := fs.String("version", "", "Minecraft version of the server jar")
 	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
 	port := fs.Int("port", smokePort, "server port")
+	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
 	fs.Parse(args)
 	if *version == "" {
 		return fmt.Errorf("--version is required")
@@ -289,7 +308,28 @@ func cmdSmoke(args []string) error {
 	if *lib == "" {
 		*lib = filepath.Join(paths.Temp(), "lib", *version)
 	}
-	return runSmoke(*version, *lib, *port)
+	return runSmoke(*version, *lib, *port, *runtime)
+}
+
+func cmdE2E(args []string) error {
+	fs := flag.NewFlagSet("e2e", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version of the server jar")
+	data := fs.String("data", "", "data directory (default temp/data/<version>)")
+	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
+	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout, on the branch of the version")
+	port := fs.Int("port", smokePort, "server port")
+	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
+	fs.Parse(args)
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	if *data == "" {
+		*data = filepath.Join(paths.DataRoot(), *version)
+	}
+	if *lib == "" {
+		*lib = filepath.Join(paths.Temp(), "lib", *version)
+	}
+	return runE2E(*version, *data, *lib, *examples, *port, *runtime)
 }
 
 func cmdPipeline(args []string) error {
@@ -298,8 +338,10 @@ func cmdPipeline(args []string) error {
 	data := fs.String("data", "", "use this data directory instead of extracting")
 	out := fs.String("out", "", "library tree to produce (default temp/lib/<version>)")
 	doSmoke := fs.Bool("smoke", false, "run the vanilla-server smoke test after the build")
+	doE2E := fs.Bool("e2e", false, "run the example bots against a vanilla server after the build")
+	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout for --e2e")
 	skipExtract := fs.Bool("skip-extract", false, "reuse temp/data/<version> when it exists")
-	runtime := fs.String("runtime", "", "podman or docker (detected)")
+	runtime := fs.String("runtime", "", "podman or docker (detected); host runs the server on the host's java")
 	fs.Parse(args)
 	if *version == "" {
 		return fmt.Errorf("--version is required")
@@ -323,13 +365,22 @@ func cmdPipeline(args []string) error {
 		return err
 	}
 	if *doSmoke {
-		if err := runSmoke(*version, *out, smokePort); err != nil {
+		if err := runSmoke(*version, *out, smokePort, containerRuntime(*runtime)); err != nil {
+			return err
+		}
+	}
+	if *doE2E {
+		if err := runE2E(*version, dataDir, *out, *examples, smokePort, containerRuntime(*runtime)); err != nil {
 			return err
 		}
 	}
 	logf("pipeline %s: ok in %s (data %s, library %s)", *version, time.Since(start).Round(time.Second), dataDir, *out)
 	return nil
 }
+
+// containerRuntime maps the pipeline's --runtime to the server runner: the
+// extraction always needs a container runtime, the server may use "host".
+func containerRuntime(r string) string { return r }
 
 func cmdRelease(args []string) error {
 	fs := flag.NewFlagSet("release", flag.ExitOnError)
@@ -339,6 +390,8 @@ func cmdRelease(args []string) error {
 	libRepo := fs.String("lib-repo", sibling("go-mc26"), "checkout of go-mc26")
 	skipExtract := fs.Bool("skip-extract", false, "reuse temp/data/<version> when it exists")
 	noSmoke := fs.Bool("no-smoke", false, "skip the vanilla-server smoke test")
+	doE2E := fs.Bool("e2e", false, "also run the example bots against a vanilla server before committing the library")
+	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout for --e2e")
 	push := fs.Bool("push", false, "push the branches and tags to origin")
 	runtime := fs.String("runtime", "", "podman or docker (detected)")
 	fs.Parse(args)
@@ -383,7 +436,12 @@ func cmdRelease(args []string) error {
 		return err
 	}
 	if !*noSmoke {
-		if err := runSmoke(*version, libOut, smokePort); err != nil {
+		if err := runSmoke(*version, libOut, smokePort, *runtime); err != nil {
+			return err
+		}
+	}
+	if *doE2E {
+		if err := runE2E(*version, repo, libOut, *examples, smokePort, *runtime); err != nil {
 			return err
 		}
 	}
@@ -430,6 +488,31 @@ func cmdCommit(args []string) error {
 	if *push {
 		return gitx.Push(*repo, *branch, tag)
 	}
+	return nil
+}
+
+func cmdReport(args []string) error {
+	fs := flag.NewFlagSet("report", flag.ExitOnError)
+	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
+	version := fs.String("version", "", "Minecraft version, to find the default tree")
+	fs.Parse(args)
+	if *lib == "" {
+		if *version == "" {
+			return fmt.Errorf("--lib or --version is required")
+		}
+		*lib = filepath.Join(paths.Temp(), "lib", *version)
+	}
+	r, err := report.Run(report.Options{LibDir: *lib, GenRoot: filepath.Join(paths.MustRoot(), "gen")})
+	if err != nil {
+		return err
+	}
+	name := *version
+	if name == "" {
+		if v, err := build.ReadVersionGo(*lib); err == nil {
+			name = v
+		}
+	}
+	r.Print(os.Stdout, name)
 	return nil
 }
 

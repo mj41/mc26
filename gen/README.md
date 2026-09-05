@@ -7,7 +7,7 @@ Java itself.
 
 ```
 gen/
-├── cmd/mc26/            extract · build · smoke · pipeline · release · commit · latest · tag · import-src · import-examples
+├── cmd/mc26/            extract · build · smoke · e2e · pipeline · release · report · commit · latest · tag · import-src · import-examples
 ├── cmd/packetdiff/      wire-layout diff of two versions (packet_schema.json + packets.json)
 ├── cmd/mcmeta/          registry preview and check against misode/mcmeta, no Java needed
 ├── cmd/schemacov/       how much of packet_schema.json is fully typed, and why the rest is not
@@ -20,12 +20,12 @@ gen/
 ├── internal/paths/      <root>/temp layout (data/<version>, cache, lib/<version>, smoke/<version>)
 ├── hand-crafted/        inputs that are not in any Mojang output (see hand-crafted/hand-crafted.md)
 ├── templates/           version.go, packetid.go, README.md, ci.yml, … (text/template)
-├── versions/<version>/  files an older version needs different from src/ (same relative paths), applied by build
+├── src/_versions/<v>/   files an older version needs different from src/ (same relative paths), applied by build; the underscore keeps them out of every ./... walk
 └── src/                 the hand-written library packages; module github.com/mj41/go-mc26, no generated files
 ```
 
 `src/` is written for the newest Minecraft version. When a packet gained a field in a later
-version, the older version's copy of the file that uses it lives under `versions/<version>/`
+version, the older version's copy of the file that uses it lives under `src/_versions/<version>/`
 (26.1: `server/login.go` without the session id, `bot/basic/info.go` without the online-mode
 flag). Check the packet with `schemacov -show <flow/name> <version>` before writing an overlay: a
 struct literal that omits a field still compiles, so the compiler only reports fields that are

@@ -1,6 +1,7 @@
 # The whole chain for one Minecraft version, without publishing anything:
-# extract → build → vet/test → smoke against a vanilla server. Runs on every
-# pull request for the newest supported version and on demand for any version.
+# extract → build → vet/test → smoke and the example bots against a vanilla
+# server in a container. Runs on every pull request for the newest supported
+# version and on demand for any version.
 name: pipeline
 on:
   pull_request:
@@ -25,17 +26,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: actions/setup-java@v4
+      - name: examples of this version
+        uses: actions/checkout@v4
         with:
-          distribution: temurin
-          java-version: "25"
+          repository: mj41/go-mc26-examples
+          ref: mc-${{ env.VERSION }}
+          path: temp/examples
       - name: cache server jars
         uses: actions/cache@v4
         with:
           path: temp/cache
           key: server-jar-${{ env.VERSION }}
-      - name: extract, build, test, smoke
-        run: go run ./gen/cmd/mc26 pipeline --version "$VERSION" --smoke
+      - name: extract, build, test, smoke, example bots
+        run: go run ./gen/cmd/mc26 pipeline --version "$VERSION" --smoke --e2e --examples temp/examples
       - name: packet schema coverage
         run: go run ./gen/cmd/schemacov "$VERSION"
       - uses: actions/upload-artifact@v4
@@ -46,4 +49,5 @@ jobs:
             temp/data/${{ env.VERSION }}/*.json
             temp/lib/${{ env.VERSION }}
             temp/smoke/${{ env.VERSION }}/server.log
+            temp/e2e/${{ env.VERSION }}/server/server.log
           retention-days: 7

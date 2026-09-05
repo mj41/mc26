@@ -53,6 +53,21 @@ func ReadVersion(dataDir string) (*Info, error) {
 	return &v, nil
 }
 
+// ReadVersionGo returns the Minecraft version a built library tree records in
+// data/version/version.go.
+func ReadVersionGo(libDir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(libDir, "data", "version", "version.go"))
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if name, ok := strings.CutPrefix(strings.TrimSpace(line), "Name = "); ok {
+			return strings.Trim(name, "\""), nil
+		}
+	}
+	return "", fmt.Errorf("no Name in %s/data/version/version.go", libDir)
+}
+
 // Run builds the library and returns the version it was built for.
 func Run(o Options) (*Info, error) {
 	if o.Log == nil {
@@ -78,9 +93,13 @@ func Run(o Options) (*Info, error) {
 		return nil, fmt.Errorf("copying sources: %w", err)
 	}
 	// Files a version needs different from the newest one (a packet that
-	// gained a field, …) live under gen/versions/<version>/ with the same
-	// relative paths and replace the common sources.
-	overlay := filepath.Join(o.GenRoot, "versions", v.ID)
+	// gained a field, …) live under src/_versions/<version>/ with the same
+	// relative paths and replace the common sources; the directory itself
+	// (ignored by the go tool because of the underscore) is not shipped.
+	if err := os.RemoveAll(filepath.Join(o.OutDir, "_versions")); err != nil {
+		return nil, err
+	}
+	overlay := filepath.Join(src, "_versions", v.ID)
 	if fi, err := os.Stat(overlay); err == nil && fi.IsDir() {
 		if err := gitx.CopyTree(overlay, o.OutDir, nil); err != nil {
 			return nil, fmt.Errorf("applying %s: %w", overlay, err)

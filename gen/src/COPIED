@@ -120,7 +120,7 @@ net/packet/util.go	upstream
 net/packet/util_test.go	upstream
 net/queue/queue.go	modified
 net/rcon.go	upstream
-net/rcon_test.go	upstream
+net/rcon_test.go	modified
 offline/uuid.go	upstream
 offline/uuid_test.go	upstream
 protocol/configuration/hand.go	new
@@ -201,3 +201,4 @@ yggdrasil/user/yggdrasil_session_pubkey.der	upstream
 yggdrasil/validate.go	upstream
 yggdrasil/yggdrasil.go	upstream
 yggdrasil/yggdrasil_test.go	upstream
+bot/smoke_test.go	new

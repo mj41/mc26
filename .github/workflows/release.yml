@@ -23,10 +23,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: actions/setup-java@v4
+      - name: examples of this version
+        uses: actions/checkout@v4
         with:
-          distribution: temurin
-          java-version: "25"
+          repository: mj41/go-mc26-examples
+          ref: mc-${{ inputs.version }}
+          path: temp/examples
       - name: data repositories
         run: |
           git clone --depth 50 "https://x-access-token:${MC26_PUSH_TOKEN}@github.com/mj41/mc26-data.git" temp/repos/mc26-data
@@ -38,7 +40,7 @@ jobs:
           MC26_PUSH_TOKEN: ${{ secrets.MC26_PUSH_TOKEN }}
       - name: release
         run: |
-          go run ./gen/cmd/mc26 release --version "${{ inputs.version }}" \
+          go run ./gen/cmd/mc26 release --version "${{ inputs.version }}" --e2e --examples temp/examples \
             --data-repo temp/repos/mc26-data --data-pre-repo temp/repos/mc26-data-pre \
             --lib-repo temp/repos/go-mc26 ${{ inputs.push && '--push' || '' }}
       - uses: actions/upload-artifact@v4
