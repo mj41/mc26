@@ -14,7 +14,7 @@ that version's data comes out; every Minecraft version is a branch, every build 
                                         gen/internal/generate   ──┼─► build ──► go-mc26   (branch mc-<v>, tag v0.<YYN>.<patch>)
                                         gen/hand-crafted, templates┘             │
                                                                                  ▼
-                                                                      go-mc26-examples (branch mc-<v>)
+                                                                      go-mc26-examples (main)         
 ```
 
 1. **Extract** (`mc26 extract`). The host downloads the jar and the language files from Mojang;
@@ -42,7 +42,7 @@ The same command runs on a laptop and in GitHub Actions; the workflows are thin 
 | `mc26-data` | JSON of every Minecraft release | `main` = README; `mc-<version>`; `v0.<YYN>.<n>` (`n` counts re-extractions) |
 | `mc26-data-pre` | the same for snapshots and pre-releases | `mc-26.3-pre-2`; `v0.263.0-pre2.<n>` |
 | `go-mc26` | the generated library, module `github.com/mj41/go-mc26` | `main` = README; `mc-<version>`; `v0.<YYN>.<patch>` |
-| `go-mc26-examples` | bots and tools on the library | `main` = README; `mc-<version>` pinned to a library tag |
+| `go-mc26-examples` | bots and tools on the library | one branch, `main`, pinned to the newest library tag; they use only the stable surface and build against every maintained version |
 
 Minecraft version ids are `YY.N` from 26.1 on; there is no 26.0. `YYN` in a tag is the version
 without the dot (26.2 → `v0.262.x`). Major version 0 states the API promise: none between

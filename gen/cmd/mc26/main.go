@@ -316,7 +316,7 @@ func cmdE2E(args []string) error {
 	version := fs.String("version", "", "Minecraft version of the server jar")
 	data := fs.String("data", "", "data directory (default temp/data/<version>)")
 	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
-	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout, on the branch of the version")
+	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout")
 	port := fs.Int("port", smokePort, "server port")
 	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
 	fs.Parse(args)
@@ -390,6 +390,7 @@ func cmdRelease(args []string) error {
 	libRepo := fs.String("lib-repo", sibling("go-mc26"), "checkout of go-mc26")
 	skipExtract := fs.Bool("skip-extract", false, "reuse temp/data/<version> when it exists")
 	noSmoke := fs.Bool("no-smoke", false, "skip the vanilla-server smoke test")
+	dataOnly := fs.Bool("data-only", false, "stop after the data commit and tag (a pre-release whose library needs work)")
 	doE2E := fs.Bool("e2e", false, "also run the example bots against a vanilla server before committing the library")
 	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout for --e2e")
 	push := fs.Bool("push", false, "push the branches and tags to origin")
@@ -428,6 +429,17 @@ func cmdRelease(args []string) error {
 	dataTag, err := commitTree(repo, branch, stage, dataMsg, base)
 	if err != nil {
 		return fmt.Errorf("%s: %w", dataName, err)
+	}
+	if *dataOnly {
+		if *push {
+			if err := gitx.Push(repo, branch, dataTag); err != nil {
+				return err
+			}
+			logf("pushed %s %s %s", dataName, branch, dataTag)
+		} else {
+			logf("release %s: %s %s committed locally (not pushed); library skipped (--data-only)", *version, dataName, dataTag)
+		}
+		return nil
 	}
 
 	// 2. library, built from the data branch checkout, smoke-tested before it is committed

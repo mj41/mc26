@@ -71,9 +71,8 @@ go run ./gen/cmd/mc26 release --version 26.3            # local branches and tag
 go run ./gen/cmd/mc26 release --version 26.3 --push     # or run the release workflow
 ```
 
-Then the examples: `git checkout -b mc-26.3 main` in `../go-mc26-examples`, `mc26
-import-examples` is only for the first import — for a new version, cherry-pick the previous
-branch, bump the library version in `go.mod`, build through the `go.work`, commit.
+Then the examples (one `main` branch): bump the library version in `go.mod`, build through
+the `go.work`, commit. (`mc26 import-examples` was only for the first import.)
 
 ## Pre-releases and snapshots
 

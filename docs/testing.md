@@ -27,8 +27,8 @@ login to complete, for 25 chunks and for its own chat message to come back, then
 go run ./gen/cmd/mc26 e2e --version 26.2 [--examples ../go-mc26-examples]
 ```
 
-Builds every example of the examples checkout (which must be on the branch of that version)
-against the built library through a temporary `go.work`, starts a server as above, and runs:
+Builds every example of the examples checkout (its single `main` branch; the harness builds it
+against the given library through a temporary `go.work`, whatever `go.mod` pins), starts a server as above, and runs:
 
 | scenario | what must happen |
 |---|---|

@@ -194,9 +194,11 @@ func scenarioPing(o Options, bin string, srv *smoke.Server, v *build.Info) error
 	if err != nil {
 		return fmt.Errorf("%v\n%s", err, out)
 	}
-	want := fmt.Sprintf("[%d] %s", v.ProtocolVersion, v.ID)
-	if !strings.Contains(string(out), want) {
-		return fmt.Errorf("ping output lacks %q:\n%s", want, out)
+	// The server reports its display name ("26.3 Pre-Release 2"), which is
+	// the id for releases only.
+	proto := fmt.Sprintf("[%d]", v.ProtocolVersion)
+	if !strings.Contains(string(out), proto) || !(strings.Contains(string(out), v.Name) || strings.Contains(string(out), v.ID)) {
+		return fmt.Errorf("ping output lacks %s and %q/%q:\n%s", proto, v.Name, v.ID, out)
 	}
 	return nil
 }

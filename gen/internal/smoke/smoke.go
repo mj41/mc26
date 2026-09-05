@@ -77,6 +77,8 @@ func (s *Server) Start() error {
 		port, rcon = 25565, 25575
 	}
 	props := fmt.Sprintf(`online-mode=false
+white-list=false
+enforce-whitelist=false
 server-port=%d
 enable-rcon=true
 rcon.port=%d

@@ -30,7 +30,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mj41/go-mc26-examples
-          ref: mc-${{ env.VERSION }}
           path: temp/examples
       - name: cache server jars
         uses: actions/cache@v4

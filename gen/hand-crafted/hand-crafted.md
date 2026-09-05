@@ -93,3 +93,11 @@ When adding support for a new Minecraft version:
 | `component_schema.json` | MC wiki / decompiled source | Hand-written |
 | `naming_overrides.json` | Go style preferences | Hand-written |
 | `packet_phases.json` | Protocol structure | Hand-written |
+
+### hand_packets.json
+
+The packets implemented by hand in `src/protocol/<state>/hand.go`, keyed
+`<state>/<flow>/<packet name>` with the reason. The packets generator skips them
+regardless of the schema's coverage; when a new Minecraft version's schema types one of
+them fully, the generator says so, and the hand-written version can be retired on purpose
+(remove it from `hand.go` and from this file) rather than colliding with a generated one.

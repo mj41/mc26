@@ -1,0 +1,12 @@
+{
+  "_comment": "Packets implemented by hand in src/protocol/<state>/hand.go. The packets generator skips them even when the schema types them fully, and says so, so the hand-written version can be retired deliberately. Key: <state>/<flow>/<packet name> as in packets.json.",
+  "configuration/clientbound/minecraft:custom_payload": "the payload is the rest of the packet, keyed by channel",
+  "configuration/serverbound/minecraft:custom_payload": "the payload is the rest of the packet, keyed by channel",
+  "login/clientbound/minecraft:custom_query": "the payload is the rest of the packet",
+  "login/serverbound/minecraft:custom_query_answer": "optional payload is the rest of the packet",
+  "play/clientbound/minecraft:custom_payload": "the payload is the rest of the packet, keyed by channel",
+  "play/serverbound/minecraft:custom_payload": "the payload is the rest of the packet, keyed by channel",
+  "play/clientbound/minecraft:level_chunk_with_light": "the chunk sections are decoded into level.Chunk, which needs the dimension height",
+  "play/clientbound/minecraft:player_chat": "signed chat body and the filter mask",
+  "play/clientbound/minecraft:player_info_update": "entries whose parts depend on the action bit set"
+}

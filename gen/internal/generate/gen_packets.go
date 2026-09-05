@@ -105,6 +105,15 @@ func genPackets(jsonDir, goMCRoot string) error {
 		return fmt.Errorf("genPackets: %w", err)
 	}
 
+	// Packets implemented by hand are skipped whatever the schema says; when
+	// the schema types one of them fully, that is reported so the hand-written
+	// version can be retired.
+	var handPackets map[string]string
+	if err := readHandCrafted(goMCRoot, "hand_packets.json", &handPackets); err != nil {
+		return fmt.Errorf("genPackets: %w", err)
+	}
+	delete(handPackets, "_comment")
+
 	gs := &genState{enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, fixedBits: map[int]bool{}, fixedBytes: map[int]bool{}}
 	total, generated := 0, 0
 	for _, state := range sortedKeys(ids) {
@@ -127,6 +136,13 @@ func genPackets(jsonDir, goMCRoot string) error {
 				entry, ok := schema.Packets[flow+"/"+name]
 				if !ok {
 					skipped = append(skipped, name+" (not in packet_schema.json)")
+					continue
+				}
+				if reason, hand := handPackets[state+"/"+flow+"/"+name]; hand {
+					skipped = append(skipped, name+" (hand-written: "+reason+")")
+					if entry.Coverage == "full" {
+						logf("genPackets: %s/%s/%s is fully typed in the schema now; the hand-written version in hand.go could be retired", state, flow, name)
+					}
 					continue
 				}
 				if entry.Coverage != "full" {

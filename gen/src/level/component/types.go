@@ -594,3 +594,77 @@ func (s SoundEvent) WriteTo(w io.Writer) (int64, error) {
 		},
 	}.WriteTo(w)
 }
+
+// ResolvableInt is a loot number provider reference or a constant (Minecraft
+// 26.3+: ResolvableInt.STREAM_CODEC = either(INT, ResourceKey)): a boolean
+// selects the constant (true, a 4-byte int) or the key (false, an identifier
+// of the context_int_provider registry).
+type ResolvableInt struct {
+	Constant bool
+	Value    int32
+	Key      string
+}
+
+func (v *ResolvableInt) ReadFrom(r io.Reader) (n int64, err error) {
+	var constant pk.Boolean
+	if n, err = constant.ReadFrom(r); err != nil {
+		return
+	}
+	v.Constant = bool(constant)
+	var m int64
+	if v.Constant {
+		m, err = (*pk.Int)(&v.Value).ReadFrom(r)
+	} else {
+		m, err = (*pk.Identifier)(&v.Key).ReadFrom(r)
+	}
+	return n + m, err
+}
+
+func (v ResolvableInt) WriteTo(w io.Writer) (n int64, err error) {
+	if n, err = pk.Boolean(v.Constant).WriteTo(w); err != nil {
+		return
+	}
+	var m int64
+	if v.Constant {
+		m, err = pk.Int(v.Value).WriteTo(w)
+	} else {
+		m, err = pk.Identifier(v.Key).WriteTo(w)
+	}
+	return n + m, err
+}
+
+// ResolvableFloat is the float twin of ResolvableInt (FLOAT or a key of the
+// context_float_provider registry).
+type ResolvableFloat struct {
+	Constant bool
+	Value    float32
+	Key      string
+}
+
+func (v *ResolvableFloat) ReadFrom(r io.Reader) (n int64, err error) {
+	var constant pk.Boolean
+	if n, err = constant.ReadFrom(r); err != nil {
+		return
+	}
+	v.Constant = bool(constant)
+	var m int64
+	if v.Constant {
+		m, err = (*pk.Float)(&v.Value).ReadFrom(r)
+	} else {
+		m, err = (*pk.Identifier)(&v.Key).ReadFrom(r)
+	}
+	return n + m, err
+}
+
+func (v ResolvableFloat) WriteTo(w io.Writer) (n int64, err error) {
+	if n, err = pk.Boolean(v.Constant).WriteTo(w); err != nil {
+		return
+	}
+	var m int64
+	if v.Constant {
+		m, err = pk.Float(v.Value).WriteTo(w)
+	} else {
+		m, err = pk.Identifier(v.Key).WriteTo(w)
+	}
+	return n + m, err
+}

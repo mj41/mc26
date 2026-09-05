@@ -30,6 +30,11 @@ if asked. Nothing is tagged twice: an unchanged tree keeps its tag and the comma
 
 The target checkouts must be clean; the command refuses otherwise.
 
+A pre-release whose data is wanted before the library builds against it (new wire shapes still
+to be handled in `gen/src`) is released with `--data-only`: the data branch and tag are made,
+the library step is skipped. `26.3-pre-2` was seeded into `mc26-data-pre` that way as
+`v0.263.0-pre2.0`.
+
 ## In GitHub Actions
 
 `.github/workflows/release.yml`, `workflow_dispatch` with the version and a `push` switch

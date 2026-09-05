@@ -437,6 +437,7 @@ public class GenPacketSchema {
                 case "idMapper" -> { stack.push(new CodecV(idMapper(args))); return; }
                 case "stringUtf8" -> { stack.push(new CodecV(node("string", "max", constOf(arg(args, 0))))); return; }
                 case "byteArray" -> { stack.push(new CodecV(node("prim", "t", "BYTE_ARRAY", "max", constOf(arg(args, 0))))); return; }
+                case "fixedBitSet" -> { stack.push(new CodecV(node("prim", "t", "FIXED_BIT_SET", "bits", constOf(arg(args, 0))))); return; }
                 case "fromCodec", "fromCodecTrusted", "fromCodecWithRegistries", "fromCodecWithRegistriesTrusted", "compoundTagCodec", "tagCodec" -> { stack.push(new CodecV(nbtOrText(args.isEmpty() ? null : arg(args, 0)))); return; }
                 case "lengthPrefixed" -> { stack.push(new FnV("lengthPrefixed", constOf(arg(args, 0)))); return; }
                 case "either" -> { stack.push(new CodecV(node("either", "left", nodeOf(arg(args, 0)), "right", nodeOf(arg(args, 1))))); return; }
