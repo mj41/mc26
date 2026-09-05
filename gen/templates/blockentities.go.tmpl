@@ -1,0 +1,32 @@
+{{.Header}}
+package block
+
+var EntityList = [...]Entity{
+{{- range .Entities}}
+	{{.GoName}}{},
+{{- end}}
+}
+
+{{range .Entities}}
+func ({{.GoName}}) ID() string { return {{printf "%q" .Name}} }
+{{end}}
+
+{{range .Entities -}}
+{{if eq (len .ValidBlocks) 1 -}}
+func ({{.Receiver}} {{.GoName}}) IsValidBlock(block Block) bool {
+	return block.ID() == {{printf "%q" (index .ValidBlocks 0)}}
+}
+
+{{else -}}
+func ({{.Receiver}} {{.GoName}}) IsValidBlock(block Block) bool {
+	switch block.ID() {
+	case {{range $i, $b := .ValidBlocks}}{{if $i}},
+		{{end}}{{printf "%q" $b}}{{end}}:
+		return true
+	default:
+		return false
+	}
+}
+
+{{end -}}
+{{end -}}

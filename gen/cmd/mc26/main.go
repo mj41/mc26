@@ -1,0 +1,496 @@
+// mc26 runs the chain from Mojang's server jar to a tagged go-mc26 library —
+// locally and in GitHub Actions alike:
+//
+//	mc26 extract  --version 26.2                 # jar → temp/data/26.2 (JSON + _meta.json)
+//	mc26 build    --data temp/data/26.2 --out temp/lib/26.2   # data → library tree, built and tested
+//	mc26 smoke    --version 26.2 --lib temp/lib/26.2          # vanilla server ↔ bot smoke test
+//	mc26 pipeline --version 26.2 [--smoke]       # extract + build + test (+ smoke), nothing committed
+//	mc26 release  --version 26.2 [--push]        # extract → mc26-data branch+tag → build → smoke → go-mc26 branch+tag
+//	mc26 commit   --repo DIR --branch B --from TREE --message M [--tag-base v0.262.]
+//	mc26 latest                                  # newest release and snapshot in Mojang's manifest
+//	mc26 import-src --from <go-mc tree>          # one-time: fill gen/src from the fork
+//	mc26 import-examples --from <go-mc tree> --to <examples checkout> --lib-version v0.262.0
+//
+// Scratch files live under <root>/temp (see internal/paths). Nothing is pushed
+// unless --push is given.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"text/template"
+	"time"
+
+	"github.com/mj41/mc26/gen/internal/build"
+	"github.com/mj41/mc26/gen/internal/extract"
+	"github.com/mj41/mc26/gen/internal/gitx"
+	"github.com/mj41/mc26/gen/internal/importsrc"
+	"github.com/mj41/mc26/gen/internal/paths"
+	"github.com/mj41/mc26/gen/internal/smoke"
+)
+
+const (
+	repoName       = "github.com/mj41/mc26"
+	libModule      = "github.com/mj41/go-mc26"
+	examplesModule = "github.com/mj41/go-mc26-examples"
+	// upstreamRef is the Tnze/go-mc commit the copied sources descend from.
+	upstreamRef = "539b4a3"
+	smokePort   = 25599
+)
+
+func logf(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	cmd, args := os.Args[1], os.Args[2:]
+	commands := map[string]func([]string) error{
+		"extract": cmdExtract, "build": cmdBuild, "commit": cmdCommit, "smoke": cmdSmoke,
+		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag,
+		"import-src": cmdImportSrc, "import-examples": cmdImportExamples,
+	}
+	fn, ok := commands[cmd]
+	if !ok {
+		usage()
+		os.Exit(2)
+	}
+	if err := fn(args); err != nil {
+		logf("mc26 %s: %v", cmd, err)
+		os.Exit(1)
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, `usage: mc26 <command> [flags]
+
+  extract   --version V [--runtime podman|docker] [--dry-run]
+  build     --data DIR --out DIR [--version V] [--data-source S] [--no-test]
+  smoke     --version V --lib DIR [--port N]
+  pipeline  --version V [--data DIR] [--out DIR] [--smoke] [--skip-extract]
+  release   --version V [--data-repo DIR] [--data-pre-repo DIR] [--lib-repo DIR] [--skip-extract] [--no-smoke] [--push]
+  commit    --repo DIR --branch B --from TREE --message M [--tag-base v0.262.] [--push]
+  latest
+  tag       --version V
+  import-src        --from GOMC [--owner NAME]
+  import-examples   --from GOMC --to DIR --lib-version vX.Y.Z
+
+Scratch: <root>/temp (data/<version>, cache, lib/<version>, smoke/<version>).`)
+}
+
+// ---- pieces shared by the commands --------------------------------------------
+
+// tagBase returns the tag prefix of a Minecraft version: "26.2" → "v0.262.",
+// "26.3-pre-2" → "v0.263.0-pre2.", "26.3-rc-1" → "v0.263.0-rc1.".
+func tagBase(version string) (string, error) {
+	m := regexp.MustCompile(`^(\d+)\.(\d+)(?:-(.+))?$`).FindStringSubmatch(version)
+	if m == nil {
+		return "", fmt.Errorf("version %q is not <YY>.<N>[-suffix]", version)
+	}
+	base := "v0." + m[1] + m[2] + "."
+	if m[3] == "" {
+		return base, nil
+	}
+	suffix := regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(m[3], "")
+	return "v0." + m[1] + m[2] + ".0-" + suffix + ".", nil
+}
+
+func isPreRelease(version string) bool { return strings.Contains(version, "-") }
+
+// extractVersion runs the extraction into temp/data/<version> and returns the directory.
+func extractVersion(version, runtime string, dryRun bool) (string, *extract.Meta, error) {
+	root := paths.MustRoot()
+	out := filepath.Join(paths.DataRoot(), version)
+	meta, err := extract.Run(extract.Options{
+		Version: version, OutDir: out, CacheDir: paths.Cache(),
+		JavaDir: filepath.Join(root, "data-gen", "java"), Runtime: runtime, DryRun: dryRun,
+		ExtractorRepo: repoName, ExtractorCommit: gitx.ShortHead(root), Log: logf,
+	})
+	return out, meta, err
+}
+
+// buildLib builds the library from dataDir into outDir.
+func buildLib(dataDir, outDir, version, dataSource string, test bool) (*build.Info, error) {
+	root := paths.MustRoot()
+	return build.Run(build.Options{
+		GenRoot: filepath.Join(root, "gen"), DataDir: dataDir, OutDir: outDir, Version: version,
+		DataSource: dataSource, Generator: "mc26 " + gitx.ShortHead(root), Test: test, Log: logf,
+	})
+}
+
+// runSmoke starts a vanilla server of version and runs the library's smoke test.
+func runSmoke(version, libDir string, port int) error {
+	jar, err := extract.ServerJar(paths.Cache(), version, logf)
+	if err != nil {
+		return err
+	}
+	return smoke.Run(smoke.Options{
+		LibDir: libDir, JarPath: jar, WorkDir: filepath.Join(paths.Temp(), "smoke", version),
+		Port: port, Log: logf,
+	})
+}
+
+// commitTree puts tree on branch of repo (created from main when new), commits
+// it and tags it with the next tag of base unless HEAD already carries one and
+// nothing changed. It returns the tag.
+func commitTree(repo, branch, tree, message, base string) (string, error) {
+	if gitx.Head(repo) == "" {
+		return "", fmt.Errorf("%s is not a git repository with commits", repo)
+	}
+	if clean, err := gitx.IsClean(repo); err != nil || !clean {
+		return "", fmt.Errorf("%s has uncommitted changes", repo)
+	}
+	if err := gitx.Checkout(repo, branch, "main"); err != nil {
+		return "", err
+	}
+	if err := gitx.ReplaceTree(repo, tree); err != nil {
+		return "", err
+	}
+	sha, changed, err := gitx.Commit(repo, message)
+	if err != nil {
+		return "", err
+	}
+	if !changed {
+		if out, _ := gitx.Run(repo, "tag", "--points-at", "HEAD", "--list", base+"*"); out != "" {
+			tag := strings.Fields(out)[0]
+			logf("%s: %s unchanged, already %s", filepath.Base(repo), branch, tag)
+			return tag, nil
+		}
+	}
+	tag, err := gitx.NextTag(repo, base)
+	if err != nil {
+		return "", err
+	}
+	if err := gitx.Tag(repo, tag, message); err != nil {
+		return "", err
+	}
+	logf("%s: %s at %s, tagged %s", filepath.Base(repo), branch, sha[:12], tag)
+	return tag, nil
+}
+
+// stageData turns an extracted directory into the tree of a data branch:
+// the JSON plus README, LICENSE (from the repo's main) and the verify workflow.
+func stageData(dataDir, repo string) (string, error) {
+	meta, err := extract.ReadMeta(dataDir)
+	if err != nil {
+		return "", err
+	}
+	stage := filepath.Join(paths.Temp(), "stage", "data-"+meta.ID)
+	if err := os.RemoveAll(stage); err != nil {
+		return "", err
+	}
+	// Only the data: no build products of the extraction run.
+	skip := func(rel string) bool {
+		return rel == "logs" || strings.HasSuffix(rel, ".class") || strings.HasSuffix(rel, ".log")
+	}
+	if err := gitx.CopyTree(dataDir, stage, skip); err != nil {
+		return "", err
+	}
+	root := paths.MustRoot()
+	if err := render(filepath.Join(root, "gen", "templates", "data-README.md.tmpl"), filepath.Join(stage, "README.md"), map[string]any{"Meta": meta}); err != nil {
+		return "", err
+	}
+	if lic, err := gitx.Run(repo, "show", "main:LICENSE"); err == nil {
+		if err := os.WriteFile(filepath.Join(stage, "LICENSE"), []byte(lic+"\n"), 0o644); err != nil {
+			return "", err
+		}
+	}
+	verify, err := os.ReadFile(filepath.Join(root, "gen", "templates", "data-verify.yml"))
+	if err != nil {
+		return "", err
+	}
+	wf := filepath.Join(stage, ".github", "workflows")
+	if err := os.MkdirAll(wf, 0o755); err != nil {
+		return "", err
+	}
+	return stage, os.WriteFile(filepath.Join(wf, "verify.yml"), verify, 0o644)
+}
+
+func render(tmplPath, out string, data any) error {
+	t, err := template.ParseFiles(tmplPath)
+	if err != nil {
+		return err
+	}
+	f, err := os.Create(out)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return t.Execute(f, data)
+}
+
+func sibling(name string) string { return filepath.Join(filepath.Dir(paths.MustRoot()), name) }
+
+// ---- commands --------------------------------------------------------------------
+
+func cmdExtract(args []string) error {
+	fs := flag.NewFlagSet("extract", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version id (26.1 or later)")
+	runtime := fs.String("runtime", "", "podman or docker (detected)")
+	dryRun := fs.Bool("dry-run", false, "print the container command only")
+	fs.Parse(args)
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	out, meta, err := extractVersion(*version, *runtime, *dryRun)
+	if err != nil {
+		return err
+	}
+	if meta != nil {
+		logf("extracted %s (protocol %d, data version %d) → %s", meta.ID, meta.ProtocolVersion, meta.WorldVersion, out)
+	}
+	return nil
+}
+
+func cmdBuild(args []string) error {
+	fs := flag.NewFlagSet("build", flag.ExitOnError)
+	data := fs.String("data", "", "extracted data directory (or a version id under temp/data)")
+	out := fs.String("out", "", "library tree to produce (default temp/lib/<version>)")
+	version := fs.String("version", "", "expected version id")
+	source := fs.String("data-source", "", "recorded in version.go (default: the data path)")
+	noTest := fs.Bool("no-test", false, "skip go test")
+	fs.Parse(args)
+	if *data == "" {
+		return fmt.Errorf("--data is required")
+	}
+	dataDir := paths.Data(*data)
+	v, err := build.ReadVersion(dataDir)
+	if err != nil {
+		return err
+	}
+	if *out == "" {
+		*out = filepath.Join(paths.Temp(), "lib", v.ID)
+	}
+	if *source == "" {
+		*source = "data " + dataDir
+	}
+	if _, err := buildLib(dataDir, *out, *version, *source, !*noTest); err != nil {
+		return err
+	}
+	logf("built %s → %s", v.ID, *out)
+	return nil
+}
+
+func cmdSmoke(args []string) error {
+	fs := flag.NewFlagSet("smoke", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version of the server jar")
+	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
+	port := fs.Int("port", smokePort, "server port")
+	fs.Parse(args)
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	if *lib == "" {
+		*lib = filepath.Join(paths.Temp(), "lib", *version)
+	}
+	return runSmoke(*version, *lib, *port)
+}
+
+func cmdPipeline(args []string) error {
+	fs := flag.NewFlagSet("pipeline", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version id")
+	data := fs.String("data", "", "use this data directory instead of extracting")
+	out := fs.String("out", "", "library tree to produce (default temp/lib/<version>)")
+	doSmoke := fs.Bool("smoke", false, "run the vanilla-server smoke test after the build")
+	skipExtract := fs.Bool("skip-extract", false, "reuse temp/data/<version> when it exists")
+	runtime := fs.String("runtime", "", "podman or docker (detected)")
+	fs.Parse(args)
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	start := time.Now()
+	dataDir := *data
+	if dataDir == "" {
+		dataDir = filepath.Join(paths.DataRoot(), *version)
+		if _, err := os.Stat(filepath.Join(dataDir, "_meta.json")); err != nil || !*skipExtract {
+			if _, _, err := extractVersion(*version, *runtime, false); err != nil {
+				return err
+			}
+		} else {
+			logf("pipeline: reusing %s", dataDir)
+		}
+	}
+	if *out == "" {
+		*out = filepath.Join(paths.Temp(), "lib", *version)
+	}
+	if _, err := buildLib(dataDir, *out, *version, "data "+dataDir, true); err != nil {
+		return err
+	}
+	if *doSmoke {
+		if err := runSmoke(*version, *out, smokePort); err != nil {
+			return err
+		}
+	}
+	logf("pipeline %s: ok in %s (data %s, library %s)", *version, time.Since(start).Round(time.Second), dataDir, *out)
+	return nil
+}
+
+func cmdRelease(args []string) error {
+	fs := flag.NewFlagSet("release", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version id")
+	dataRepo := fs.String("data-repo", sibling("mc26-data"), "checkout of mc26-data")
+	dataPreRepo := fs.String("data-pre-repo", sibling("mc26-data-pre"), "checkout of mc26-data-pre (pre-releases and snapshots)")
+	libRepo := fs.String("lib-repo", sibling("go-mc26"), "checkout of go-mc26")
+	skipExtract := fs.Bool("skip-extract", false, "reuse temp/data/<version> when it exists")
+	noSmoke := fs.Bool("no-smoke", false, "skip the vanilla-server smoke test")
+	push := fs.Bool("push", false, "push the branches and tags to origin")
+	runtime := fs.String("runtime", "", "podman or docker (detected)")
+	fs.Parse(args)
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	base, err := tagBase(*version)
+	if err != nil {
+		return err
+	}
+	branch := "mc-" + *version
+	repo := *dataRepo
+	dataName := "mc26-data"
+	if isPreRelease(*version) {
+		repo, dataName = *dataPreRepo, "mc26-data-pre"
+	}
+
+	// 1. data
+	dataDir := filepath.Join(paths.DataRoot(), *version)
+	if _, err := os.Stat(filepath.Join(dataDir, "_meta.json")); err != nil || !*skipExtract {
+		if _, _, err := extractVersion(*version, *runtime, false); err != nil {
+			return err
+		}
+	}
+	meta, err := extract.ReadMeta(dataDir)
+	if err != nil {
+		return err
+	}
+	stage, err := stageData(dataDir, repo)
+	if err != nil {
+		return err
+	}
+	dataMsg := fmt.Sprintf("Extract %s (data version %d, protocol %d; mc26 %s)", meta.ID, meta.WorldVersion, meta.ProtocolVersion, meta.ExtractorCommit)
+	dataTag, err := commitTree(repo, branch, stage, dataMsg, base)
+	if err != nil {
+		return fmt.Errorf("%s: %w", dataName, err)
+	}
+
+	// 2. library, built from the data branch checkout, smoke-tested before it is committed
+	libOut := filepath.Join(paths.Temp(), "lib", *version)
+	if _, err := buildLib(repo, libOut, *version, dataName+" "+dataTag, true); err != nil {
+		return err
+	}
+	if !*noSmoke {
+		if err := runSmoke(*version, libOut, smokePort); err != nil {
+			return err
+		}
+	}
+	libMsg := fmt.Sprintf("Build %s from %s %s (mc26 %s)", meta.ID, dataName, dataTag, gitx.ShortHead(paths.MustRoot()))
+	libTag, err := commitTree(*libRepo, branch, libOut, libMsg, base)
+	if err != nil {
+		return fmt.Errorf("go-mc26: %w", err)
+	}
+
+	// 3. push
+	if *push {
+		if err := gitx.Push(repo, branch, dataTag); err != nil {
+			return err
+		}
+		if err := gitx.Push(*libRepo, branch, libTag); err != nil {
+			return err
+		}
+		logf("pushed %s %s %s and go-mc26 %s %s", dataName, branch, dataTag, branch, libTag)
+	} else {
+		logf("release %s: %s %s / go-mc26 %s committed locally (not pushed)", *version, dataName, dataTag, libTag)
+	}
+	return nil
+}
+
+func cmdCommit(args []string) error {
+	fs := flag.NewFlagSet("commit", flag.ExitOnError)
+	repo := fs.String("repo", "", "checkout to commit into")
+	branch := fs.String("branch", "", "branch (created from main when missing)")
+	from := fs.String("from", "", "tree to commit")
+	message := fs.String("message", "", "commit message")
+	base := fs.String("tag-base", "", "tag prefix, e.g. v0.262. (next free number is used)")
+	push := fs.Bool("push", false, "push branch and tag")
+	fs.Parse(args)
+	if *repo == "" || *branch == "" || *from == "" || *message == "" {
+		return fmt.Errorf("--repo, --branch, --from and --message are required")
+	}
+	if *base == "" {
+		*base = "untagged."
+	}
+	tag, err := commitTree(*repo, *branch, *from, *message, *base)
+	if err != nil {
+		return err
+	}
+	if *push {
+		return gitx.Push(*repo, *branch, tag)
+	}
+	return nil
+}
+
+func cmdLatest(args []string) error {
+	release, snapshot, err := extract.LatestVersions()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("release  %s\nsnapshot %s\n", release, snapshot)
+	return nil
+}
+
+func cmdTag(args []string) error {
+	fs := flag.NewFlagSet("tag", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version id")
+	fs.Parse(args)
+	base, err := tagBase(*version)
+	if err != nil {
+		return err
+	}
+	fmt.Println(base + "0")
+	return nil
+}
+
+func cmdImportSrc(args []string) error {
+	fs := flag.NewFlagSet("import-src", flag.ExitOnError)
+	from := fs.String("from", "", "go-mc working tree")
+	owner := fs.String("owner", "mj41", "copyright holder added to LICENSE")
+	fs.Parse(args)
+	if *from == "" {
+		return fmt.Errorf("--from is required")
+	}
+	return importsrc.ImportSrc(importsrc.Options{
+		From: *from, To: filepath.Join(paths.MustRoot(), "gen", "src"), Module: libModule,
+		UpstreamRef: upstreamRef, Owner: *owner, Log: logf,
+	})
+}
+
+func cmdImportExamples(args []string) error {
+	fs := flag.NewFlagSet("import-examples", flag.ExitOnError)
+	from := fs.String("from", "", "go-mc working tree")
+	to := fs.String("to", "", "examples checkout, on the branch to fill")
+	libVersion := fs.String("lib-version", "", "go-mc26 version to require, e.g. v0.262.0")
+	fs.Parse(args)
+	if *from == "" || *to == "" || *libVersion == "" {
+		return fmt.Errorf("--from, --to and --lib-version are required")
+	}
+	if err := importsrc.ImportExamples(importsrc.ExamplesOptions{
+		From: *from, To: *to, Module: examplesModule, LibModule: libModule, LibVersion: *libVersion, Log: logf,
+	}); err != nil {
+		return err
+	}
+	ci, err := os.ReadFile(filepath.Join(paths.MustRoot(), "gen", "templates", "examples-ci.yml"))
+	if err != nil {
+		return err
+	}
+	wf := filepath.Join(*to, ".github", "workflows")
+	if err := os.MkdirAll(wf, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(wf, "ci.yml"), ci, 0o644)
+}
+
+var _ = strconv.Itoa

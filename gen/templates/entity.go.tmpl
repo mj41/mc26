@@ -1,0 +1,37 @@
+{{.Header}}// Package entity stores information about entities in Minecraft.
+package entity
+
+// ID describes the numeric ID of an entity.
+type ID uint32
+
+// Entity describes information about a type of entity.
+type Entity struct {
+	ID          ID
+	InternalID  uint32
+	DisplayName string
+	Name        string
+	Width       float64
+	Height      float64
+	Type        string
+}
+
+var (
+{{- range .Entities}}
+	{{.GoName}} = Entity{
+		ID:          {{.ID}},
+		InternalID:  {{.ID}},
+		DisplayName: {{printf "%q" .DisplayName}},
+		Name:        {{printf "%q" .ShortName}},
+		Width:       {{.Width}},
+		Height:      {{.Height}},
+		Type:        {{printf "%q" .Category}},
+	}
+{{- end}}
+)
+
+// ByID is an index of minecraft entities by their ID.
+var ByID = map[ID]*Entity{
+{{- range .Entities}}
+	{{printf "%-*d" $.IDWidth .ID}}: &{{.GoName}},
+{{- end}}
+}

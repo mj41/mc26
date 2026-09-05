@@ -1,0 +1,19 @@
+{{.Header}}
+// Package soundid stores sound event IDs used in the Minecraft protocol.
+package soundid
+
+// SoundID represents a sound ID used in the minecraft protocol.
+type SoundID int32
+
+// SoundNames - map of ids to names for sounds.
+var SoundNames = map[SoundID]string{
+{{- range .Sounds}}
+	{{printf "%-5d" .ID}}: {{printf "%q" .Name}},
+{{- end}}
+}
+
+// GetSoundNameByID helper method
+func GetSoundNameByID(id SoundID) (string, bool) {
+	name, ok := SoundNames[id]
+	return name, ok
+}

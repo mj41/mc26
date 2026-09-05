@@ -1,0 +1,56 @@
+{{.Header}}package biome
+
+import (
+	"errors"
+	"hash/maphash"
+	"math/bits"
+)
+
+// Type is the protocol ID of a biome.
+type Type int
+
+var hashSeed = maphash.MakeSeed()
+
+func (t Type) MarshalText() (text []byte, err error) {
+	if t >= 0 && int(t) < len(biomesNames) {
+		return biomesNames[t], nil
+	}
+	return nil, errors.New("invalid type")
+}
+
+func (t *Type) UnmarshalText(text []byte) error {
+	var ok bool
+	*t, ok = biomesIDs[maphash.Bytes(hashSeed, text)]
+	if ok {
+		return nil
+	}
+	return errors.New("invalid type")
+}
+
+// String returns the biome id. Debugging purposes only.
+func (t Type) String() string {
+	if t >= 0 && int(t) < len(biomesNames) {
+		return string(biomesNames[t])
+	}
+	return "<invalid biome type>"
+}
+
+var (
+	// BitsPerBiome reports how many bits are required to represent all possible biomes.
+	BitsPerBiome int
+	biomesIDs    map[uint64]Type
+	biomesNames  = [][]byte{
+{{- range .Biomes}}
+		[]byte({{printf "%q" .Name}}),
+{{- end}}
+	}
+)
+
+func init() {
+	BitsPerBiome = bits.Len(uint(len(biomesNames)))
+	biomesIDs = make(map[uint64]Type, len(biomesNames))
+	for i, v := range biomesNames {
+		h := maphash.Bytes(hashSeed, v)
+		biomesIDs[h] = Type(i)
+	}
+}

@@ -1,0 +1,14 @@
+# Written by mc26 release; do not edit here.
+name: verify
+on:
+  push:
+    branches: ["mc-*"]
+jobs:
+  json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: every file parses as JSON and _meta.json is present
+        run: |
+          test -f _meta.json
+          find . -name '*.json' -not -path './.git/*' -print0 | xargs -0 -n1 jq -e . > /dev/null

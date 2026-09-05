@@ -1,0 +1,19 @@
+# mc26-data — Minecraft {{.Meta.ID}}
+
+Game data of Minecraft: Java Edition {{.Meta.ID}} (protocol {{.Meta.ProtocolVersion}}, data version
+{{.Meta.WorldVersion}}, Java {{.Meta.JavaVersion}}), extracted from Mojang's server jar
+(`{{.Meta.ServerJarSHA1}}`) by [mc26](https://github.com/mj41/mc26) `{{.Meta.ExtractorCommit}}` on
+{{.Meta.ExtractedAt}}. Details in `_meta.json`.
+
+| file | content |
+|---|---|
+| `registries.json` | every registry with numeric ids (Mojang's data generator report) |
+| `blocks.json`, `block_properties.json` | block states and their properties |
+| `items.json` | per-item stack size and name |
+| `entities.json`, `block_entities.json`, `biomes.json` | entity dimensions, block entity types, biome order |
+| `packets.json`, `packet_schema.json` | packet ids per state and the typed wire layout of every packet |
+| `components.json`, `component_schema.json` | item data component types and their wire schema |
+| `commands.json`, `datapack.json`, `version.json` | command tree, built-in datapack list, version facts |
+| `lang/*.json` | every language file |
+
+JSON only; one branch per Minecraft version, tags `v0.<YYN>.<n>` pin an extraction.

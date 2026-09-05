@@ -1,0 +1,32 @@
+{{.Header}}
+// Package item stores information about items in Minecraft.
+package item
+
+// ID describes the numeric ID of an item.
+type ID uint32
+
+// Item describes information about a type of item.
+type Item struct {
+	ID          ID
+	DisplayName string
+	Name        string
+	StackSize   uint
+}
+
+var (
+{{- range .Items}}
+	{{.VarName}} = Item{
+		ID:          {{.ID}},
+		DisplayName: {{printf "%q" .DisplayName}},
+		Name:        {{printf "%q" .Name}},
+		StackSize:   {{.StackSize}},
+	}
+{{- end}}
+)
+
+// ByID is a map of all items indexed by their protocol ID.
+var ByID = map[ID]*Item{
+{{- range .Items}}
+	{{.ID}}: &{{.VarName}},
+{{- end}}
+}

@@ -1,0 +1,12 @@
+{
+  "component_names": {
+    "map_id": "MapID",
+    "tnt": "Tnt"
+  },
+  "block_trim_prefix_types": [
+    "Axis",
+    "Direction",
+    "FrontAndTop",
+    "Half"
+  ]
+}

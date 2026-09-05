@@ -1,0 +1,51 @@
+# Publish one Minecraft version: extract into mc26-data (branch mc-<version>,
+# tag v0.<YYN>.<n>), build go-mc26 from it (branch mc-<version>, tag
+# v0.<YYN>.<patch>), smoke-test the build, push. Tags are created only here.
+#
+# Needs the secret MC26_PUSH_TOKEN: a fine-grained token with contents:write on
+# mj41/mc26-data, mj41/mc26-data-pre and mj41/go-mc26.
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Minecraft version id (26.1 or later; pre-releases go to mc26-data-pre)
+        required: true
+      push:
+        description: push the branches and tags (false = dry run, artifacts only)
+        type: boolean
+        default: true
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: data repositories
+        run: |
+          git clone --depth 50 "https://x-access-token:${MC26_PUSH_TOKEN}@github.com/mj41/mc26-data.git" temp/repos/mc26-data
+          git clone --depth 50 "https://x-access-token:${MC26_PUSH_TOKEN}@github.com/mj41/mc26-data-pre.git" temp/repos/mc26-data-pre
+          git clone --depth 50 "https://x-access-token:${MC26_PUSH_TOKEN}@github.com/mj41/go-mc26.git" temp/repos/go-mc26
+          git config --global user.name "mc26 release"
+          git config --global user.email "mc26-release@users.noreply.github.com"
+        env:
+          MC26_PUSH_TOKEN: ${{ secrets.MC26_PUSH_TOKEN }}
+      - name: release
+        run: |
+          go run ./gen/cmd/mc26 release --version "${{ inputs.version }}" \
+            --data-repo temp/repos/mc26-data --data-pre-repo temp/repos/mc26-data-pre \
+            --lib-repo temp/repos/go-mc26 ${{ inputs.push && '--push' || '' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-${{ inputs.version }}
+          path: |
+            temp/data/${{ inputs.version }}/_meta.json
+            temp/smoke/${{ inputs.version }}/server.log
+          retention-days: 30

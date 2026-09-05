@@ -1,0 +1,6 @@
+[
+  {"name": "login",         "go_prefix": "Login",  "comment": "Login"},
+  {"name": "status",        "go_prefix": "Status", "comment": "Status"},
+  {"name": "configuration", "go_prefix": "Config", "comment": "Configuration"},
+  {"name": "play",          "go_prefix": "",        "comment": "Game"}
+]

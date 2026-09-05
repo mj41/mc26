@@ -1,0 +1,49 @@
+# The whole chain for one Minecraft version, without publishing anything:
+# extract → build → vet/test → smoke against a vanilla server. Runs on every
+# pull request for the newest supported version and on demand for any version.
+name: pipeline
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Minecraft version id (26.1 or later)
+        required: true
+        default: "26.2"
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version || '26.2' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: cache server jars
+        uses: actions/cache@v4
+        with:
+          path: temp/cache
+          key: server-jar-${{ env.VERSION }}
+      - name: extract, build, test, smoke
+        run: go run ./gen/cmd/mc26 pipeline --version "$VERSION" --smoke
+      - name: packet schema coverage
+        run: go run ./gen/cmd/schemacov "$VERSION"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mc26-${{ env.VERSION }}
+          path: |
+            temp/data/${{ env.VERSION }}/*.json
+            temp/lib/${{ env.VERSION }}
+            temp/smoke/${{ env.VERSION }}/server.log
+          retention-days: 7

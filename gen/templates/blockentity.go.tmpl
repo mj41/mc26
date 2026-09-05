@@ -1,0 +1,24 @@
+{{.Header}}
+package block
+
+type Entity interface {
+	ID() string
+	IsValidBlock(block Block) bool
+}
+
+type (
+{{- range .Entities}}
+	{{printf "%-*s" $.MaxWidth .GoName}} struct{}
+{{- end}}
+)
+
+type EntityType int32
+
+var EntityTypes map[string]EntityType
+
+func init() {
+	EntityTypes = make(map[string]EntityType, len(EntityList))
+	for i, v := range EntityList {
+		EntityTypes[v.ID()] = EntityType(i)
+	}
+}

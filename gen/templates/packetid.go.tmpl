@@ -1,0 +1,35 @@
+{{.Header}}
+package packetid
+
+import "strconv"
+
+type (
+	ClientboundPacketID int32
+	ServerboundPacketID int32
+)
+{{range .Sections}}
+// {{.Comment}}
+const (
+{{- range .Entries}}
+	{{.}}
+{{- end}}
+)
+{{end -}}
+{{range .Types}}
+// {{.VarName}} holds the {{.Name}} constant names of the play state, indexed
+// by id; ids of the other states overlap with these and print through the same
+// table.
+var {{.VarName}} = [...]string{
+{{- range .Names}}
+	{{printf "%q" .}},
+{{- end}}
+}
+
+// String returns the play-state constant name of the id.
+func (i {{.Name}}) String() string {
+	if i >= 0 && int(i) < len({{.VarName}}) && {{.VarName}}[i] != "" {
+		return {{.VarName}}[i]
+	}
+	return "{{.Name}}(" + strconv.Itoa(int(i)) + ")"
+}
+{{end -}}

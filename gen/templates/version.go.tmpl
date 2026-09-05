@@ -1,0 +1,26 @@
+{{.Header}}// Package version holds the Minecraft version this module was generated from.
+// Every protocol constant in the library derives from it.
+package version
+
+const (
+	// Name is the Minecraft version id ("26.2").
+	Name = {{printf "%q" .V.ID}}
+	// ProtocolVersion is the network protocol number sent in the handshake.
+	ProtocolVersion = {{.V.ProtocolVersion}}
+	// DataVersion is the world/data version written to level.dat and chunks.
+	DataVersion = {{.V.WorldVersion}}
+	// ResourcePackVersion and DataPackVersion are the pack format numbers.
+	ResourcePackVersion = {{.V.PackVersion.ResourceMajor}}
+	DataPackVersion     = {{.V.PackVersion.DataMajor}}
+	// JavaVersion is the JDK major version the server requires.
+	JavaVersion = {{.V.JavaVersion}}
+	// BuildTime is Mojang's build timestamp of this version.
+	BuildTime = {{printf "%q" .V.BuildTime}}
+	// Stable is false for snapshots and pre-releases.
+	Stable = {{.V.Stable}}
+
+	// DataSource names the extracted data this build was generated from.
+	DataSource = {{printf "%q" .Build.DataSource}}
+	// Generator names the generator commit that produced this build.
+	Generator = {{printf "%q" .Build.Generator}}
+)

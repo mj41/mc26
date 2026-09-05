@@ -1,0 +1,17 @@
+name: ci
+on:
+  push:
+    branches: ["mc-*"]
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=mod # go.sum may lack the library line until its tag is public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
