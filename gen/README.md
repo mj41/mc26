@@ -74,13 +74,90 @@ with the same wire form (the signed-chat types of `chat/sign`, `level.BlockEntit
 `externalHandTypes` in `gen_packets.go` maps its schema name to the Go type, and nothing inside it
 counts as a hole. A packet whose entries carry only the parts an `EnumSet` field selects
 (`player_info_update`) gets an entry type with a `fields(guard)` selector and a custom
-`ReadFrom`/`WriteTo`. A dispatch on a registry whose elements carry their own codec (the
-particle types, registered with it in `ParticleTypes`; `REGISTRY_BOOTSTRAP` in the extractor)
-becomes one struct with the id and the fields of every case (`types.ParticleOptions`); a case
-the schema cannot type is rejected when decoded, the rest of the union stays usable. The header of every generated file lists the packets that were skipped and
-why (`opaque`, `dispatch`, a branch-guarded reader); none is hand-written today (`hand_packets.json`
-is empty but still honoured), and `src/protocol/handshake` is hand-written because the handshake
-state has no packetid constants. `schemacov <version>` prints the coverage and the holes.
+`ReadFrom`/`WriteTo`. A dispatch on a registry whose elements carry their own codec (particle
+types, recipe and slot displays, number formats, position sources, debug subscriptions:
+registered with it in a bootstrap class listed in `REGISTRY_BOOTSTRAP` in the extractor — in its
+`bootstrap(Registry)` method or its `<clinit>`, through any `register…` helper, either as a codec
+factory, a `TYPE` record holding the codec, or an object whose `streamCodec()` returns it; a
+one-argument static factory passed to `dispatch` wraps every case, which is how a debug
+subscription becomes an optional per case) becomes one struct with the id and the fields of every
+case (`types.ParticleOptions`, `types.SlotDisplay`); a case the schema cannot type is rejected
+when decoded, the rest of the union stays usable. A
+codec that refers to itself (a composite slot display holds slot displays) is a `ref` node in
+the schema; the generator renders it as a list of the union or, for a single value, as
+`types.Box`. A field read only under a condition on earlier fields — a flag bit, a boolean, an
+enum or int compared with a constant, or a small predicate of it (`shouldHaveParameters(method)`,
+evaluated over its domain) — carries the condition as `when` in the schema and is read and
+written in its own segment of a sequential `ReadFrom`/`WriteTo` (`stop_sound`,
+`player_look_at`, `set_objective`, `set_player_team`, the command tree, the advancements). A loop whose counter
+starts at zero and is compared with a bound is the repetition it looks like: a constant bound
+repeats the body that many times (`sign_update`'s four lines of text), a bound read from the
+buffer makes it a length-prefixed list (`section_blocks_update`). An array the reader allocated
+stands for the size it was made with, so the repetition lands on the field that array fills
+instead of disappearing from the struct.
+
+A loop with no counter that ends on a test of something it read is the list that shape means:
+`set_equipment` reads a slot byte whose top bit says another entry follows, so it becomes a
+`whilelist` node and a list type that reads until the bit is clear. The generated type takes
+the bit off what it read and puts it back on what it writes, so the value holds only the slot;
+an empty list has no wire form and refuses to encode, which is also why the packet is left out
+of the zero-value round trip.
+
+A hand-written type stands in for a shape the schema does not know, and the generator
+substitutes it wherever that name appears. When the schema does know the fields, they are what
+the wire carries: Mojang writes a chunk position as one packed long in most packets and as two
+var ints in a waypoint, both from `ChunkPos`, and substituting the packed type for the second
+read eight bytes where the wire has two. A hand-written type that a primitive maps to is the
+definition of that primitive, so a struct of the same name carrying fields is generated instead.
+
+A dispatch can also be written as a call rather than as a codec: the command tree reads an id
+in `command_argument_type`, takes that element out of the registry and asks it to read the
+rest. An element taken out of a registry by an id just read carries the registry with it, and a
+call on it that takes the buffer is a dispatch keyed by that registry, its cases coming from
+the registry's bootstrap class — the name each registration was given and the class of the
+object registered under it, with that same method interpreted on each class. A case whose
+reader reads nothing carries no payload.
+
+A reader called with values read earlier is interpreted with them bound to its parameters, so a
+branch on one of them is a condition on the field that carries it. Such a value is not a read of
+that reader, only something it was handed, so it becomes no field of its own; and the guards it
+carries belong to the caller's struct, where the value is a field, so the reader's fields are
+spliced in beside it rather than nested. Some bits of a value compared with a number
+(`(flags & 3) == 2`, the node type of the command tree) is a condition like any other. A
+predicate the extractor could only evaluate by enumerating a byte's domain is written back as
+the bit it is when the values say so. A value read and then shifted (`buf.readVarInt() - 1`)
+compared with a number is the value compared with that number shifted back, which is how the
+optional 256-byte signature of `delete_chat` and of every entry of a chat packet's last-seen
+list is read at all.
+
+A dispatch whose cases all read the same shape is not a union at all. `award_stats` sends stats
+as an id in `stat_type` followed by an id in whatever registry that stat type wraps: the codec
+of every case is a field each element's constructor builds the same way, so the whole dispatch
+is a struct of the key and that one shape. The generator writes the second id as a var int
+whose registry the first names.
+
+An enum whose constants each carry their own case — a reader in a field, as `TrackedWaypoint$Type`
+holds the subclass that takes the rest of the buffer, or the codec of that case, as
+`PositionPath$Type` does — is a dispatch on that enum, and becomes a union the same way a
+registry dispatch does, keyed by the enum instead of a registry id and numbered by the ordinal. It is named after what it is, the part the constant selects
+(`types.TrackedWaypointPayload`), so the class holding it keeps its own name. A case whose
+reader reads nothing is a case with no payload.
+
+An enum read by name rather than by ordinal (`StringRepresentable.fromEnum`, decoded with
+`EnumCodec.byName`) becomes a `stringenum` node carrying both the constants and the names they
+are written as, and generates a `pk.String` type whose constants are those names — so a name a
+later version adds still decodes instead of failing.
+
+A reader that hands the buffer to a void helper reads through it, so the helper is interpreted
+and what it read becomes part of the value; a helper that reads nothing is a writer or
+bookkeeping and is ignored. Dropping one that does read would produce a struct short of fields
+while the packet still counted as fully typed.
+
+The header of every generated file lists the packets that were skipped and
+why (`opaque`, `dispatch`, a branch-guarded reader); as of 26.1, 26.2 and 26.3-pre-2 there are
+none — every packet of the protocol is generated — and none is hand-written
+(`hand_packets.json` is empty but still honoured), while `src/protocol/handshake` is
+hand-written because the handshake state has no packetid constants. `schemacov <version>` prints the coverage and the holes.
 
 ```go
 var sh play.SetHealth

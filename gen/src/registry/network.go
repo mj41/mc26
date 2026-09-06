@@ -3,6 +3,7 @@ package registry
 import (
 	"io"
 
+	"github.com/mj41/go-mc26/nbt"
 	pk "github.com/mj41/go-mc26/net/packet"
 )
 
@@ -68,10 +69,23 @@ func (reg *Registry[E]) ReadFrom(r io.Reader) (int64, error) {
 			return n + n1 + n2, err
 		}
 
+		var raw nbt.RawMessage
 		if hasData {
-			n3, err = pk.NBTField{V: &data, AllowUnknownFields: true}.ReadFrom(r)
-			if err != nil {
-				return n + n1 + n2 + n3, err
+			if reg.keepRaw {
+				// Keep the entry's NBT and decode from it, so Unexpected can
+				// re-read it strictly later.
+				n3, err = pk.NBTField{V: &raw}.ReadFrom(r)
+				if err != nil {
+					return n + n1 + n2 + n3, err
+				}
+				if err = raw.Unmarshal(&data); err != nil {
+					return n + n1 + n2 + n3, err
+				}
+			} else {
+				n3, err = pk.NBTField{V: &data, AllowUnknownFields: true}.ReadFrom(r)
+				if err != nil {
+					return n + n1 + n2 + n3, err
+				}
 			}
 		}
 
@@ -79,6 +93,9 @@ func (reg *Registry[E]) ReadFrom(r io.Reader) (int64, error) {
 		// IDs match the server's ordering. Tags reference entries by index,
 		// and skipping data-less entries would cause ID mismatches.
 		reg.Put(string(key), data)
+		if reg.keepRaw {
+			reg.raws = append(reg.raws, raw)
+		}
 
 		n += n1 + n2 + n3
 	}

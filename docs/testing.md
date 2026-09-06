@@ -19,7 +19,18 @@ Starts Mojang's server of that version (the jar the extraction cached) in
 `eclipse-temurin:25-jdk`, offline mode, flat world, RCON on; waits for "Done"; runs `go test
 ./bot -run TestSmoke` in the library with `MC26_SMOKE_ADDR` set. The test joins, waits for the
 login to complete, for 25 chunks and for its own chat message to come back, then disconnects.
+It also asks the registries what the server sent that the generated element types do not cover:
+the bot keeps the NBT of every registry entry (`Registries.KeepRaw(true)`) and re-reads it
+strictly, so a missing field or a wrong generated `nbt` tag fails the test with the registry and
+the entries that carry the unknown key, instead of decoding to a zero value in silence.
 `--runtime host` uses the host's Java 25 instead of a container.
+
+A second test in the same package (`TestSmokeEntityData`) checks the generated entity metadata:
+it summons a handful of entity types over RCON, each with NBT that moves the fields a server
+would otherwise leave at their defaults and never send, and compares every value it receives
+with `data/entitydata` — the index must be a field of that entity type and carry the serializer
+the table names. It says how many fields it compared and fails when that number collapses, so it
+cannot pass while checking nothing.
 
 ## End-to-end — the example bots against a vanilla server
 

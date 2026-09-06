@@ -19,23 +19,25 @@ import (
 // net/packet); the generated packets refer to them through these names. The
 // records generated into wire (Vec3, GlobalPos, …) get theirs in wire_gen.go.
 type (
-	Ptr[T any]                                                                = wire.Ptr[T]
-	List[T pk.FieldEncoder, P wire.Ptr[T]]                                    = wire.List[T, P]
-	Entry[K pk.FieldEncoder, V pk.FieldEncoder]                               = wire.Entry[K, V]
-	Map[K pk.FieldEncoder, PK wire.Ptr[K], V pk.FieldEncoder, PV wire.Ptr[V]] = wire.Map[K, PK, V, PV]
-	Holder[D pk.FieldEncoder, PD wire.Ptr[D]]                                 = wire.Holder[D, PD]
-	EnumSet[E wire.EnumType]                                                  = wire.EnumSet[E]
-	IDSet                                                                     = wire.IDSet
-	NBT                                                                       = wire.NBT
-	OptionalNBT                                                               = wire.OptionalNBT
-	SectionPos                                                                = wire.SectionPos
-	LpVec3                                                                    = wire.LpVec3
-	MessageSignature                                                          = wire.MessageSignature
-	PublicKey                                                                 = wire.PublicKey
-	RestBytes                                                                 = wire.RestBytes
-	OptionalVarInt                                                            = wire.OptionalVarInt
-	Instant                                                                   = wire.Instant
-	Empty                                                                     = wire.Empty
+	Ptr[T any]                                                                   = wire.Ptr[T]
+	List[T pk.FieldEncoder, P wire.Ptr[T]]                                       = wire.List[T, P]
+	Entry[K pk.FieldEncoder, V pk.FieldEncoder]                                  = wire.Entry[K, V]
+	Map[K pk.FieldEncoder, PK wire.Ptr[K], V pk.FieldEncoder, PV wire.Ptr[V]]    = wire.Map[K, PK, V, PV]
+	Holder[D pk.FieldEncoder, PD wire.Ptr[D]]                                    = wire.Holder[D, PD]
+	EnumSet[E wire.EnumType]                                                     = wire.EnumSet[E]
+	Box[T pk.FieldEncoder, P wire.Ptr[T]]                                        = wire.Box[T, P]
+	Either[L pk.FieldEncoder, PL wire.Ptr[L], R pk.FieldEncoder, PR wire.Ptr[R]] = wire.Either[L, PL, R, PR]
+	IDSet                                                                        = wire.IDSet
+	NBT                                                                          = wire.NBT
+	OptionalNBT                                                                  = wire.OptionalNBT
+	SectionPos                                                                   = wire.SectionPos
+	LpVec3                                                                       = wire.LpVec3
+	MessageSignature                                                             = wire.MessageSignature
+	PublicKey                                                                    = wire.PublicKey
+	RestBytes                                                                    = wire.RestBytes
+	OptionalVarInt                                                               = wire.OptionalVarInt
+	Instant                                                                      = wire.Instant
+	Empty                                                                        = wire.Empty
 )
 
 // Text is a chat component encoded as network NBT.

@@ -11,10 +11,21 @@
   ],
   "field_names": {
     "ClientboundCustomQueryPacket": ["transactionId", "channel", "data"],
-    "BlockHitResult": ["pos", "direction", "cursorX", "cursorY", "cursorZ", "inside", "worldBorderHit"]
+    "BlockHitResult": ["pos", "direction", "cursorX", "cursorY", "cursorZ", "inside", "worldBorderHit"],
+    "DisplayInfo": ["title", "description", "icon", "type", "flags", "background", "x", "y"],
+    "ClientboundSectionBlocksUpdatePacket": ["sectionPos", "blocks"],
+    "TrackedWaypoint": ["identifier", "icon", "payload"],
+    "ClientboundSetEquipmentEntry": ["slot", "item"],
+    "ClientboundCommandsPacket$Entry": ["flags", "children", "redirect", "name", "argumentType", "suggestions", "literal"],
+    "ClientboundCommandsPacket$LiteralNodeStub": ["name"],
+    "FloatArgumentInfo$Template": ["flags", "min", "max"],
+    "DoubleArgumentInfo$Template": ["flags", "min", "max"],
+    "IntegerArgumentInfo$Template": ["flags", "min", "max"],
+    "LongArgumentInfo$Template": ["flags", "min", "max"]
   },
   "type_names": {
-    "ParticleTypes": "ParticleOptions"
+    "ParticleTypes": "ParticleOptions",
+    "NumberFormatTypes": "NumberFormat"
   },
   "nbt_type_names": {
     "Style$Serializer": "Style",

@@ -189,6 +189,10 @@ type versionDetail struct {
 			URL  string `json:"url"`
 			SHA1 string `json:"sha1"`
 		} `json:"server"`
+		Client struct {
+			URL  string `json:"url"`
+			SHA1 string `json:"sha1"`
+		} `json:"client"`
 	} `json:"downloads"`
 	AssetIndex struct {
 		URL string `json:"url"`
@@ -222,6 +226,33 @@ func ServerJar(cacheDir, version string, log func(string, ...any)) (string, erro
 	}
 	if sum, err := fileSHA1(path); err != nil || sum != detail.Downloads.Server.SHA1 {
 		return "", fmt.Errorf("server jar sha1 %s, manifest says %s", sum, detail.Downloads.Server.SHA1)
+	}
+	return path, nil
+}
+
+// ClientJar returns the cached client jar of version, downloading it from
+// Mojang's manifest when missing. Nothing in the pipeline needs it: it is there
+// for reading, when a rule has to be checked against the code on the other end
+// of the wire.
+func ClientJar(cacheDir, version string, log func(string, ...any)) (string, error) {
+	detail, err := fetchDetail(version)
+	if err != nil {
+		return "", err
+	}
+	if detail.Downloads.Client.URL == "" {
+		return "", fmt.Errorf("version %s has no client download", version)
+	}
+	path := filepath.Join(cacheDir, version+"-client.jar")
+	if sum, err := fileSHA1(path); err == nil && sum == detail.Downloads.Client.SHA1 {
+		log("  client jar cached: %s", path)
+		return path, nil
+	}
+	log("  downloading client jar %s", detail.Downloads.Client.URL)
+	if err := download(detail.Downloads.Client.URL, path); err != nil {
+		return "", err
+	}
+	if sum, err := fileSHA1(path); err != nil || sum != detail.Downloads.Client.SHA1 {
+		return "", fmt.Errorf("client jar sha1 %s, manifest says %s", sum, detail.Downloads.Client.SHA1)
 	}
 	return path, nil
 }

@@ -248,9 +248,10 @@ func scenarioDaze(o Options, bin string, srv *smoke.Server) error {
 	if err := waitFor(out, 20*time.Second, "hello from rcon", "private hi", "minecraft:stone"); err != nil {
 		return fmt.Errorf("%v\n%s", err, tail(out.String(), 25))
 	}
-	chunks := strings.Count(out.String(), "Load chunk")
-	if chunks < 20 {
-		return fmt.Errorf("only %d chunks loaded", chunks)
+	// The chunks keep coming while the commands run, so wait for the count
+	// rather than sampling it once the commands are through.
+	if err := waitForCount(out, 60*time.Second, "Load chunk", 20); err != nil {
+		return fmt.Errorf("%v\n%s", err, tail(out.String(), 25))
 	}
 	return nil
 }
@@ -419,6 +420,21 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// waitForCount waits until want has appeared at least n times in the output.
+func waitForCount(out interface{ String() string }, timeout time.Duration, want string, n int) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		got := strings.Count(out.String(), want)
+		if got >= n {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%q appeared %d times in %s, want %d", want, got, timeout, n)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 func waitFor(out interface{ String() string }, timeout time.Duration, want ...string) error {

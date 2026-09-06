@@ -15,6 +15,48 @@ type RegistryCodec interface {
 	pk.FieldDecoder
 	pk.FieldEncoder
 	ReadTagsFrom(r io.Reader) (int64, error)
+	SetKeepRaw(on bool)
+	Unexpected() []error
+}
+
+// KeepRaw makes every registry keep the NBT of the entries the server sends,
+// so Unexpected can report what this build does not cover. Set it before
+// joining; it costs a second copy of the registry data.
+func (c *Registries) KeepRaw(on bool) {
+	c.eachCodec(func(_ string, reg RegistryCodec) { reg.SetKeepRaw(on) })
+}
+
+// Unexpected re-reads every registry entry the server sent into its element
+// type, refusing keys the type does not have, and returns one error per entry
+// that carries something this build does not know — an element that gained a
+// field, or a wrong tag in the generated types. It needs KeepRaw(true) before
+// the join and reports nothing for a registry decoded as raw NBT.
+func (c *Registries) Unexpected() map[string][]error {
+	out := map[string][]error{}
+	c.eachCodec(func(id string, reg RegistryCodec) {
+		if errs := reg.Unexpected(); len(errs) > 0 {
+			out[id] = errs
+		}
+	})
+	return out
+}
+
+// eachCodec calls fn for every registry, typed field or extra.
+func (c *Registries) eachCodec(fn func(id string, reg RegistryCodec)) {
+	codecVal := reflect.ValueOf(c).Elem()
+	codecTyp := codecVal.Type()
+	for i := 0; i < codecVal.NumField(); i++ {
+		id, ok := codecTyp.Field(i).Tag.Lookup("registry")
+		if !ok {
+			continue
+		}
+		if reg, ok := codecVal.Field(i).Addr().Interface().(RegistryCodec); ok {
+			fn(id, reg)
+		}
+	}
+	for id, reg := range c.ExtraRegistries {
+		fn(id, reg)
+	}
 }
 
 // EachRegistry calls fn for each registry in the Registries struct,

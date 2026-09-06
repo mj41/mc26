@@ -12,7 +12,10 @@ bot/basic/ping.go	modified
 bot/basic/settings.go	modified
 bot/basic/tags.go	modified
 bot/client.go	upstream
+bot/commands_smoke_test.go	new
 bot/configuration.go	modified
+bot/entitydata_smoke_test.go	new
+bot/equipment_smoke_test.go	new
 bot/event.go	upstream
 bot/example_test.go	upstream
 bot/ingame.go	modified
@@ -52,6 +55,7 @@ level/block/blocks.nbt	modified
 level/block/properties.go	modified
 level/block/utilfuncs.go	upstream
 level/chunk.go	modified
+level/chunkpos_test.go	new
 level/chunkstatus.go	upstream
 level/component/attributemodifiers.go	modified
 level/component/profile.go	new
@@ -114,7 +118,7 @@ registry/codec.go	modified
 registry/nbttypes.go	new
 registry/nbttypes_test.go	new
 registry/network.go	modified
-registry/registry.go	upstream
+registry/registry.go	modified
 save/chunk.go	modified
 save/chunk_test.go	upstream
 save/dimension.go	upstream

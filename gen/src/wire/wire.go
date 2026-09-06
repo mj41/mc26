@@ -384,6 +384,26 @@ type Empty struct{}
 func (Empty) ReadFrom(io.Reader) (int64, error) { return 0, nil }
 func (Empty) WriteTo(io.Writer) (int64, error)  { return 0, nil }
 
+// Box holds a value of a type that contains itself (a slot display with a
+// remainder slot display) behind a pointer; nil reads and writes as the zero
+// value.
+type Box[T pk.FieldEncoder, P Ptr[T]] struct{ V *T }
+
+func (b *Box[T, P]) ReadFrom(r io.Reader) (int64, error) {
+	var v T
+	n, err := P(&v).ReadFrom(r)
+	b.V = &v
+	return n, err
+}
+
+func (b Box[T, P]) WriteTo(w io.Writer) (int64, error) {
+	if b.V == nil {
+		var z T
+		return z.WriteTo(w)
+	}
+	return (*b.V).WriteTo(w)
+}
+
 // Either is ByteBufCodecs.either: a boolean selects the left (true) or the
 // right (false) value.
 type Either[L pk.FieldEncoder, PL Ptr[L], R pk.FieldEncoder, PR Ptr[R]] struct {

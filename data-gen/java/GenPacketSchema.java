@@ -99,16 +99,28 @@ public class GenPacketSchema {
     /** Naming hints for values a reader produces without storing them in a field: the read method's noun. */
     static final Map<Map<String, Object>, String> hintOf = new IdentityHashMap<>();
     static int guardExpansions = 0;
+    static boolean inKnownRegion = false;   // the reader is inside a branch region whose condition is known
     static Map<String, Object> opaque(String java) { return node("opaque", "java", java); }
 
     /** Values on the simulated operand stack. */
-    sealed interface Value permits CodecV, LambdaV, ConstV, KeyV, FnV, ClassV, OtherV {}
+    sealed interface Value permits CodecV, LambdaV, ConstV, KeyV, FnV, ClassV, ArrayV, EnumFnV, RegistryElemV, MaskedV, PassedV, OffsetV, OtherV {}
     record CodecV(Map<String, Object> n) implements Value {}
     record LambdaV(String owner, String name, String desc) implements Value {}
     record ConstV(Object v) implements Value {}
     record KeyV(String registry) implements Value {}          // Registries.X resource key
     record FnV(String kind, Object arg) implements Value {}     // ByteBufCodecs.list() etc.
     record ClassV(String internal) implements Value {}          // ldc Class
+    record ArrayV(Value size) implements Value {}               // new X[size]: the size is what the reader knows
+    record EnumFnV(Map<String, Object> key, String enumClass, String field) implements Value {}   // type.constructor
+    record RegistryElemV(String registry, Map<String, Object> id) implements Value {}   // registry.byId(read)
+    record MaskedV(Map<String, Object> of, int mask) implements Value {}   // value & mask
+    // A value the caller read and passed in. A branch may test it, and that is the whole point
+    // of binding it — but it is not a read of this reader, so it is no field and no value of
+    // its own here.
+    record PassedV(Map<String, Object> of) implements Value {}
+    // A value read plus a constant: `buf.readVarInt() - 1`, which a branch then compares with
+    // a number, meaning a comparison of what was read with that number shifted back.
+    record OffsetV(Map<String, Object> of, int delta) implements Value {}
     record OtherV(String what) implements Value {}
 
     // ---- primitives ---------------------------------------------------------------
@@ -332,6 +344,16 @@ public class GenPacketSchema {
         try { return Class.forName(internalName.replace('/', '.'), false, GenPacketSchema.class.getClassLoader()); }
         catch (Throwable t) { return null; }
     }
+    /** The Java class an enum node came from, for the rules that need more than its values. */
+    static final Map<Map<String, Object>, String> enumClassOf = new IdentityHashMap<>();
+
+    /** An enum node that remembers which class it is, so a dispatch on it can be read. */
+    static Map<String, Object> enumNode(String internalName) {
+        Map<String, Object> n = node("enum", "name", shortName(internalName), "values", enumValues(internalName));
+        enumClassOf.put(n, internalName);
+        return n;
+    }
+
     static List<String> enumValues(String internalName) {
         try {
             Class<?> c = loadClass(internalName);
@@ -352,6 +374,32 @@ public class GenPacketSchema {
             return out.isEmpty() ? null : out;
         }
     }
+    /**
+     * The node for an enum that travels as its serialized name: the constants and the names
+     * they are written as. Null when the names cannot be read, so the caller leaves a hole
+     * rather than inventing them.
+     */
+    static Map<String, Object> stringEnumNode(String internalName) {
+        List<String> values = enumValues(internalName);
+        List<String> names = serializedNames(internalName);
+        if (values == null || names == null || values.size() != names.size()) return null;
+        return node("stringenum", "name", shortName(internalName), "values", values, "names", names);
+    }
+
+    /** getSerializedName() of every constant of a StringRepresentable enum. */
+    static List<String> serializedNames(String internalName) {
+        try {
+            Class<?> c = loadClass(internalName);
+            if (c == null || !c.isEnum()) return null;
+            Method m = c.getMethod("getSerializedName");
+            List<String> out = new ArrayList<>();
+            for (Object o : c.getEnumConstants()) out.add((String) m.invoke(o));
+            return out;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     static List<String> recordComponents(String internalName) {
         try {
             Class<?> c = loadClass(internalName);
@@ -397,7 +445,10 @@ public class GenPacketSchema {
         String key = owner + "." + field;
         if (codecFieldCache.containsKey(key)) return codecFieldCache.get(key);
         if (depth > MAX_DEPTH) return opaque("depth:" + key);
-        codecFieldCache.put(key, opaque("recursive:" + key)); // cycle guard
+        // A codec that refers to itself (a composite slot display holds slot displays) gets a
+        // ref node while it is being built; once built, the ref names what it refers to.
+        Map<String, Object> ref = node("ref", "field", key);
+        codecFieldCache.put(key, ref);
         Map<String, Object> result = opaque("no-clinit:" + key);
         ClassModel cm = classModel(owner);
         if (cm != null) {
@@ -419,6 +470,13 @@ public class GenPacketSchema {
                 break;
             }
         }
+        if (result.get("name") != null && ("dispatch".equals(result.get("k")) || "struct".equals(result.get("k")))) {
+            ref.put("name", result.get("name"));
+            ref.put("of", result.get("k"));
+        } else {
+            ref.put("k", "opaque");
+            ref.put("java", "recursive:" + key);
+        }
         codecFieldCache.put(key, result);
         return result;
     }
@@ -431,11 +489,13 @@ public class GenPacketSchema {
                 if (o.endsWith("core/registries/Registries") || d.contains("ResourceKey")) stack.push(new KeyV(registryName(n)));
                 else if (d.contains("Codec") || o.endsWith("ByteBufCodecs")) {
                     Map<String, Object> cn = codecFieldNode(o, n, depth + 1);
-                    hintOf.putIfAbsent(cn, o.endsWith("ByteBufCodecs") ? hintName("read" + camel(n)) : lowerFirst(shortName(o).replace("$", "")));
+                    String known = KNOWN_CODEC_FIELDS.get(o + "." + n);
+                    hintOf.putIfAbsent(cn, known != null ? hintName("read" + camel(known))
+                        : o.endsWith("ByteBufCodecs") ? hintName("read" + camel(n)) : lowerFirst(shortName(o).replace("$", "")));
                     stack.push(new CodecV(cn));
                 }
                 else if (d.contains("IdMap") || d.contains("Registry;")) stack.push(new OtherV("idmap:" + shortName(o) + "." + n));
-                else stack.push(new OtherV(shortName(o) + "." + n));
+                else stack.push(new OtherV("static:" + o + "." + n));
             }
             case InvokeDynamicInstruction idi -> { popArgs(stack, arity(idi.typeSymbol().descriptorString())); stack.push(lambdaOf(idi)); }
             case ConstantInstruction ci -> {
@@ -453,15 +513,41 @@ public class GenPacketSchema {
     }
 
     static LambdaV lambdaOf(InvokeDynamicInstruction idi) {
+        DirectMethodHandleDesc impl = null;
+        MethodTypeDesc instantiated = null;
         for (ConstantDesc cd : idi.bootstrapArgs()) {
-            if (cd instanceof DirectMethodHandleDesc dmh) {
-                return new LambdaV(dmh.owner().descriptorString().replaceAll("^L|;$", ""), dmh.methodName(), dmh.lookupDescriptor());
-            }
+            if (cd instanceof DirectMethodHandleDesc dmh) { if (impl == null) impl = dmh; }
+            else if (cd instanceof MethodTypeDesc mt) instantiated = mt;   // the last one is the instantiated type
         }
-        return new LambdaV("?", "?", "");
+        if (impl == null) return new LambdaV("?", "?", "");
+        String owner = impl.owner().descriptorString().replaceAll("^L|;$", "");
+        // Operation::ordinal is a handle on java/lang/Enum, which names no enum. The type the
+        // lambda was instantiated with does: its first parameter is the receiver.
+        if (owner.equals("java/lang/Enum") && instantiated != null && instantiated.parameterCount() > 0) {
+            String p = instantiated.parameterType(0).descriptorString();
+            if (p.startsWith("L")) owner = p.substring(1, p.length() - 1);
+        }
+        return new LambdaV(owner, impl.methodName(), impl.lookupDescriptor());
     }
 
     static String registryName(String field) { return field.toLowerCase(Locale.ROOT); }
+
+    /**
+     * The local slot of every parameter of a method: slot 0 is the receiver of an instance
+     * method, and a long or a double takes two slots.
+     */
+    static List<Integer> paramSlots(String desc, boolean isStatic) {
+        List<Integer> out = new ArrayList<>();
+        int slot = isStatic ? 0 : 1, i = 1;
+        while (desc.charAt(i) != ')') {
+            char c = desc.charAt(i);
+            out.add(slot);
+            if (c == 'L') { i = desc.indexOf(';', i) + 1; slot++; }
+            else if (c == '[') { i++; continue; }
+            else { slot += (c == 'J' || c == 'D') ? 2 : 1; i++; }
+        }
+        return out;
+    }
 
     static int arity(String desc) {
         // count parameters in a method descriptor
@@ -490,6 +576,17 @@ public class GenPacketSchema {
         String ret = desc.substring(desc.indexOf(')') + 1);
         String o = shortName(owner);
 
+        // Objects.requireNonNull(codec) sits between a field read and its use.
+        if (owner.equals("java/util/Objects") && name.equals("requireNonNull") && !args.isEmpty()) { stack.push(args.get(0)); return; }
+
+        // StringRepresentable.fromEnum(JointType::values) is a codec that names an enum
+        // constant by its serialized name, so what travels is that name as a string.
+        if (owner.endsWith("util/StringRepresentable") && (name.equals("fromEnum") || name.equals("fromEnumWithMapping"))) {
+            Map<String, Object> se = arg(args, 0) instanceof LambdaV l ? stringEnumNode(l.owner()) : null;
+            stack.push(new CodecV(se != null ? se : opaque("string-enum:" + o + "." + name)));
+            return;
+        }
+
         // --- StreamCodec combinators -------------------------------------------
         if (owner.endsWith("codec/StreamCodec") || owner.endsWith("codec/StreamCodec$CodecOperation")) {
             switch (name) {
@@ -502,7 +599,42 @@ public class GenPacketSchema {
                     Map<String, Object> d = node("dispatch", "name", shortName(self), "key", key);
                     if ("registry".equals(key.get("k"))) {
                         List<Map<String, Object>> cases = registryCases(String.valueOf(key.get("registry")), depth);
+                        // dispatch(toKey, DebugSubscription$Update::streamCodec): a static
+                        // one-argument factory wraps every element's own codec (in an optional,
+                        // in a list), so a case is that factory applied to it.
+                        Value f = arg(args, args.size() - 1);
+                        if (cases != null && f instanceof LambdaV l && arity(l.desc()) == 1 && l.desc().endsWith("StreamCodec;")) {
+                            List<Map<String, Object>> wrapped = new ArrayList<>();
+                            for (Map<String, Object> c : cases) {
+                                Map<String, Object> t = inlineMethod(l.owner(), l.name(), l.desc(), List.of(new CodecV(castNode((Map<?, ?>) c.get("type")))), depth + 1, true);
+                                Map<String, Object> w = new LinkedHashMap<>(c);
+                                if (t != null) w.put("type", t);
+                                wrapped.add(w);
+                            }
+                            cases = wrapped;
+                        }
                         if (cases != null) d.put("cases", cases);
+                    }
+                    // dispatch(Stat::getType, StatType::streamCodec): the codec of an element
+                    // is a field its class builds the same way for every element — here an id
+                    // in whichever registry the element wraps — so every case reads that one
+                    // shape and the dispatch is a struct of the key and it.
+                    // dispatch(PositionPath::type, Type::streamCodec): the constants of the
+                    // enum the key names carry the codec of their own case.
+                    if (d.get("cases") == null && "enum".equals(key.get("k")) && enumClassOf.containsKey(key)) {
+                        List<Map<String, Object>> cases = enumDispatchCases(enumClassOf.get(key), "", depth + 1);
+                        if (cases != null) d.put("cases", cases);
+                    }
+                    if (d.get("cases") == null && arg(args, args.size() - 1) instanceof LambdaV g
+                            && arity(g.desc()) == 0 && g.desc().endsWith("StreamCodec;")) {
+                        Map<String, Object> uniform = getterFieldNode(g.owner(), g.name(), depth + 1);
+                        if (uniform != null && !hasHole(uniform)) {
+                            List<Map<String, Object>> fs = new ArrayList<>();
+                            fs.add(field("type", key));
+                            fs.add(field(hintOf.getOrDefault(uniform, "value"), uniform));
+                            stack.push(new CodecV(node("struct", "name", shortName(self), "fields", fs)));
+                            return;
+                        }
                     }
                     stack.push(new CodecV(d)); return;
                 }
@@ -569,22 +701,47 @@ public class GenPacketSchema {
         }
         if (owner.endsWith("syncher/EntityDataSerializer") && name.equals("forValueType")) { stack.push(arg(args, 0)); return; }
         if (name.equals("<init>") && recv instanceof OtherV ov && ov.what().startsWith("new:")) {
-            // new Vec3$1() / new ByteBufCodecs$20(): an anonymous StreamCodec whose decode(buf) is the reader;
-            // new EntityDataSerializers$1(): an anonymous serializer whose codec() returns the codec
+            // A constructed object stands for its stream codec when it carries one:
+            //  - new RecipeDisplay$Type(MAP_CODEC, STREAM_CODEC): the constructor argument typed StreamCodec;
+            //  - new Vec3$1() / new ByteBufCodecs$20(): an anonymous StreamCodec whose decode(buf) is the reader;
+            //  - new EntityDataSerializers$1() / new FixedFormat$1(): a codec() or streamCodec() method returns it.
             String cls = ov.what().substring(4);
-            String decodeDesc = methodDesc(cls, "decode", "ByteBuf");
-            String codecDesc = decodeDesc == null ? methodDesc(cls, "codec", "") : null;
-            if (decodeDesc != null || codecDesc != null) {
+            Value fromCtor = null;
+            int pi = 0;
+            for (int i = 1; desc.charAt(i) != ')'; pi++) {
+                char c = desc.charAt(i);
+                int end = c == 'L' ? desc.indexOf(';', i) + 1 : c == '[' ? i + 1 : i + 1;
+                if (c == '[') { i = end; pi--; continue; }
+                if (desc.substring(i, end).contains("network/codec/StreamCodec") && pi < args.size() && args.get(pi) instanceof CodecV cv) fromCtor = cv;
+                i = end;
+            }
+            String decodeDesc = fromCtor == null ? methodDesc(cls, "decode", "ByteBuf") : null;
+            String[] codecMethod = fromCtor == null && decodeDesc == null ? codecMethodOf(cls) : null;
+            if (fromCtor != null || decodeDesc != null || codecMethod != null) {
                 if (!stack.isEmpty() && stack.peek() instanceof OtherV top && top.what().equals(ov.what())) stack.pop();
-                if (decodeDesc != null) stack.push(new CodecV(readerNode(cls, "decode", decodeDesc, depth + 1)));
+                if (fromCtor != null) stack.push(fromCtor);
+                else if (decodeDesc != null) stack.push(new CodecV(readerNode(cls, "decode", decodeDesc, depth + 1)));
                 else {
-                    Map<String, Object> n0 = inlineMethod(cls, "codec", codecDesc, List.of(), depth, false);
-                    stack.push(new CodecV(n0 != null ? n0 : opaque(shortName(cls) + ".codec")));
+                    Map<String, Object> n0 = inlineMethod(cls, codecMethod[0], codecMethod[1], List.of(), depth, false);
+                    stack.push(new CodecV(n0 != null ? n0 : opaque(shortName(cls) + "." + codecMethod[0])));
                 }
             }
             return;
         }
         if (!ret.equals("V")) stack.push(new OtherV(o + "." + name));
+    }
+
+    /** A zero-argument method of a class returning a StreamCodec (streamCodec(), codec()): {name, desc}, or null. */
+    static String[] codecMethodOf(String internalName) {
+        ClassModel cm = classModel(internalName);
+        if (cm == null) return null;
+        for (String candidate : new String[]{"streamCodec", "codec"}) {
+            for (MethodModel m : cm.methods()) {
+                String d = m.methodType().stringValue();
+                if (m.methodName().stringValue().equals(candidate) && d.startsWith("()") && d.contains("network/codec/StreamCodec")) return new String[]{candidate, d};
+            }
+        }
+        return null;
     }
 
     /** The descriptor of the first method of a class with this name whose parameters mention the type, or null. */
@@ -604,7 +761,13 @@ public class GenPacketSchema {
      * has one case per element, its codec interpreted with the element type bound.
      */
     static final Map<String, String> REGISTRY_BOOTSTRAP = Map.of(
-        "particle_type", "net/minecraft/core/particles/ParticleTypes"
+        "particle_type", "net/minecraft/core/particles/ParticleTypes",
+        "recipe_display", "net/minecraft/world/item/crafting/display/RecipeDisplays",
+        "slot_display", "net/minecraft/world/item/crafting/display/SlotDisplays",
+        "number_format_type", "net/minecraft/network/chat/numbers/NumberFormatTypes",
+        "position_source_type", "net/minecraft/world/level/gameevent/PositionSourceType",
+        "debug_subscription", "net/minecraft/util/debug/DebugSubscriptions",
+        "command_argument_type", "net/minecraft/commands/synchronization/ArgumentTypeInfos"
     );
 
     static final Map<String, List<Map<String, Object>>> registryCasesCache = new HashMap<>();
@@ -617,22 +780,40 @@ public class GenPacketSchema {
         ClassModel cm = classModel(cls);
         if (cm == null) return null;
         List<Map<String, Object>> cases = new ArrayList<>();
+        // registrations sit in a static bootstrap(Registry) method or in <clinit>; a class may
+        // have both, so whichever registers anything wins
+        List<String> where = new ArrayList<>();
+        for (MethodModel m : cm.methods()) if (m.methodName().stringValue().equals("bootstrap") && (m.flags().flagsMask() & 0x0008) != 0) where.add("bootstrap");
+        where.add("<clinit>");
+        for (String bootstrapMethod : where) {
+        if (!cases.isEmpty()) break;
         for (MethodModel m : cm.methods()) {
-            if (!m.methodName().stringValue().equals("<clinit>")) continue;
+            if (!m.methodName().stringValue().equals(bootstrapMethod)) continue;
             Deque<Value> stack = new ArrayDeque<>();
             for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
-                if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESTATIC && ii.name().stringValue().equals("register")
-                        && ii.owner().asInternalName().equals(cls)) {
+                if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESTATIC && ii.name().stringValue().startsWith("register")) {
                     List<Value> a = popArgs(stack, arity(ii.typeSymbol().descriptorString()));
-                    String name = a.size() > 0 && a.get(0) instanceof ConstV c && c.v() instanceof String s0 ? s0 : null;
+                    String name = null;
+                    int nameAt = -1;
+                    for (int i = 0; i < a.size(); i++) if (a.get(i) instanceof ConstV c && c.v() instanceof String s0) { name = s0; nameAt = i; break; }
                     if (name == null) { stack.push(new OtherV("register")); continue; }
-                    Map<String, Object> type = node("unit");
-                    for (Value v : a) {
+                    Map<String, Object> type = null;
+                    for (int i = nameAt + 1; i < a.size() && type == null; i++) {
+                        Value v = a.get(i);
                         if (v instanceof LambdaV l && l.desc().endsWith("StreamCodec;")) {
+                            // register("block", …, BlockParticleOption::streamCodec): the codec with the type bound
                             Map<String, Object> t = inlineMethod(l.owner(), l.name(), l.desc(), List.of(new OtherV("type")), depth + 1, false);
                             type = t != null ? t : opaque("registry-case:" + shortName(l.owner()) + "." + l.name());
+                        } else if (v instanceof CodecV c) {
+                            type = c.n();   // new BlockPositionSource$Type(): its streamCodec()
+                        } else if (v instanceof OtherV ov && ov.what().startsWith("static:")) {
+                            // Registry.register(registry, "furnace", FurnaceRecipeDisplay.TYPE): the field's value carries the codec
+                            String ref = ov.what().substring(7);
+                            int dot = ref.lastIndexOf('.');
+                            type = codecFieldNode(ref.substring(0, dot), ref.substring(dot + 1), depth + 1);
                         }
                     }
+                    if (type == null) type = a.size() - nameAt <= 2 ? node("unit") : opaque("registry-case:" + name);
                     cases.add(node("case", "id", name.contains(":") ? name : "minecraft:" + name, "type", type));
                     stack.push(new OtherV("register:" + name));
                     continue;
@@ -642,8 +823,84 @@ public class GenPacketSchema {
             }
             break;
         }
+        }
         List<Map<String, Object>> out = cases.isEmpty() ? null : cases;
         registryCasesCache.put(registry, out);
+        return out;
+    }
+
+    static final Map<String, List<Map<String, Object>>> registryMethodCache = new HashMap<>();
+
+    /**
+     * The cases of a dispatch made by calling a method on an element taken out of a registry:
+     * every registration in the registry's bootstrap class, with what that method reads on the
+     * class the element was registered as. This is how the command argument types travel — an
+     * id in `command_argument_type`, then whatever that type's `deserializeFromNetwork` reads.
+     *
+     * The bootstrap is walked with just enough of an interpreter to see two things: the name a
+     * registration was given, and the class of the object registered under it — a `new X` or
+     * the class a static factory returns. Null when the registry has no bootstrap class listed
+     * or nothing was registered, so the caller leaves the dispatch without cases.
+     */
+    static List<Map<String, Object>> registryMethodCases(String registry, String method, int depth) {
+        String cls = REGISTRY_BOOTSTRAP.get(registry);
+        if (cls == null) return null;
+        String key = registry + "." + method;
+        if (registryMethodCache.containsKey(key)) return registryMethodCache.get(key);
+        registryMethodCache.put(key, null);   // recursion guard
+        ClassModel cm = classModel(cls);
+        if (cm == null) return null;
+        List<Map<String, Object>> cases = new ArrayList<>();
+        for (MethodModel m : cm.methods()) {
+            String mn = m.methodName().stringValue();
+            if (!mn.equals("bootstrap") && !mn.equals("<clinit>")) continue;
+            Deque<Value> stack = new ArrayDeque<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                switch (el) {
+                    case ConstantInstruction ci -> stack.push(new ConstV(ci.constantValue()));
+                    case NewObjectInstruction no -> stack.push(new OtherV("new:" + no.className().asInternalName()));
+                    case InvokeDynamicInstruction idi -> { popArgs(stack, arity(idi.typeSymbol().descriptorString())); stack.push(new OtherV("lambda")); }
+                    case InvokeInstruction ii -> {
+                        String iname = ii.name().stringValue(), idesc = ii.typeSymbol().descriptorString();
+                        boolean isStatic = ii.opcode() == Opcode.INVOKESTATIC;
+                        List<Value> a = popArgs(stack, arity(idesc));
+                        if (!isStatic && !stack.isEmpty()) stack.pop();   // the receiver, or the object a constructor ran on
+                        String iret = idesc.substring(idesc.indexOf(')') + 1);
+                        if (isStatic && iname.startsWith("register")) {
+                            String name = null;
+                            int nameAt = -1;
+                            for (int i = 0; i < a.size(); i++) if (a.get(i) instanceof ConstV c && c.v() instanceof String s0) { name = s0; nameAt = i; break; }
+                            // the element is the last object argument: register(registry, name,
+                            // class, info), and the class may itself have gone through a helper
+                            // that returns a Class, which would otherwise look like the element
+                            String elem = null;
+                            for (int i = a.size() - 1; i > nameAt && elem == null; i--) if (a.get(i) instanceof OtherV ov && ov.what().startsWith("new:")) elem = ov.what().substring(4);
+                            if (name != null && elem != null) {
+                                Map<String, Object> t = readerNodeByName(elem, method, depth + 1);
+                                // An element whose reader reads nothing carries no payload: the
+                                // singleton argument types hand back a template they already
+                                // hold. That is a unit, not a hole.
+                                if ("opaque".equals(t.get("k")) && String.valueOf(t.get("java")).startsWith("empty-reader:")) t = node("unit");
+                                cases.add(node("case", "id", name.contains(":") ? name : "minecraft:" + name, "type", t));
+                            }
+                            stack.push(new OtherV("registered"));
+                            break;
+                        }
+                        // a static factory stands for the class it returns: SingletonArgumentInfo.contextFree(…)
+                        if (!iret.equals("V")) stack.push(iret.startsWith("L") ? new OtherV("new:" + iret.substring(1, iret.length() - 1)) : new OtherV("v"));
+                    }
+                    case StackInstruction si when si.opcode() == Opcode.DUP -> { if (!stack.isEmpty()) stack.push(stack.peek()); }
+                    case StackInstruction si when si.opcode() == Opcode.POP -> { if (!stack.isEmpty()) stack.pop(); }
+                    case FieldInstruction fi when fi.opcode() == Opcode.PUTSTATIC -> stack.clear();
+                    case FieldInstruction fi when fi.opcode() == Opcode.GETSTATIC -> stack.push(new OtherV("static:" + fi.owner().asInternalName() + "." + fi.name().stringValue()));
+                    case LoadInstruction li -> stack.push(new OtherV("local:" + li.slot()));
+                    default -> { }
+                }
+            }
+            if (!cases.isEmpty()) break;
+        }
+        List<Map<String, Object>> out = cases.isEmpty() ? null : cases;
+        registryMethodCache.put(key, out);
         return out;
     }
 
@@ -688,21 +945,132 @@ public class GenPacketSchema {
         return null;
     }
 
+    /**
+     * The codec an instance getter returns, when the field it returns is assigned in exactly
+     * one constructor: StatType.streamCodec() hands back a codec its constructor built from
+     * the registry the stat type wraps, which is the same shape whichever stat type it is.
+     * Null when the field is set in more than one place, or by something that is not a codec —
+     * then the shape may differ per element and saying otherwise would be a guess.
+     */
+    static Map<String, Object> getterFieldNode(String owner, String method, int depth) {
+        ClassModel cm = classModel(owner);
+        if (cm == null || depth > MAX_DEPTH) return null;
+        String field = null;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals(method)) continue;
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.GETFIELD && fi.owner().asInternalName().equals(owner)) {
+                    if (field != null) return null;   // more than one field read: not a plain getter
+                    field = fi.name().stringValue();
+                }
+            }
+            break;
+        }
+        if (field == null) return null;
+        Map<String, Object> found = null;
+        int assigned = 0;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("<init>")) continue;
+            Deque<Value> stack = new ArrayDeque<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTFIELD) {
+                    Value v = stack.isEmpty() ? null : stack.pop();
+                    if (fi.name().stringValue().equals(field) && fi.owner().asInternalName().equals(owner)) {
+                        assigned++;
+                        found = v instanceof CodecV c ? c.n() : null;
+                    }
+                    continue;
+                }
+                step(el, stack, owner, depth);
+            }
+        }
+        return assigned == 1 ? found : null;
+    }
+
     static Map<String, Object> codecOfOwner(String owner, String method, int depth) {
-        List<String> ev = enumValues(owner);
-        if (ev != null) return node("enum", "name", shortName(owner), "values", ev);
+        if (enumValues(owner) != null) return enumNode(owner);
         return opaque(shortName(owner) + "." + method);
     }
 
     static Map<String, Object> idMapper(List<Value> args) {
         // idMapper(IntFunction byId, ToIntFunction toId) → enum of the lambda owner; idMapper(IdMap) → registry-like
         for (Value a : args) if (a instanceof LambdaV l) {
-            List<String> ev = enumValues(l.owner());
-            if (ev != null) return node("enum", "name", shortName(l.owner()), "values", ev);
+            if (enumValues(l.owner()) != null) return enumNode(l.owner());
             return node("enum", "name", shortName(l.owner()), "values", null, "java", l.owner() + "." + l.name());
         }
         for (Value a : args) if (a instanceof OtherV ov && ov.what().startsWith("idmap:")) return node("registry", "registry", ov.what().substring(6));
         return opaque("ByteBufCodecs.idMapper");
+    }
+
+    /**
+     * What to call the union a dispatch on an enum builds. It is the part of the value the
+     * constant selects, so it is named for that: TrackedWaypoint$Type dispatches to
+     * TrackedWaypointPayload, which leaves the name of the class itself to the reader that
+     * holds the payload along with everything read before it.
+     */
+    static String dispatchName(String enumClass) {
+        String s = shortName(enumClass);
+        int at = s.lastIndexOf('$');
+        return (at > 0 ? s.substring(0, at) : s) + "Payload";
+    }
+
+    /**
+     * The cases of a dispatch on an enum whose constants each carry their own case: a reader
+     * held in a field (the tracked waypoints) or the codec of that case (a position path).
+     * Every constant, in ordinal order, with what it reads. Null when a constant carries
+     * neither, so the caller leaves the dispatch without cases rather than describing only
+     * some of them.
+     */
+    static List<Map<String, Object>> enumDispatchCases(String enumClass, String field, int depth) {
+        List<String> constants = enumValues(enumClass);
+        ClassModel cm = classModel(enumClass);
+        if (constants == null || cm == null) return null;
+        Map<String, Value> readers = new LinkedHashMap<>();
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("<clinit>")) continue;
+            Deque<Value> stack = new ArrayDeque<>();
+            String name = null;
+            Value fn = null;
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESPECIAL
+                        && ii.name().stringValue().equals("<init>") && ii.owner().asInternalName().equals(enumClass)) {
+                    // new Type("VEC3I", 1, Vec3iWaypoint::new)
+                    List<Value> a = popArgs(stack, arity(ii.typeSymbol().descriptorString()));
+                    if (!stack.isEmpty()) stack.pop();   // the object the constructor ran on
+                    name = constOf(arg(a, 0)) instanceof String c ? c : null;
+                    fn = null;
+                    for (Value v : a) if (v instanceof LambdaV || v instanceof CodecV) { fn = v; break; }
+                    continue;
+                }
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC) {
+                    if (name != null && fn != null && constants.contains(name)) readers.put(name, fn);
+                    name = null; fn = null;
+                    if (!stack.isEmpty()) stack.pop();
+                    continue;
+                }
+                step(el, stack, enumClass, depth);
+            }
+            break;
+        }
+        List<Map<String, Object>> cases = new ArrayList<>();
+        for (int i = 0; i < constants.size(); i++) {
+            Value held = readers.get(constants.get(i));
+            if (held == null) return null;
+            // the constant holds either a reader to run, or the codec of its own case
+            Map<String, Object> t = held instanceof CodecV c ? c.n()
+                : readerNode(((LambdaV) held).owner(), ((LambdaV) held).name(), ((LambdaV) held).desc(), depth + 1);
+            // A case whose reader read nothing carries no payload (TrackedWaypoint.EMPTY only
+            // passes the id and icon on to its superclass): that is a unit, not a hole. It is
+            // the one place "read nothing" is meaningful — everything a reader does read
+            // becomes a node, so an empty one really did leave the buffer alone.
+            if ("opaque".equals(t.get("k")) && String.valueOf(t.get("java")).startsWith("empty-reader:")) t = node("unit");
+            Map<String, Object> c = new LinkedHashMap<>();
+            c.put("id", constants.get(i));
+            c.put("num", i);
+            c.put("type", t);
+            cases.add(c);
+        }
+        return cases.isEmpty() ? null : cases;
     }
 
     static Map<String, Object> applyFn(Value recv, Value fn) {
@@ -763,7 +1131,13 @@ public class GenPacketSchema {
         return opaque(v.toString());
     }
     static Value arg(List<Value> a, int i) { return i < a.size() ? a.get(i) : null; }
-    static Object constOf(Value v) { return v instanceof ConstV c ? c.v() : null; }
+    /** The wire node behind a value, whether this reader read it or its caller did. */
+    static Map<String, Object> nodeOfValue(Value v) {
+        return v instanceof CodecV c ? c.n() : v instanceof PassedV p ? p.of() : null;
+    }
+    static Object constOf(Value v) { return unwrap(v) instanceof ConstV c ? c.v() : null; }
+    /** An array stands for the size it was created with (new byte[256], new String[4]). */
+    static Value unwrap(Value v) { return v instanceof ArrayV a ? a.size() : v; }
     static String keyOf(Value v) { return v instanceof KeyV k ? k.registry() : "?"; }
     static String lambdaOrOther(Value v) { return v instanceof LambdaV l ? shortName(l.owner()) + "." + l.name() : v == null ? null : v.toString(); }
 
@@ -779,6 +1153,14 @@ public class GenPacketSchema {
     // ---- reader walking (Packet.codec / StreamCodec.of / buffer constructors) -----------
 
     static final Map<String, Map<String, Object>> readerCache = new HashMap<>();
+
+    /**
+     * Guards a reader could not attach to its own value, because they test something its
+     * caller read and passed in. The caller takes them together with the fields they guard,
+     * which is what inlining such a reader means. It is consumed immediately by the call that
+     * produced it, so the walk being depth first is what keeps it to one reader at a time.
+     */
+    static final Map<Map<String, Object>, List<List<Map<String, Object>>>> carriedGuards = new IdentityHashMap<>();
 
     static Map<String, Object> readerNode(Value decoder, int depth) {
         if (!(decoder instanceof LambdaV l)) return opaque("decoder:" + decoder);
@@ -810,6 +1192,15 @@ public class GenPacketSchema {
     }
 
     static Map<String, Object> interpretReader(String owner, String name, String desc, int depth) {
+        return interpretReader(owner, name, desc, depth, Map.of());
+    }
+
+    /**
+     * passed holds the values the caller gave, by local slot, so a reader called with
+     * something read earlier — read(buf, flags) in the command tree — reads its branches as
+     * conditions on that value instead of as an unreadable test.
+     */
+    static Map<String, Object> interpretReader(String owner, String name, String desc, int depth, Map<Integer, Value> passed) {
         ClassModel cm = classModel(owner);
         if (cm == null) return opaque("no-class:" + shortName(owner) + "." + name);
         MethodModel target = null;
@@ -822,52 +1213,154 @@ public class GenPacketSchema {
         List<Map<String, Object>> fields = new ArrayList<>();   // for constructors: PUTFIELD order
         List<Map<String, Object>> values = new ArrayList<>();   // for static readers: values produced in order
         Deque<Value> stack = new ArrayDeque<>();
-        Map<Integer, Value> locals = new HashMap<>();   // slot → last stored value (array sizes, read values)
+        Map<Integer, Value> locals = new HashMap<>(passed);   // slot → last stored value (array sizes, read values)
         Map<String, Value> fieldValues = new HashMap<>(); // this.x set earlier in this reader (new byte[n] then readBytes(this.buffer))
-        // A read is conditional when it sits between a forward branch and its target (an if
-        // whose body reads) or inside a loop (a backward jump); a branch that only guards a
-        // throw (size checks) has no read in its region and does not count.
-        List<Label> pending = new ArrayList<>();
+        // A read between a forward branch and its target is guarded: when the branch tests a
+        // value read earlier (a flag bit, a boolean, an enum or int constant, a predicate of it)
+        // the read gets a "when" condition; a branch the walker cannot read, or a loop (a
+        // backward jump), makes the reader conditional. A branch that only guards a throw
+        // (size checks) has no read in its region and does not count.
+        List<Region> pending = new ArrayList<>();
         Set<Label> bound = new HashSet<>();
+        Map<Map<String, Object>, List<List<Map<String, Object>>>> guards = new IdentityHashMap<>();
+        Set<Map<String, Object>> seen = Collections.newSetFromMap(new IdentityHashMap<>());   // values already classified
+        // a region whose condition the walker cannot read makes the reads inside it
+        // conditional — unless the region turns out to be a loop, which is collapsed instead
+        Set<Region> forcedBy = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<Region> collapsed = Collections.newSetFromMap(new IdentityHashMap<>());
         boolean conditional = false;
+        Label lastLabel = null;
+        Map<Label, Integer> labelAt = new HashMap<>();   // label → how much had been read when it was bound
+        Region lastClosed = null;                        // the region that just ended, for a loop that jumps back from it
+        int iincs = 0;
         int expansionsBefore = guardExpansions;
+        int idx = 0;
         Map<String, Object> returned = null;
         for (CodeElement el : target.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+            idx++;
             switch (el) {
-                case BranchInstruction bi -> { if (bound.contains(bi.target())) conditional = true; else pending.add(bi.target()); }
-                case LookupSwitchInstruction ls -> { pending.add(ls.defaultTarget()); for (var c : ls.cases()) pending.add(c.target()); }
-                case TableSwitchInstruction ts -> { pending.add(ts.defaultTarget()); for (var c : ts.cases()) pending.add(c.target()); }
-                case LabelTarget lt -> { bound.add(lt.label()); pending.removeIf(l -> l.equals(lt.label())); }
+                case BranchInstruction bi -> {
+                    if (bound.contains(bi.target())) {
+                        // a jump backwards: a loop. When it returns to a head that compared a
+                        // counter with a bound, and values were read in between, the body is
+                        // that bound's worth of repeats rather than an unreadable condition.
+                        Region loop = null;
+                        for (Region r : pending) if (r.head != null && r.head.equals(bi.target()) && values.size() > r.valuesAt && iincs > r.iincAt) loop = r;
+                        if (loop != null && collapseLoop(loop, values, fields, fieldValues, isCtor, owner)) {
+                            pending.remove(loop);
+                            collapsed.add(loop);
+                        } else if (!collapseTerminated(bi.target(), labelAt, lastClosed, values, fields, fieldValues, isCtor, owner)) {
+                            conditional = true;
+                        }
+                        break;
+                    }
+                    boolean jump = bi.opcode() == Opcode.GOTO || bi.opcode() == Opcode.GOTO_W;
+                    Value[] ops = jump ? null : peek2(stack);
+                    Region r = new Region(bi.target(), idx, jump ? null : branchTest(bi.opcode(), stack));
+                    // `for (i = 0; i < bound; i++)`: the counter starts at zero, so the other
+                    // operand is the bound and the label just passed is the loop head
+                    if (ops != null && ops.length == 2 && bi.opcode().name().startsWith("IF_ICMP")
+                            && ops[1] instanceof ConstV z && Integer.valueOf(0).equals(z.v())) {
+                        r.head = lastLabel; r.bound = ops[0]; r.valuesAt = values.size(); r.iincAt = iincs;
+                    }
+                    pending.add(r);
+                }
+                case IncrementInstruction inc -> iincs++;
+                case LookupSwitchInstruction ls -> { pending.add(new Region(ls.defaultTarget(), idx, null)); for (var c : ls.cases()) pending.add(new Region(c.target(), idx, null)); }
+                case TableSwitchInstruction ts -> { pending.add(new Region(ts.defaultTarget(), idx, null)); for (var c : ts.cases()) pending.add(new Region(c.target(), idx, null)); }
+                case LabelTarget lt -> {
+                    lastLabel = lt.label();
+                    bound.add(lt.label());
+                    labelAt.putIfAbsent(lt.label(), values.size());
+                    for (Region r : new ArrayList<>(pending)) {
+                        if (!r.target.equals(lt.label())) continue;
+                        pending.remove(r);
+                        if (r.known && r.alts.size() == 1) lastClosed = r;
+                        // if (a) goto body; if (b) …: a jump into a region still open is an alternative to its condition
+                        if (r.known && !r.reads && r.alts.size() == 1) {
+                            for (Region s : pending) if (s.openedAt > r.openedAt && s.known) s.alts.add(negate(r.alts.get(0)));
+                        }
+                    }
+                }
                 case FieldInstruction fi when fi.opcode() == Opcode.PUTFIELD -> {
                     Value v = stack.isEmpty() ? new OtherV("underflow") : stack.pop();
                     fieldValues.put(fi.name().stringValue(), v);
-                    if (v instanceof CodecV c) {
+                    // `this.buffer = new byte[buf.readVarInt()]` is a field of the size read so
+                    // far; readBytes(this.buffer) later retypes it to the array it fills, and a
+                    // loop over the array replaces it with the list it counts.
+                    Value inner = unwrap(v);
+                    if (inner instanceof CodecV c) {
                         Map<String, Object> f = new LinkedHashMap<>();
                         f.put("name", fi.name().stringValue()); f.put("type", c.n()); fields.add(f);
                     }
                 }
                 case FieldInstruction fi when fi.opcode() == Opcode.GETFIELD -> {
-                    if (!stack.isEmpty()) stack.pop();   // the object
-                    stack.push(fieldValues.getOrDefault(fi.name().stringValue(), new OtherV("field:" + fi.name().stringValue())));
+                    Value obj = stack.isEmpty() ? null : stack.pop();
+                    // `type.constructor` on an enum just read: the field holds that constant's
+                    // own reader, so the value becomes a dispatch waiting for its arguments.
+                    if (obj instanceof CodecV c && enumClassOf.containsKey(c.n())) {
+                        stack.push(new EnumFnV(c.n(), enumClassOf.get(c.n()), fi.name().stringValue()));
+                    } else {
+                        stack.push(fieldValues.getOrDefault(fi.name().stringValue(), new OtherV("field:" + fi.name().stringValue())));
+                    }
                 }
                 case FieldInstruction fi when fi.opcode() == Opcode.GETSTATIC -> step(el, stack, owner, depth);
                 case InvokeInstruction ii -> {
-                    int before = values.size();
-                    readerInvoke(ii, stack, owner, depth, values);
-                    if (values.size() > before && !pending.isEmpty()) conditional = true;
+                    boolean outer = inKnownRegion;
+                    inKnownRegion = !pending.isEmpty() && pending.stream().allMatch(r -> r.known);
+                    readerInvoke(ii, stack, owner, depth, values, guards);
+                    inKnownRegion = outer;
+                    // every value this call produced (a read, or a record built from reads that
+                    // replaced them) is guarded by the regions open now
+                    for (Map<String, Object> v : values) {
+                        if (!seen.add(v) || pending.isEmpty()) continue;
+                        boolean known = pending.stream().allMatch(r -> r.known);
+                        for (Region r : pending) r.reads = true;
+                        if (!known) {
+                            for (Region r : pending) if (!r.known) forcedBy.add(r);
+                            continue;
+                        }
+                        List<List<Map<String, Object>>> when = new ArrayList<>();
+                        for (Region r : pending) when.add(new ArrayList<>(r.alts));
+                        guards.put(v, when);
+                    }
                 }
                 case InvokeDynamicInstruction idi -> { popArgs(stack, arity(idi.typeSymbol().descriptorString())); stack.push(lambdaOf(idi)); }
                 case ConstantInstruction ci -> step(el, stack, owner, depth);
                 case NewObjectInstruction no -> stack.push(new OtherV("new:" + no.className().asInternalName()));
                 case LoadInstruction li -> stack.push(locals.getOrDefault(li.slot(), new OtherV("local:" + li.slot())));
                 case StoreInstruction st -> { if (!stack.isEmpty()) locals.put(st.slot(), stack.pop()); }
-                case NewPrimitiveArrayInstruction na -> { /* new byte[N]: the size constant stays as the array's stand-in, so readBytes(array) is a fixed block */ }
+                case NewPrimitiveArrayInstruction na -> { if (!stack.isEmpty()) stack.push(new ArrayV(stack.pop())); }
+                case NewReferenceArrayInstruction na -> { if (!stack.isEmpty()) stack.push(new ArrayV(stack.pop())); }
+                case OperatorInstruction oi when oi.opcode() == Opcode.IADD || oi.opcode() == Opcode.ISUB -> {
+                    // `buf.readVarInt() - 1`: the value read, shifted
+                    Value b = stack.isEmpty() ? null : stack.pop();
+                    Value a = stack.isEmpty() ? null : stack.pop();
+                    int sign = oi.opcode() == Opcode.ISUB ? -1 : 1;
+                    Map<String, Object> of = nodeOfValue(a);
+                    Object d = constOf(b);
+                    if (of == null && sign > 0) { of = nodeOfValue(b); d = constOf(a); }
+                    stack.push(of != null && d instanceof Integer k ? new OffsetV(of, sign * k) : new OtherV("arith"));
+                }
+                case OperatorInstruction oi when oi.opcode() == Opcode.IAND -> {
+                    // `flags & 3`: the bits of a value read earlier, which a branch then tests
+                    Value b = stack.isEmpty() ? null : stack.pop();
+                    Value a = stack.isEmpty() ? null : stack.pop();
+                    Map<String, Object> of = nodeOfValue(a) != null ? nodeOfValue(a) : nodeOfValue(b);
+                    Object m = nodeOfValue(a) != null ? constOf(b) : constOf(a);
+                    stack.push(of != null && m instanceof Integer mask ? new MaskedV(of, mask) : new OtherV("and"));
+                }
+                case OperatorInstruction oi when oi.opcode() == Opcode.ARRAYLENGTH -> {
+                    Value a = stack.isEmpty() ? null : stack.pop();
+                    stack.push(a instanceof ArrayV av ? av.size() : new OtherV("length"));
+                }
                 case StackInstruction si when si.opcode() == Opcode.DUP -> { if (!stack.isEmpty()) stack.push(stack.peek()); }
                 case StackInstruction si when si.opcode() == Opcode.POP -> { if (!stack.isEmpty()) stack.pop(); }
                 case ReturnInstruction ri -> { if (!stack.isEmpty() && stack.peek() instanceof CodecV c) returned = c.n(); }
                 default -> { }
             }
         }
+        for (Region r : forcedBy) if (!collapsed.contains(r)) conditional = true;
         if (guardExpansions > expansionsBefore) conditional = false;   // the loop was the EnumSet-guarded reader loop
         Map<String, Object> result;
         if (isCtor && !fields.isEmpty()) {
@@ -875,7 +1368,7 @@ public class GenPacketSchema {
         } else if (!isCtor && !fields.isEmpty() && fields.size() == values.size()) {
             // a builder-style reader: every value read was stored into a named field
             result = node("struct", "name", shortName(owner), "fields", fields);
-        } else if (returned != null && !isCtor) {
+        } else if (returned != null && !isCtor && !(values.size() > 1 && values.get(values.size() - 1) == returned)) {
             result = returned;
         } else if (!values.isEmpty() && !isCtor) {
             // static X.read(buf) or buf.readX() building the value from what was read: the struct is
@@ -896,8 +1389,428 @@ public class GenPacketSchema {
         } else {
             result = opaque("empty-reader:" + shortName(owner) + "." + name);
         }
+        // A guard on something this reader read is attached here. One on a value its caller
+        // passed in belongs to the caller's struct, where that value is a field: hand those
+        // over, so the caller can splice this reader's fields in beside its own.
+        if (!guards.isEmpty() && !passed.isEmpty()) {
+            Map<Map<String, Object>, List<List<Map<String, Object>>>> carried = new IdentityHashMap<>();
+            for (Map.Entry<Map<String, Object>, List<List<Map<String, Object>>>> e : guards.entrySet()) {
+                boolean own = true;
+                for (List<Map<String, Object>> alts : e.getValue()) for (Map<String, Object> t : alts) {
+                    boolean found = false;
+                    for (Map<String, Object> v : values) if (v == t.get("node")) found = true;
+                    if (!found) own = false;
+                }
+                if (!own) carried.put(e.getKey(), e.getValue());
+            }
+            for (Map<String, Object> k : carried.keySet()) guards.remove(k);
+            carriedGuards.putAll(carried);
+        }
+        if (!guards.isEmpty() && result.get("k").equals("struct") && !attachGuards(result, values, guards)) conditional = true;
         if (conditional && result.get("k").equals("struct")) result.put("conditional", true);
         return result;
+    }
+
+    /** A forward-branch region of a reader: [branch, target). */
+    static final class Region {
+        final Label target;
+        final int openedAt;
+        final List<Map<String, Object>> alts = new ArrayList<>();   // OR-ed conditions under which the region executes
+        final boolean known;
+        boolean reads;
+        // a loop head: the label the body jumps back to, the bound it is compared with, and
+        // where the body's reads start
+        Label head;
+        Value bound;
+        int valuesAt, iincAt;
+        int contributed;   // how many reads it forced to "conditional"
+        Region(Label target, int openedAt, Map<String, Object> test) {
+            this.target = target; this.openedAt = openedAt; this.known = test != null;
+            if (test != null) alts.add(test);
+        }
+    }
+
+    /** The top two values of the stack without popping them: [top, second]. */
+    static Value[] peek2(Deque<Value> stack) {
+        Value[] out = new Value[2];
+        int i = 0;
+        for (Value v : stack) { out[i++] = v; if (i == 2) break; }
+        return i == 2 ? out : new Value[0];
+    }
+
+    /**
+     * Collapses a loop body into the repetition it is: a constant bound repeats the body that
+     * many times, a bound read from the buffer makes it a length-prefixed list (the bound is
+     * the prefix and stops being a field of its own). Returns false when the body cannot be
+     * collapsed, leaving the reader conditional as before.
+     */
+    static boolean collapseLoop(Region loop, List<Map<String, Object>> values, List<Map<String, Object>> fields,
+                                Map<String, Value> fieldValues, boolean isCtor, String owner) {
+        List<Map<String, Object>> body = new ArrayList<>(values.subList(loop.valuesAt, values.size()));
+        for (Map<String, Object> f : fields) if (f.get("type") instanceof Map<?, ?> t) for (Map<String, Object> b : body) if (t == b) return false;
+        // A constructor reader keeps its fields, and a loop fills an array it stored earlier:
+        // the repetition belongs to that field. Without a field to put it on the reads would
+        // vanish from the struct while the packet still counted as fully typed.
+        String arrayField = null;
+        for (Map.Entry<String, Value> e : fieldValues.entrySet()) {
+            if (!(e.getValue() instanceof ArrayV av)) continue;
+            if (arrayField == null || av.size() == loop.bound) arrayField = e.getKey();
+        }
+        if (isCtor && !fields.isEmpty() && arrayField == null) return false;
+        Map<String, Object> elem = elemStruct(body, owner);
+        Object bound = constOf(loop.bound);
+        if (bound instanceof Integer count && count > 0) {
+            // a constant number of repeats: the body again, count times
+            String hint = arrayField != null ? arrayField : hintOf.get(body.get(0));
+            if (hint != null) for (Map<String, Object> b : body) hintOf.put(b, hint);
+            for (int i = 1; i < count; i++) {
+                for (Map<String, Object> b : body) {
+                    Map<String, Object> copy = castNode((Map<?, ?>) copyNode(b));
+                    if (hint != null) hintOf.put(copy, hint);
+                    values.add(copy);
+                    if (isCtor && !fields.isEmpty()) fields.add(field(hint != null ? hint : "v", copy));
+                }
+            }
+            if (isCtor && !fields.isEmpty()) for (Map<String, Object> b : body) fields.add(fields.size() - (count - 1) * body.size(), field(hint != null ? hint : "v", b));
+            return true;
+        }
+        Value b = unwrap(loop.bound);
+        if (b instanceof CodecV c && "prim".equals(c.n().get("k")) && String.valueOf(c.n().get("t")).startsWith("VAR_INT")) {
+            removeIdentity(values, c.n());          // the bound was the list's length prefix
+            while (values.size() > loop.valuesAt) values.remove(values.size() - 1);
+            Map<String, Object> list = node("list", "elem", elem);
+            String hint = arrayField != null ? arrayField : hintOf.getOrDefault(body.get(0), "entries");
+            hintOf.putIfAbsent(list, hint);
+            values.add(list);
+            if (isCtor && !fields.isEmpty()) {
+                for (int i = fields.size() - 1; i >= 0; i--) if (fields.get(i).get("type") == c.n()) fields.remove(i);
+                fields.add(field(hint, list));
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /** What one turn of a loop reads: the value itself, or a struct of the values in order. */
+    static Map<String, Object> elemStruct(List<Map<String, Object>> body, String owner) {
+        if (body.size() == 1) return body.get(0);
+        List<Map<String, Object>> fs = new ArrayList<>();
+        for (Map<String, Object> b : body) {
+            Map<String, Object> f = new LinkedHashMap<>();
+            f.put("name", hintOf.getOrDefault(b, "v" + fs.size()));
+            f.put("type", b);
+            fs.add(f);
+        }
+        return node("struct", "name", shortName(owner).replaceAll("Packet$", "") + "Entry", "fields", fs);
+    }
+
+    /**
+     * Collapses a loop that has no counter but ends on a test of something it read — the
+     * equipment packet reads a slot byte whose top bit says another entry follows — into a
+     * list that is read until that test fails. Returns false when the body cannot be
+     * collapsed, leaving the reader conditional as before.
+     */
+    static boolean collapseTerminated(Label head, Map<Label, Integer> labelAt, Region cond,
+                                      List<Map<String, Object>> values, List<Map<String, Object>> fields,
+                                      Map<String, Value> fieldValues, boolean isCtor, String owner) {
+        Integer at = labelAt.get(head);
+        if (at == null || cond == null || !cond.known || cond.alts.size() != 1) return false;
+        if (at >= values.size()) return false;
+        List<Map<String, Object>> body = new ArrayList<>(values.subList(at, values.size()));
+        for (Map<String, Object> f : fields) if (f.get("type") instanceof Map<?, ?> t) for (Map<String, Object> b : body) if (t == b) return false;
+        // The test has to be on a value of the body: an entry that says whether another one
+        // follows. A condition on anything else says nothing about how long the list is.
+        Map<String, Object> test = cond.alts.get(0);
+        // Only a continuation bit ends a list this way. A loop that ends on anything else is
+        // some other repetition — a var int's own byte loop, say — and calling it a list would
+        // claim a shape the packet does not have.
+        if (!"bit".equals(test.get("test"))) return false;
+        boolean onBody = false;
+        for (Map<String, Object> b : body) if (b == test.get("node")) onBody = true;
+        if (!onBody) return false;
+        // A constructor reader keeps its fields, and this loop fills a collection it made
+        // before entering: the list belongs to that field. One candidate only — guessing
+        // between several would put the reads on the wrong field.
+        String listField = null;
+        if (isCtor) {
+            for (Map.Entry<String, Value> e : fieldValues.entrySet()) {
+                if (unwrap(e.getValue()) instanceof CodecV) continue;
+                if (listField != null) return false;
+                listField = e.getKey();
+            }
+            if (listField == null) return false;
+        }
+        Map<String, Object> elem = elemStruct(body, owner);
+        // Name the field the test is on: a reader of the schema has no identity to follow it by.
+        String on = null;
+        if ("struct".equals(elem.get("k"))) {
+            for (Map<String, Object> f : castList(elem.get("fields"))) if (f.get("type") == test.get("node")) on = String.valueOf(f.get("name"));
+        } else if (elem == test.get("node")) {
+            on = "";   // the entry is the value the test is on
+        }
+        if (on == null) return false;
+        Map<String, Object> when = new LinkedHashMap<>(test);
+        when.remove("node");
+        when.put("field", on);
+        while (values.size() > at) values.remove(values.size() - 1);
+        Map<String, Object> list = node("whilelist", "elem", elem, "while", when);
+        hintOf.putIfAbsent(list, listField != null ? listField : "entries");
+        values.add(list);
+        if (isCtor) fields.add(field(listField, list));
+        return true;
+    }
+
+    /** A copy of a node with fresh identity, so guards and hints do not follow it. */
+    @SuppressWarnings("unchecked")
+    static Object copyNode(Object o) {
+        if (o instanceof Map<?, ?> m) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> e : m.entrySet()) out.put(String.valueOf(e.getKey()), copyNode(e.getValue()));
+            return out;
+        }
+        if (o instanceof List<?> l) {
+            List<Object> out = new ArrayList<>();
+            for (Object v : l) out.add(copyNode(v));
+            return out;
+        }
+        return o;
+    }
+
+    static Map<String, Object> test(Map<String, Object> node, String kind, Object value, boolean not) {
+        Map<String, Object> t = new LinkedHashMap<>();
+        t.put("node", node); t.put("test", kind);
+        if (value != null) t.put("value", value);
+        if (not) t.put("not", true);
+        return t;
+    }
+    static Map<String, Object> negate(Map<String, Object> t) {
+        Map<String, Object> m = new LinkedHashMap<>(t);
+        if ("cmp".equals(m.get("test"))) {
+            m.put("op", switch (String.valueOf(m.get("op"))) { case ">" -> "<="; case "<=" -> ">"; case "<" -> ">="; case ">=" -> "<"; default -> "?"; });
+            return m;
+        }
+        if (Boolean.TRUE.equals(m.get("not"))) m.remove("not"); else m.put("not", true);
+        return m;
+    }
+
+    /**
+     * The condition under which a conditional branch falls through, from its operands: a bit of a
+     * value read (iand with a constant), a boolean, an int or enum compared with a constant, or a
+     * static predicate of a value (evaluated over its domain). Null when the walker cannot tell.
+     */
+    static Map<String, Object> branchTest(Opcode op, Deque<Value> stack) {
+        String n = op.name();
+        boolean two = n.startsWith("IF_I") || n.startsWith("IF_A");
+        Value top = stack.isEmpty() ? null : stack.pop();
+        Value second = two && !stack.isEmpty() ? stack.pop() : null;
+        // a value the caller passed in is tested like one read here
+        if (top instanceof PassedV pt) top = new CodecV(pt.of());
+        if (second instanceof PassedV ps) second = new CodecV(ps.of());
+        if (!two) {
+            if (top instanceof MaskedV mv) {
+                return switch (n) {
+                    case "IFEQ", "IFLE" -> test(mv.of(), "bit", mv.mask(), false);
+                    case "IFNE", "IFGT" -> test(mv.of(), "bit", mv.mask(), true);
+                    default -> null;
+                };
+            }
+            if (top instanceof ConstV c && c.v() instanceof Integer mask && !stack.isEmpty() && stack.peek() instanceof CodecV x) {
+                stack.pop();   // value & mask, where the and was not interpreted
+                return switch (n) {
+                    case "IFEQ", "IFLE" -> test(x.n(), "bit", mask, false);
+                    case "IFNE", "IFGT" -> test(x.n(), "bit", mask, true);
+                    default -> null;
+                };
+            }
+            if (top instanceof CodecV x) {
+                Map<String, Object> node = x.n();
+                if ("pred".equals(node.get("k"))) {
+                    Map<String, Object> of = castNode((Map<?, ?>) node.get("of"));
+                    return switch (n) {
+                        case "IFEQ" -> test(of, "in", node.get("values"), false);
+                        case "IFNE" -> test(of, "in", node.get("values"), true);
+                        default -> null;
+                    };
+                }
+                boolean isBool = "prim".equals(node.get("k")) && "BOOL".equals(node.get("t"));
+                return switch (n) {
+                    case "IFEQ" -> isBool ? test(node, "true", null, false) : test(node, "eq", 0, true);
+                    case "IFNE" -> isBool ? test(node, "true", null, true) : test(node, "eq", 0, false);
+                    case "IFLE" -> cmp(node, ">", 0);    // jumps when X <= 0
+                    case "IFGT" -> cmp(node, "<=", 0);
+                    case "IFLT" -> cmp(node, ">=", 0);
+                    case "IFGE" -> cmp(node, "<", 0);
+                    default -> null;
+                };
+            }
+            return null;
+        }
+        // `(x - 1) == -1`: a value read, shifted, compared with a number — which is the value
+        // itself compared with that number shifted back
+        OffsetV off = second instanceof OffsetV o2 ? o2 : top instanceof OffsetV o1 ? o1 : null;
+        if (off != null) {
+            Object v = constOf(second instanceof OffsetV ? top : second);
+            if (!(v instanceof Integer k)) return null;
+            return switch (n) {
+                case "IF_ICMPNE" -> test(off.of(), "eq", k - off.delta(), false);
+                case "IF_ICMPEQ" -> test(off.of(), "eq", k - off.delta(), true);
+                default -> null;
+            };
+        }
+        // `(flags & 3) == 2`: some bits of a value read earlier compared with a constant
+        MaskedV masked = second instanceof MaskedV m2 ? m2 : top instanceof MaskedV m1 ? m1 : null;
+        if (masked != null) {
+            Object v = constOf(second instanceof MaskedV ? top : second);
+            if (v == null) return null;
+            Map<String, Object> t = switch (n) {
+                case "IF_ICMPNE" -> test(masked.of(), "maskeq", v, false);
+                case "IF_ICMPEQ" -> test(masked.of(), "maskeq", v, true);
+                default -> null;
+            };
+            if (t != null) t.put("mask", masked.mask());
+            return t;
+        }
+        CodecV x = second instanceof CodecV c2 ? c2 : top instanceof CodecV c1 ? c1 : null;
+        Value other = second instanceof CodecV ? top : second;
+        if (x == null || "pred".equals(x.n().get("k"))) return null;
+        Object val = other instanceof ConstV c ? c.v()
+            : other instanceof OtherV ov && ov.what().startsWith("static:") ? ov.what().substring(ov.what().lastIndexOf('.') + 1) : null;
+        if (val == null) return null;
+        boolean xLeft = second instanceof CodecV;   // X op N, or N op X
+        return switch (n) {
+            case "IF_ICMPNE", "IF_ACMPNE" -> test(x.n(), "eq", val, false);
+            case "IF_ICMPEQ", "IF_ACMPEQ" -> test(x.n(), "eq", val, true);
+            case "IF_ICMPGE" -> val instanceof Integer ? cmp(x.n(), xLeft ? "<" : ">", val) : null;    // jumps when X >= N
+            case "IF_ICMPLT" -> val instanceof Integer ? cmp(x.n(), xLeft ? ">=" : "<=", val) : null;
+            case "IF_ICMPGT" -> val instanceof Integer ? cmp(x.n(), xLeft ? "<=" : ">=", val) : null;
+            case "IF_ICMPLE" -> val instanceof Integer ? cmp(x.n(), xLeft ? ">" : "<", val) : null;
+            default -> null;
+        };
+    }
+
+    static Map<String, Object> cmp(Map<String, Object> node, String op, Object value) {
+        Map<String, Object> t = test(node, "cmp", value, false);
+        t.put("op", op);
+        return t;
+    }
+
+    /**
+     * Names the guard values of a struct's guarded fields and writes them as "when" (a list of
+     * alternatives, each a list of tests that must all hold). A guard value that is not a field
+     * (a flags byte only kept in a local) becomes one, at its place in the read order.
+     */
+    @SuppressWarnings("unchecked")
+    static boolean attachGuards(Map<String, Object> result, List<Map<String, Object>> values, Map<Map<String, Object>, List<List<Map<String, Object>>>> guards) {
+        List<Map<String, Object>> fields = (List<Map<String, Object>>) result.get("fields");
+        Map<Map<String, Object>, String> nameOf = new IdentityHashMap<>();
+        for (Map<String, Object> f : fields) nameOf.put(castNode((Map<?, ?>) f.get("type")), (String) f.get("name"));
+        for (Map<String, Object> f : new ArrayList<>(fields)) {
+            List<List<Map<String, Object>>> when = guards.get(castNode((Map<?, ?>) f.get("type")));
+            if (when == null) continue;
+            List<Object> out = new ArrayList<>();
+            for (List<Map<String, Object>> alts : when) {
+                List<Object> altsOut = new ArrayList<>();
+                for (Map<String, Object> t : alts) {
+                    Map<String, Object> node = castNode((Map<?, ?>) t.get("node"));
+                    String name = nameOf.get(node);
+                    if (name == null) {
+                        // synthesise the guard field at its read position
+                        int at = -1;
+                        for (int i = 0; i < values.size(); i++) if (values.get(i) == node) at = i;
+                        if (at < 0) return false;
+                        int insert = fields.size();
+                        for (int i = 0; i < fields.size(); i++) {
+                            int vi = -1;
+                            for (int j = 0; j < values.size(); j++) if (values.get(j) == fields.get(i).get("type")) vi = j;
+                            if (vi > at) { insert = i; break; }
+                        }
+                        name = "bit".equals(t.get("test")) ? "flags" : hintOf.getOrDefault(node, "guard");
+                        Map<String, Object> g = new LinkedHashMap<>();
+                        g.put("name", name); g.put("type", node);
+                        fields.add(insert, g);
+                        nameOf.put(node, name);
+                    }
+                    Map<String, Object> o = new LinkedHashMap<>();
+                    o.put("field", name); o.put("test", t.get("test"));
+                    if (t.get("value") != null) o.put("value", t.get("value"));
+                    if (t.get("mask") != null) o.put("mask", t.get("mask"));
+                    if (t.get("op") != null) o.put("op", t.get("op"));
+                    if (Boolean.TRUE.equals(t.get("not"))) o.put("not", true);
+                    altsOut.add(o);
+                }
+                out.add(altsOut);
+            }
+            f.put("when", out);
+        }
+        return true;
+    }
+
+    /**
+     * Evaluates a static boolean method of one int-like argument (shouldHaveParameters(method))
+     * for every input in -128..127 by running its straight-line integer code; the inputs for
+     * which it returns true, or null when the code does more than compare and jump.
+     */
+    static List<Integer> evalPredicate(String owner, String name, String desc) {
+        ClassModel cm = classModel(owner);
+        if (cm == null) return null;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals(name) || !m.methodType().stringValue().equals(desc)) continue;
+            List<CodeElement> code = new ArrayList<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) code.add(el);
+            Map<Label, Integer> at = new HashMap<>();
+            for (int i = 0; i < code.size(); i++) if (code.get(i) instanceof LabelTarget lt) at.put(lt.label(), i);
+            List<Integer> yes = new ArrayList<>();
+            for (int input = -128; input <= 127; input++) {
+                Integer r = runPredicate(code, at, input);
+                if (r == null) return null;
+                if (r != 0) yes.add(input);
+            }
+            return yes;
+        }
+        return null;
+    }
+
+    static Integer runPredicate(List<CodeElement> code, Map<Label, Integer> at, int input) {
+        Deque<Integer> st = new ArrayDeque<>();
+        int pc = 0, steps = 0;
+        while (pc < code.size() && steps++ < 500) {
+            CodeElement el = code.get(pc++);
+            switch (el) {
+                case LoadInstruction li -> { if (li.slot() != 0) return null; st.push(input); }
+                case ConstantInstruction ci -> { if (!(ci.constantValue() instanceof Integer v)) return null; st.push(v); }
+                case OperatorInstruction oi -> {
+                    if (st.size() < 2) return null;
+                    int b = st.pop(), a = st.pop();
+                    switch (oi.opcode()) {
+                        case IAND -> st.push(a & b);
+                        case IOR -> st.push(a | b);
+                        case IXOR -> st.push(a ^ b);
+                        case IADD -> st.push(a + b);
+                        case ISUB -> st.push(a - b);
+                        default -> { return null; }
+                    }
+                }
+                case BranchInstruction bi -> {
+                    String n = bi.opcode().name();
+                    boolean taken;
+                    if (n.equals("GOTO") || n.equals("GOTO_W")) taken = true;
+                    else if (n.startsWith("IF_ICMP")) {
+                        if (st.size() < 2) return null;
+                        int b = st.pop(), a = st.pop();
+                        taken = switch (n) { case "IF_ICMPEQ" -> a == b; case "IF_ICMPNE" -> a != b; case "IF_ICMPLT" -> a < b; case "IF_ICMPGE" -> a >= b; case "IF_ICMPGT" -> a > b; case "IF_ICMPLE" -> a <= b; default -> false; };
+                    } else if (n.startsWith("IF")) {
+                        if (st.isEmpty()) return null;
+                        int a = st.pop();
+                        taken = switch (n) { case "IFEQ" -> a == 0; case "IFNE" -> a != 0; case "IFLT" -> a < 0; case "IFGE" -> a >= 0; case "IFGT" -> a > 0; case "IFLE" -> a <= 0; default -> false; };
+                    } else return null;
+                    if (taken) { Integer t = at.get(bi.target()); if (t == null) return null; pc = t; }
+                }
+                case ReturnInstruction ri -> { return ri.opcode() == Opcode.IRETURN && !st.isEmpty() ? st.pop() : null; }
+                case PseudoInstruction pi -> { }   // labels, line numbers, local variable tables
+                default -> { return null; }
+            }
+        }
+        return null;
     }
 
     @SuppressWarnings("unchecked")
@@ -937,9 +1850,15 @@ public class GenPacketSchema {
             if (names != null) for (int i = 0; i < args.size(); i++) if (args.get(i) instanceof CodecV c) hintOf.put(c.n(), names.get(i));
             return null;
         }
+        // the wire order is the read order (values), not the argument order: new MapPatch(startX, startY, width, height, …)
+        List<Integer> order = new ArrayList<>();
+        for (int i = 0; i < wire.size(); i++) order.add(i);
+        List<Integer> readAt = new ArrayList<>();
+        for (Map<String, Object> w : wire) { int at = -1; for (int j = 0; j < values.size(); j++) if (values.get(j) == w) at = j; readAt.add(at); }
+        order.sort(Comparator.comparingInt(readAt::get));
         for (Map<String, Object> w : wire) removeIdentity(values, w);
         List<Map<String, Object>> fs = new ArrayList<>();
-        for (int i = 0; i < wire.size(); i++) {
+        for (int i : order) {
             Map<String, Object> f = new LinkedHashMap<>();
             f.put("name", names != null ? names.get(i) : hintOf.getOrDefault(wire.get(i), "v" + i));
             f.put("type", wire.get(i)); fs.add(f);
@@ -1003,7 +1922,8 @@ public class GenPacketSchema {
     static List<Map<String, Object>> castList(Object o) { return o instanceof List<?> l ? (List<Map<String, Object>>) l : null; }
 
     /** Invocations inside a reader: buffer reads, codec decodes, nested readers, constructors. */
-    static void readerInvoke(InvokeInstruction ii, Deque<Value> stack, String self, int depth, List<Map<String, Object>> values) {
+    static void readerInvoke(InvokeInstruction ii, Deque<Value> stack, String self, int depth, List<Map<String, Object>> values,
+                             Map<Map<String, Object>, List<List<Map<String, Object>>>> guards) {
         String owner = ii.owner().asInternalName(), name = ii.name().stringValue(), desc = ii.typeSymbol().descriptorString();
         boolean isStatic = ii.opcode() == Opcode.INVOKESTATIC;
         int n = arity(desc);
@@ -1011,22 +1931,67 @@ public class GenPacketSchema {
         Value recv = isStatic ? null : (stack.isEmpty() ? new OtherV("underflow") : stack.pop());
         String ret = desc.substring(desc.indexOf(')') + 1);
         boolean isBuf = owner.endsWith("FriendlyByteBuf") || owner.endsWith("RegistryFriendlyByteBuf") || owner.endsWith("io/netty/buffer/ByteBuf")
-            || owner.endsWith("codec/VarInt") || owner.endsWith("codec/VarLong") || owner.endsWith("codec/Utf8String");
+            // VarInt moved out of the codec package in 26.3; its own byte loop is not a
+            // packet's, so it has to be recognised wherever it lives
+            || owner.endsWith("/VarInt") || owner.endsWith("/VarLong") || owner.endsWith("/Utf8String");
         Map<String, Object> produced = null;
         // Wrappers that keep the value: Optional.of(x) (a branch-guarded read), List.of(x), requireNonNull(x)…
         if (owner.equals("java/util/Optional") && (name.equals("of") || name.equals("ofNullable")) && arg(args, 0) instanceof CodecV c) {
+            if (inKnownRegion) { stack.push(c); return; }   // the region's condition says when the value is present
             Map<String, Object> opt = node("optional", "elem", c.n()); stack.push(new CodecV(opt)); return;
         }
         if ((owner.equals("java/util/Objects") && name.equals("requireNonNull")) || (owner.endsWith("ImmutableList") && name.equals("copyOf"))
                 || (owner.equals("java/util/List") && name.equals("copyOf"))) {
             if (arg(args, 0) instanceof CodecV c) { stack.push(c); return; }
         }
-        if (isBuf && name.startsWith("read")) {
+        // JointType.CODEC.byName(buf.readUtf(), ALIGNED): the string just read is the enum's
+        // serialized name. The default only stands in for a name this version does not know,
+        // so the wire form is the name and nothing else.
+        if (owner.endsWith("StringRepresentable$EnumCodec") && name.equals("byName")
+                && recv instanceof CodecV rc && "stringenum".equals(rc.n().get("k")) && arg(args, 0) instanceof CodecV sc) {
+            removeIdentity(values, sc.n());
+            Map<String, Object> se = castNode((Map<?, ?>) copyNode(rc.n()));
+            hintOf.putIfAbsent(se, hintOf.getOrDefault(sc.n(), lowerFirst(String.valueOf(rc.n().get("name")))));
+            stack.push(new CodecV(se));
+            values.add(se);
+            return;
+        }
+        // `type.constructor.apply(id, icon, buf)`: an enum whose constants each hold a reader
+        // is a dispatch on that enum — the constant just read says which reader takes the rest
+        // of the buffer, so the value is one of as many shapes as the enum has constants.
+        if (name.equals("apply") && recv instanceof EnumFnV ef) {
+            Map<String, Object> d = node("dispatch", "name", dispatchName(ef.enumClass()), "key", ef.key());
+            List<Map<String, Object>> cases = enumDispatchCases(ef.enumClass(), ef.field(), depth);
+            if (cases != null) d.put("cases", cases);
+            removeIdentity(values, ef.key());
+            stack.push(new CodecV(d));
+            values.add(d);
+            hintOf.putIfAbsent(d, hintOf.getOrDefault(ef.key(), lowerFirst(dispatchName(ef.enumClass()))));
+            return;
+        }
+        // BuiltInRegistries.COMMAND_ARGUMENT_TYPE.byId(buf.readVarInt()): the element the id
+        // just read names. Nothing about it is known yet — what matters is the method called
+        // on it next.
+        if (name.equals("byId") && recv instanceof OtherV ov && ov.what().startsWith("idmap:") && arg(args, 0) instanceof CodecV idc) {
+            String reg = ov.what().substring(ov.what().lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
+            removeIdentity(values, idc.n());
+            stack.push(new RegistryElemV(reg, idc.n()));
+            return;
+        }
+        // info.deserializeFromNetwork(buf): each element of the registry reads its own payload,
+        // so the value is a dispatch on that registry — the id, then that element's own reader.
+        if (recv instanceof RegistryElemV re && !ret.equals("V")
+                && (desc.contains("FriendlyByteBuf") || desc.contains("io/netty/buffer/ByteBuf"))) {
+            Map<String, Object> d = node("dispatch", "name", shortName(owner), "key", node("registry", "registry", re.registry()));
+            List<Map<String, Object>> cases = registryMethodCases(re.registry(), name, depth + 1);
+            if (cases != null) d.put("cases", cases);
+            produced = d;
+        } else if (isBuf && name.startsWith("read")) {
             switch (name) {
                 case "readList", "readCollection" -> produced = node("list", "elem", elemOf(args, depth));
                 case "readNullable", "readOptional" -> produced = node("optional", "elem", elemOf(args, depth));
                 case "readMap" -> produced = node("map", "key", readerOf(args.size() > 1 ? arg(args, args.size() - 2) : null, depth), "val", readerOf(arg(args, args.size() - 1), depth));
-                case "readEnum" -> produced = arg(args, 0) instanceof ClassV cv ? node("enum", "name", shortName(cv.internal()), "values", enumValues(cv.internal())) : opaque("readEnum");
+                case "readEnum" -> produced = arg(args, 0) instanceof ClassV cv ? enumNode(cv.internal()) : opaque("readEnum");
                 case "readResourceKey" -> produced = node("resourcekey", "registry", keyOf(arg(args, 0)));
                 case "readById" -> produced = node("registry", "registry", arg(args, 0) instanceof OtherV ov && ov.what().startsWith("idmap:") ? ov.what().substring(6) : "?");
                 case "readJsonWithCodec", "readWithCodec" -> produced = nbtOrText(args.isEmpty() ? null : arg(args, 0));
@@ -1034,7 +1999,7 @@ public class GenPacketSchema {
                 case "readFixedBitSet" -> produced = node("prim", "t", "FIXED_BIT_SET", "bits", constOf(arg(args, 0)));
                 case "readBytes" -> {
                     if (constOf(arg(args, 0)) != null) produced = node("prim", "t", "FIXED_BYTES", "len", constOf(arg(args, 0)));   // readBytes(256): a fixed-size block
-                    else if (arg(args, 0) instanceof CodecV len && "prim".equals(len.n().get("k")) && "VAR_INT".equals(len.n().get("t"))) {
+                    else if (unwrap(arg(args, 0)) instanceof CodecV len && "prim".equals(len.n().get("k")) && "VAR_INT".equals(len.n().get("t"))) {
                         len.n().put("t", "BYTE_ARRAY");   // new byte[buf.readVarInt()] + readBytes(array): the length node becomes the array, in place
                         return;
                     } else produced = prim("RAW_BYTES");
@@ -1070,7 +2035,16 @@ public class GenPacketSchema {
             } else if (desc.contains("FriendlyByteBuf") || desc.contains("io/netty/buffer/ByteBuf")) {
                 produced = readerNode(cls, "<init>", desc, depth + 1);
             } else if (cls.equals(self)) {
-                produced = null; // the packet's own constructor from already-collected values (handled by caller)
+                // the packet's own constructor from the values read: it names them (handled by the caller)
+                List<String> params = ctorParamNames(cls, desc);
+                if (params == null || params.size() != args.size()) {
+                    List<String> comps = recordComponents(cls);
+                    if (comps != null && comps.size() == args.size()) params = comps;
+                }
+                if (params != null && params.size() == args.size()) {
+                    for (int i = 0; i < args.size(); i++) if (args.get(i) instanceof CodecV c) hintOf.put(c.n(), params.get(i));
+                }
+                produced = null;
             } else {
                 Map<String, Object> st = constructed(cls, desc, args, values);
                 if (st == null) { stack.push(new OtherV("obj:" + shortName(cls))); return; }
@@ -1083,8 +2057,48 @@ public class GenPacketSchema {
             if (expandEnumReaders(enumClass, builder.n(), depth)) return;
             stack.push(new CodecV(opaque("reader-loop:" + shortName(owner))));
             return;
+        } else if (ret.equals("V") && owner.startsWith("net/minecraft/") && !isBuf
+                && (desc.contains("FriendlyByteBuf") || desc.contains("io/netty/buffer/ByteBuf"))) {
+            // A reader that hands the buffer to a void helper (Node.readContents(buf, node))
+            // reads through it: interpret the helper and take what it read, or the hole it
+            // leaves. A helper that reads nothing is a writer or bookkeeping, and is ignored —
+            // silently dropping one that does read would produce a struct short of fields
+            // while the schema still called the packet fully typed.
+            Map<String, Object> inner = readerNode(owner, name, desc, depth + 1);
+            if ("opaque".equals(inner.get("k")) && String.valueOf(inner.get("java")).startsWith("empty-reader:")) return;
+            produced = inner;
         } else if (owner.startsWith("net/minecraft/") && (desc.contains("FriendlyByteBuf") || desc.contains("io/netty/buffer/ByteBuf")) && !ret.equals("V")) {
-            produced = readerNode(owner, name, desc, depth + 1);
+            // A reader handed values read earlier is interpreted with them bound to its
+            // parameters: what it reads then depends on those values in a way the schema can
+            // say (read(buf, flags) in the command tree), instead of being a branch on
+            // something unknown. Only calls that really pass such a value take this path, and
+            // it does not use the cache, since the answer depends on what was passed.
+            Map<Integer, Value> bind = new HashMap<>();
+            List<Integer> slots = paramSlots(desc, isStatic);
+            for (int i = 0; i < args.size() && i < slots.size(); i++) if (args.get(i) instanceof CodecV c) bind.put(slots.get(i), new PassedV(c.n()));
+            if (bind.isEmpty() || depth >= MAX_DEPTH || READER_RULES.containsKey(owner + "." + name)) {
+                produced = readerNode(owner, name, desc, depth + 1);
+            } else {
+                carriedGuards.clear();
+                Map<String, Object> inner = interpretReader(owner, name, desc, depth + 1, bind);
+                // The reader read under conditions on what it was passed, so its fields belong
+                // beside that value in this struct rather than in one of their own: splice them
+                // in, guards and all. Anything else stays the nested value it was.
+                if (!carriedGuards.isEmpty() && "struct".equals(inner.get("k"))) {
+                    for (Map<String, Object> f : castList(inner.get("fields"))) {
+                        Map<String, Object> t = castNode((Map<?, ?>) f.get("type"));
+                        values.add(t);
+                        hintOf.putIfAbsent(t, String.valueOf(f.get("name")));
+                        List<List<Map<String, Object>>> when = carriedGuards.get(t);
+                        if (when != null) guards.put(t, when);
+                    }
+                    carriedGuards.clear();
+                    stack.push(new OtherV("inlined:" + shortName(owner) + "." + name));
+                    return;
+                }
+                carriedGuards.clear();
+                produced = inner;
+            }
         } else if (ret.contains("StreamCodec")) {
             // a codec factory used inline (ByteBufCodecs.registry(Registries.X).decode(buf)):
             // re-run the call through the codec interpreter and keep its node on the stack
@@ -1096,6 +2110,11 @@ public class GenPacketSchema {
             return;
         } else if (isBuf) {
             return; // writes / bookkeeping on the buffer
+        } else if (isStatic && ret.equals("Z") && args.size() == 1 && arg(args, 0) instanceof CodecV pv && owner.startsWith("net/minecraft/")) {
+            // shouldHaveParameters(method): a predicate of a value read, evaluated over its domain
+            List<Integer> vals = evalPredicate(owner, name, desc);
+            stack.push(vals != null ? new CodecV(node("pred", "of", pv.n(), "values", vals)) : new OtherV(shortName(owner) + "." + name));
+            return;
         } else if (!ret.equals("V")) {
             // Some other call. If exactly one argument (or the receiver) is a wire value it
             // is a conversion of that value (Type.byId(buf.readByte()), Optional.ofNullable(x),
@@ -1129,7 +2148,11 @@ public class GenPacketSchema {
         if (produced != null) {
             stack.push(new CodecV(produced));
             values.add(produced);
-            if (!hintOf.containsKey(produced)) hintOf.put(produced, hintName(name));
+            if (!hintOf.containsKey(produced)) {
+                String h = "struct".equals(produced.get("k")) && produced.get("name") != null
+                    ? lowerFirst(shortName(String.valueOf(produced.get("name"))).replace("$", "")) : hintName(name);
+                hintOf.put(produced, h);
+            }
         }
     }
 
@@ -1143,6 +2166,7 @@ public class GenPacketSchema {
     /** readVarInt → varInt, readIdentifier → identifier, readPayload → payload, readableBytes → data. */
     static String hintName(String method) {
         if (method.equals("readableBytes")) return "data";
+        if (method.equals("<init>")) return "value";
         String s = method.startsWith("read") ? method.substring(4) : method;
         if (s.isEmpty()) return method;
         if (s.equals("UUID")) return "uuid";
@@ -1150,8 +2174,11 @@ public class GenPacketSchema {
     }
 
     static Map<String, Object> elemOf(List<Value> args, int depth) {
-        for (int i = args.size() - 1; i >= 0; i--) if (args.get(i) instanceof LambdaV) return readerOf(args.get(i), depth);
+        // readCollection(HashSet::new, BlockPos.STREAM_CODEC): the element is the codec, not
+        // the collection's constructor, so a codec argument wins; otherwise the last lambda
+        // is the element reader.
         for (Value a : args) if (a instanceof CodecV c) return c.n();
+        for (int i = args.size() - 1; i >= 0; i--) if (args.get(i) instanceof LambdaV) return readerOf(args.get(i), depth);
         return opaque("elem");
     }
     static Map<String, Object> readerOf(Value v, int depth) {
@@ -1172,10 +2199,12 @@ public class GenPacketSchema {
     @SuppressWarnings("unchecked")
     static boolean hasHole(Map<String, Object> n) {
         String k = (String) n.get("k");
+        if (k == null) return false;   // not a node: the condition a whilelist ends on, say
         if (k.equals("opaque") || k.equals("either")) return true;
         if (k.equals("dispatch") && n.get("cases") == null) return true;
         if (Boolean.TRUE.equals(n.get("conditional"))) return true;
         if (k.equals("enum") && n.get("values") == null) return true;
+        if (k.equals("stringenum") && n.get("names") == null) return true;
         for (Object v : n.values()) {
             if (v instanceof Map<?, ?> m && hasHole((Map<String, Object>) m)) return true;
             if (v instanceof List<?> l) for (Object o : l) {
@@ -1197,6 +2226,8 @@ public class GenPacketSchema {
             case "string" -> out.add("STRING");
             case "unit" -> { }
             case "enum" -> out.add("enum:" + n.get("name"));
+            case "stringenum" -> out.add("stringenum:" + n.get("name"));
+            case "whilelist" -> { List<String> in = new ArrayList<>(); tokens((Map<String, Object>) n.get("elem"), in, false); out.add("whilelist{" + String.join(", ", in) + "}"); }
             case "registry" -> out.add("registry:" + n.get("registry"));
             case "holder" -> out.add("holder:" + n.get("registry"));
             case "holderset" -> out.add("holderset:" + n.get("registry"));

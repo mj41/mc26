@@ -14,28 +14,26 @@ import (
 	"github.com/mj41/go-mc26/save"
 )
 
+// ChunkPos is a chunk position, x then z.
+//
+// On the wire it is one long, as ChunkPos.pack writes it: x in the low 32 bits
+// and z in the high 32 bits, so the four bytes of z come first. Reading it as
+// two ints in the order they arrive gives the halves the wrong way round, which
+// is a chunk somewhere else entirely.
 type ChunkPos [2]int32
 
-func (c ChunkPos) WriteTo(w io.Writer) (n int64, err error) {
-	n, err = pk.Int(c[0]).WriteTo(w)
-	if err != nil {
-		return
-	}
-	n1, err := pk.Int(c[1]).WriteTo(w)
-	return n + n1, err
+func (c ChunkPos) WriteTo(w io.Writer) (int64, error) {
+	return pk.Long(int64(uint32(c[0])) | int64(uint32(c[1]))<<32).WriteTo(w)
 }
 
-func (c *ChunkPos) ReadFrom(r io.Reader) (n int64, err error) {
-	var x, z pk.Int
-	if n, err = x.ReadFrom(r); err != nil {
+func (c *ChunkPos) ReadFrom(r io.Reader) (int64, error) {
+	var v pk.Long
+	n, err := v.ReadFrom(r)
+	if err != nil {
 		return n, err
 	}
-	var n1 int64
-	if n1, err = z.ReadFrom(r); err != nil {
-		return n + n1, err
-	}
-	*c = ChunkPos{int32(x), int32(z)}
-	return n + n1, nil
+	*c = ChunkPos{int32(uint32(v)), int32(uint32(uint64(v) >> 32))}
+	return n, nil
 }
 
 type Chunk struct {

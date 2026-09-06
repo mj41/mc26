@@ -1,7 +1,7 @@
 // Package smoke runs a vanilla Minecraft server of one version — in a JDK 25
 // container by default, on the host's Java with Runtime "host" — and the
 // library's smoke test against it: `go test ./bot -run TestSmoke` with
-// MC26_SMOKE_ADDR set. Package e2e reuses the server for the example bots.
+// MC26_SMOKE_ADDR, MC26_SMOKE_RCON and MC26_SMOKE_RCON_PASSWORD set. Package e2e reuses the server for the example bots.
 package smoke
 
 import (
@@ -222,7 +222,11 @@ func Run(o Options) error {
 	o.Log("smoke: server ready, running go test ./bot -run TestSmoke")
 	test := exec.Command("go", "test", "./bot", "-run", "TestSmoke", "-count=1", "-v")
 	test.Dir = o.LibDir
-	test.Env = append(os.Environ(), "MC26_SMOKE_ADDR="+srv.Addr())
+	test.Env = append(os.Environ(),
+		"MC26_SMOKE_ADDR="+srv.Addr(),
+		"MC26_SMOKE_RCON="+srv.RCONAddr(),
+		"MC26_SMOKE_RCON_PASSWORD="+srv.RCONPassword,
+	)
 	out, err := test.CombinedOutput()
 	o.Log("%s", strings.TrimSpace(string(out)))
 	if err != nil {
