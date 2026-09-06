@@ -1,9 +1,16 @@
 package screen
 
-import "errors"
+import (
+	"errors"
 
+	"github.com/mj41/go-mc26/data/constants"
+)
+
+// Inventory is the player's own inventory menu (InventoryMenu): the crafting
+// result and grid, the armor, the main inventory, the hotbar and the offhand,
+// at the slot numbers the constants of data/constants give.
 type Inventory struct {
-	Slots [46]Slot
+	Slots [constants.InventoryMenuShieldSlot + 1]Slot
 }
 
 func (inv *Inventory) onClose() error {
@@ -18,12 +25,19 @@ func (inv *Inventory) onSetSlot(i int, s Slot) error {
 	return nil
 }
 
-func (inv *Inventory) CraftingOutput() *Slot { return &inv.Slots[0] }
-func (inv *Inventory) CraftingInput() []Slot { return inv.Slots[1 : 1+4] }
+func (inv *Inventory) CraftingOutput() *Slot { return &inv.Slots[constants.InventoryMenuResultSlot] }
+func (inv *Inventory) CraftingInput() []Slot {
+	return inv.Slots[constants.InventoryMenuCraftSlotStart:constants.InventoryMenuCraftSlotEnd]
+}
 
-// Armor returns to the armor section of the Inventory.
-// The length is 4, which are head, chest, legs and feet.
-func (inv *Inventory) Armor() []Slot  { return inv.Slots[5 : 5+4] }
-func (inv *Inventory) Main() []Slot   { return inv.Slots[9 : 9+3*9] }
-func (inv *Inventory) Hotbar() []Slot { return inv.Slots[36 : 36+9] }
-func (inv *Inventory) Offhand() *Slot { return &inv.Slots[45] }
+// Armor returns the armor section of the Inventory: head, chest, legs and feet.
+func (inv *Inventory) Armor() []Slot {
+	return inv.Slots[constants.InventoryMenuArmorSlotStart:constants.InventoryMenuArmorSlotEnd]
+}
+func (inv *Inventory) Main() []Slot {
+	return inv.Slots[constants.InventoryMenuInvSlotStart:constants.InventoryMenuInvSlotEnd]
+}
+func (inv *Inventory) Hotbar() []Slot {
+	return inv.Slots[constants.InventoryMenuUseRowSlotStart:constants.InventoryMenuUseRowSlotEnd]
+}
+func (inv *Inventory) Offhand() *Slot { return &inv.Slots[constants.InventoryMenuShieldSlot] }

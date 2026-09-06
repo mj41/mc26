@@ -15,7 +15,9 @@ import java.util.zip.*;
  *   /java      — this file + custom Java extractors (read-only)
  *
  * Arguments:
- *   First argument is the Minecraft version (e.g., "1.21.11").
+ *   First argument is the Minecraft version (e.g., "26.2").
+ *   --only=GenNbtSchema,GenPacketSchema runs just those extractors (the data generator and
+ *   the report copy are skipped; the inner jar and library jars come from the cache).
  *
  * The server jar and language files are downloaded by the Go host before
  * this container runs. This file handles extraction and data generation:
@@ -27,6 +29,7 @@ import java.util.zip.*;
 public class ExtractAll {
 
     static String version;
+    static List<String> only;   // --only=A,B: run just these extractors
     static Path cacheDir  = Path.of("/cache");
     static Path jsonsDir  = Path.of("/jsons");
     static Path javaDir   = Path.of("/java");
@@ -35,7 +38,11 @@ public class ExtractAll {
         if (args.length > 0) {
             version = args[0];
         } else {
-            fatal("Usage: ExtractAll <version> (e.g., 1.21.11)");
+            fatal("Usage: ExtractAll <version> [--only=Extractor,...] (e.g., 26.2)");
+        }
+        for (int i = 1; i < args.length; i++) {
+            if (args[i].startsWith("--only=")) only = List.of(args[i].substring("--only=".length()).split(","));
+            else fatal("unknown argument %s", args[i]);
         }
 
         // Allow running outside container with custom paths.
@@ -62,14 +69,19 @@ public class ExtractAll {
         // Step 2: Extract inner jar from bundler format.
         Path innerJar = extractInnerJar(serverJar);
 
-        // Step 3: Run --all data generator.
-        Path reportsDir = runDataGenerator(serverJar);
-
-        // Step 4: Copy --all reports to output.
         Path outputDir = jsonsDir.resolve(version);
         Files.createDirectories(outputDir);
-        copyReports(reportsDir, outputDir);
-        copyVersionJson(innerJar, outputDir);
+        if (only == null) {
+            // Step 3: Run --all data generator.
+            Path reportsDir = runDataGenerator(serverJar);
+
+            // Step 4: Copy --all reports to output.
+            copyReports(reportsDir, outputDir);
+            copyVersionJson(innerJar, outputDir);
+        } else {
+            log("");
+            log("--only=%s: data generator and reports skipped", String.join(",", only));
+        }
 
         // Step 5: Run custom extractors (if present).
         runCustomExtractors(serverJar, innerJar, outputDir);
@@ -222,7 +234,7 @@ public class ExtractAll {
     }
 
     static void runCustomExtractors(Path serverJar, Path innerJar, Path outputDir) throws Exception {
-        String[] extractors = {"GenEntities", "GenComponents", "GenBlockEntities", "GenBlockProperties", "GenBiomes", "GenComponentSchema", "GenItems", "GenPacketSchema"};
+        String[] extractors = {"GenEntities", "GenComponents", "GenBlockEntities", "GenBlockProperties", "GenBiomes", "GenItems", "GenPacketSchema", "GenNbtSchema", "GenEntityData", "GenConstants"};
         List<String> found = new ArrayList<>();
 
         for (String name : extractors) {
@@ -264,6 +276,7 @@ public class ExtractAll {
         // Run each extractor; they write their JSON into the working directory.
         String runCp = classpath + ":" + classesDir.toAbsolutePath();
         for (String name : found) {
+            if (only != null && !only.contains(name)) continue;
             log("  Running %s...", name);
             ProcessBuilder pb = new ProcessBuilder(
                 "java", "-cp", runCp, name

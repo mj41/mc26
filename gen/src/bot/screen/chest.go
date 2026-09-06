@@ -4,11 +4,12 @@ import (
 	"errors"
 
 	"github.com/mj41/go-mc26/chat"
-	"github.com/mj41/go-mc26/data/inventory"
 )
 
+// Chest is an open generic container: Type is the menu type's id in the
+// minecraft:menu registry (registryid.Menu names it), Rows its row count.
 type Chest struct {
-	Type  inventory.InventoryID
+	Type  int32
 	Title chat.Message
 	Slots []Slot
 	Rows  int

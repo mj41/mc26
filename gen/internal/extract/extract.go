@@ -40,6 +40,9 @@ type Options struct {
 	JavaDir  string // data-gen/java
 	Runtime  string // "podman" or "docker"; detected when empty
 	DryRun   bool
+	// Only runs just these extractors (GenNbtSchema, …) into an existing extraction: no
+	// downloads, no data generator; for iterating on one extractor.
+	Only []string
 	// Extractor identifies the code that ran, for _meta.json.
 	ExtractorRepo, ExtractorCommit string
 	Log                            func(format string, args ...any)
@@ -91,12 +94,17 @@ func Run(o Options) (*Meta, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := downloadLangFiles(filepath.Join(o.OutDir, "lang"), o.Version, o.Log); err != nil {
-		return nil, err
+	if len(o.Only) == 0 {
+		if err := downloadLangFiles(filepath.Join(o.OutDir, "lang"), o.Version, o.Log); err != nil {
+			return nil, err
+		}
 	}
 
 	o.Log("Phase 2: extraction in %s (%s)", JDKImage, o.Runtime)
 	args := containerArgs(o.Runtime, o.Version, o.CacheDir, filepath.Dir(o.OutDir), o.JavaDir)
+	if len(o.Only) > 0 {
+		args = append(args, "--only="+strings.Join(o.Only, ","))
+	}
 	if o.DryRun {
 		o.Log("  %s %s", o.Runtime, strings.Join(args, " "))
 		return nil, nil

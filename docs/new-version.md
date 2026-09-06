@@ -36,7 +36,11 @@ go run ./gen/cmd/schemacov 26.3
 whose layout changed — read the tokens, they name the primitive reads. `schemacov` says how many
 packets are fully typed and why the rest are not; a new `opaque` or `dispatch` hole usually
 means a new codec combinator the extractor does not understand yet (`GenPacketSchema.java`), or
-a packet that needs a hand-written struct in `gen/src/protocol/<state>/hand.go`.
+a packet to park in `hand_packets.json` with a struct in `gen/src/protocol/<state>/hand.go`
+(none today). The registry
+elements have the same kind of report in the header of the generated
+`registry/elements_gen.go`: the fields kept as raw NBT, and why (`GenNbtSchema.java`, run alone
+with `mc26 extract --version 26.3 --only GenNbtSchema` while extending it).
 
 ## 4. Build and let the compiler talk
 
@@ -45,7 +49,7 @@ go run ./gen/cmd/mc26 build --data 26.3
 ```
 
 Every field a packet gained or lost surfaces as a compile error in the hand-written code
-(`bot/`, `server/`, `protocol/*/hand.go`). Fix `gen/src` for the new version. If an older,
+(`bot/`, `server/`). Fix `gen/src` for the new version. If an older,
 still-maintained version needs the old shape, put its copy of the file under
 `gen/src/_versions/<old version>/` — and check the packet in both versions first:
 
@@ -86,5 +90,9 @@ pre-release data for early adaptation; it is not part of the normal release chai
   pattern.
 - A new codec shape in packets: extend `invoke` (codec chains) or `readerInvoke` (buffer reads)
   in `GenPacketSchema.java`; `schemacov -show` on the affected packet shows the tree you get.
-- A new data component shape: `component_schema_overrides.json` (see
-  `gen/hand-crafted/hand-crafted.md`) until the extractor classifies it.
+- A new data component shape: the same interpreter (`DataComponents.<clinit>`); a component the
+  schema still cannot type goes to `hand_components.json` (see `gen/hand-crafted/hand-crafted.md`)
+  with a hand-written type until it can.
+- A new DataFixerUpper combinator in a registry codec (`invoke` in `GenNbtSchema.java`) or a
+  registry codec class that moved (they are matched by short class name, as
+  `net/minecraft/resources` became `net/minecraft/core/registries/codec` in 26.3).

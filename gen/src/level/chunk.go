@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math/bits"
-	"os"
 	"strconv"
 
 	"github.com/mj41/go-mc26/level/block"
@@ -247,93 +246,26 @@ func writeBiomesPalette(paletteData *PaletteContainer[BiomesState]) (palette []s
 	return
 }
 
-func (c *Chunk) WriteTo(w io.Writer) (int64, error) {
-	data, err := c.Data()
-	if err != nil {
-		return 0, err
-	}
-	light := lightData{
-		SkyLightMask:   make(pk.BitSet, (16*16*16-1)>>6+1),
-		BlockLightMask: make(pk.BitSet, (16*16*16-1)>>6+1),
-		SkyLight:       []pk.ByteArray{},
-		BlockLight:     []pk.ByteArray{},
-	}
-	for i, v := range c.Sections {
-		if v.SkyLight != nil {
-			light.SkyLightMask.Set(i, true)
-			light.SkyLight = append(light.SkyLight, v.SkyLight)
-		}
-		if v.BlockLight != nil {
-			light.BlockLightMask.Set(i, true)
-			light.BlockLight = append(light.BlockLight, v.BlockLight)
+// HeightmapData returns the packed heightmaps by type id, the form of a
+// level_chunk_with_light packet: 0 world_surface_wg, 1 world_surface,
+// 2 ocean_floor_wg, 3 ocean_floor, 4 motion_blocking, 5 motion_blocking_no_leaves.
+func (c *Chunk) HeightmapData() map[int32][]uint64 {
+	out := map[int32][]uint64{}
+	for i, bs := range []*BitStorage{c.HeightMaps.WorldSurfaceWG, c.HeightMaps.WorldSurface, c.HeightMaps.OceanFloorWG,
+		c.HeightMaps.OceanFloor, c.HeightMaps.MotionBlocking, c.HeightMaps.MotionBlockingNoLeaves} {
+		if bs != nil {
+			out[int32(i)] = bs.Raw()
 		}
 	}
-
-	// Protocol 774+: heightmaps are serialized as VarInt-typed array entries
-	var hmEntries []heightMapEntry
-	if bs := c.HeightMaps.WorldSurfaceWG; bs != nil {
-		hmEntries = append(hmEntries, heightMapEntry{Type: 0, Data: bs.Raw()})
-	}
-	if bs := c.HeightMaps.WorldSurface; bs != nil {
-		hmEntries = append(hmEntries, heightMapEntry{Type: 1, Data: bs.Raw()})
-	}
-	if bs := c.HeightMaps.OceanFloorWG; bs != nil {
-		hmEntries = append(hmEntries, heightMapEntry{Type: 2, Data: bs.Raw()})
-	}
-	if bs := c.HeightMaps.OceanFloor; bs != nil {
-		hmEntries = append(hmEntries, heightMapEntry{Type: 3, Data: bs.Raw()})
-	}
-	if bs := c.HeightMaps.MotionBlocking; bs != nil {
-		hmEntries = append(hmEntries, heightMapEntry{Type: 4, Data: bs.Raw()})
-	}
-	if bs := c.HeightMaps.MotionBlockingNoLeaves; bs != nil {
-		hmEntries = append(hmEntries, heightMapEntry{Type: 5, Data: bs.Raw()})
-	}
-
-	return pk.Tuple{
-		pk.Array(hmEntries),
-		pk.ByteArray(data),
-		pk.Array(c.BlockEntity),
-		&light,
-	}.WriteTo(w)
+	return out
 }
 
-func (c *Chunk) ReadFrom(r io.Reader) (int64, error) {
-	var (
-		hmEntries []heightMapEntry
-		data      pk.ByteArray
-	)
-
-	n, err := pk.Tuple{
-		pk.Array(&hmEntries),
-		&data,
-		pk.Array(&c.BlockEntity),
-		&lightData{
-			SkyLightMask:   make(pk.BitSet, (16*16*16-1)>>6+1),
-			BlockLightMask: make(pk.BitSet, (16*16*16-1)>>6+1),
-			SkyLight:       []pk.ByteArray{},
-			BlockLight:     []pk.ByteArray{},
-		},
-	}.ReadFrom(r)
-	if err != nil {
-		return n, err
-	}
-
-	if os.Getenv("GOMC_DEBUG") != "" {
-		fmt.Fprintf(os.Stderr, "[GOMC_DEBUG] Chunk ReadFrom: %d heightmap entries, data=%d bytes, %d block entities\n",
-			len(hmEntries), len(data), len(c.BlockEntity))
-		for i, entry := range hmEntries {
-			fmt.Fprintf(os.Stderr, "[GOMC_DEBUG]   heightmap[%d]: type=%d, longs=%d\n", i, entry.Type, len(entry.Data))
-		}
-		if len(data) > 20 {
-			fmt.Fprintf(os.Stderr, "[GOMC_DEBUG]   data first 20 bytes: %x\n", data[:20])
-		}
-	}
-
-	bitsForHeight := bits.Len( /* chunk height in blocks */ uint(len(c.Sections))*16 + 1)
-	for _, entry := range hmEntries {
-		bs := NewBitStorage(bitsForHeight, 16*16, entry.Data)
-		switch entry.Type {
+// SetHeightmapData installs packed heightmaps by type id (see HeightmapData).
+func (c *Chunk) SetHeightmapData(data map[int32][]uint64) {
+	bitsForHeight := bits.Len(uint(len(c.Sections))*16 + 1)
+	for typ, raw := range data {
+		bs := NewBitStorage(bitsForHeight, 16*16, raw)
+		switch typ {
 		case 0:
 			c.HeightMaps.WorldSurfaceWG = bs
 		case 1:
@@ -348,9 +280,6 @@ func (c *Chunk) ReadFrom(r io.Reader) (int64, error) {
 			c.HeightMaps.MotionBlockingNoLeaves = bs
 		}
 	}
-
-	err = c.PutData(data)
-	return n, err
 }
 
 func (c *Chunk) Data() ([]byte, error) {
@@ -382,39 +311,6 @@ type HeightMaps struct {
 	OceanFloor             *BitStorage // test = MATERIAL_MOTION_BLOCKING
 	MotionBlocking         *BitStorage // test = BlocksMotion or isFluid
 	MotionBlockingNoLeaves *BitStorage // test = BlocksMotion or isFluid
-}
-
-// heightMapEntry is a single heightmap in the protocol 774+ chunk format.
-// Each entry has a type enum and a VarInt-prefixed array of int64 (packed data).
-type heightMapEntry struct {
-	Type int32    // 0=world_surface_wg, 1=world_surface, 2=ocean_floor_wg, 3=ocean_floor, 4=motion_blocking, 5=motion_blocking_no_leaves
-	Data []uint64 // packed heightmap data
-}
-
-func (e heightMapEntry) WriteTo(w io.Writer) (int64, error) {
-	longs := make([]pk.Long, len(e.Data))
-	for i, v := range e.Data {
-		longs[i] = pk.Long(v)
-	}
-	return pk.Tuple{
-		pk.VarInt(e.Type),
-		pk.Array(longs),
-	}.WriteTo(w)
-}
-
-func (e *heightMapEntry) ReadFrom(r io.Reader) (int64, error) {
-	var longs []pk.Long
-	n, err := pk.Tuple{
-		(*pk.VarInt)(&e.Type),
-		pk.Array(&longs),
-	}.ReadFrom(r)
-	if err == nil {
-		e.Data = make([]uint64, len(longs))
-		for i, v := range longs {
-			e.Data[i] = uint64(v)
-		}
-	}
-	return n, err
 }
 
 type BlockEntity struct {
@@ -498,43 +394,5 @@ func (s *Section) ReadFrom(r io.Reader) (int64, error) {
 		(*pk.Short)(&s.FluidCount),
 		s.States,
 		s.Biomes,
-	}.ReadFrom(r)
-}
-
-type lightData struct {
-	SkyLightMask   pk.BitSet
-	BlockLightMask pk.BitSet
-	SkyLight       []pk.ByteArray
-	BlockLight     []pk.ByteArray
-}
-
-func bitSetRev(set pk.BitSet) pk.BitSet {
-	rev := make(pk.BitSet, len(set))
-	for i := range rev {
-		rev[i] = ^set[i]
-	}
-	return rev
-}
-
-func (l *lightData) WriteTo(w io.Writer) (int64, error) {
-	return pk.Tuple{
-		l.SkyLightMask,
-		l.BlockLightMask,
-		bitSetRev(l.SkyLightMask),
-		bitSetRev(l.BlockLightMask),
-		pk.Array(l.SkyLight),
-		pk.Array(l.BlockLight),
-	}.WriteTo(w)
-}
-
-func (l *lightData) ReadFrom(r io.Reader) (int64, error) {
-	var RevSkyLightMask, RevBlockLightMask pk.BitSet
-	return pk.Tuple{
-		&l.SkyLightMask,
-		&l.BlockLightMask,
-		&RevSkyLightMask,
-		&RevBlockLightMask,
-		pk.Array(&l.SkyLight),
-		pk.Array(&l.BlockLight),
 	}.ReadFrom(r)
 }

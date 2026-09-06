@@ -15,6 +15,7 @@ import (
 	"github.com/mj41/go-mc26/data/packetid"
 	pk "github.com/mj41/go-mc26/net/packet"
 	"github.com/mj41/go-mc26/protocol/play"
+	"github.com/mj41/go-mc26/protocol/types"
 	"github.com/mj41/go-mc26/yggdrasil/user"
 )
 
@@ -49,38 +50,42 @@ func (pl *PlayerList) handlePlayerInfoUpdatePacket(p pk.Packet) error {
 	actions := update.Actions
 	for i := range update.Entries {
 		e := &update.Entries[i]
-		id := uuid.UUID(e.ID)
+		id := uuid.UUID(e.ProfileID)
 		player, ok := pl.PlayerInfos[id]
 		if !ok { // create new player info if not exist
 			player = new(PlayerInfo)
 			pl.PlayerInfos[id] = player
 		}
-		if actions.Has(play.PlayerInfoAddPlayer) {
+		if actions.Has(types.PlayerInfoUpdateActionAddPlayer) {
 			player.GameProfile = GameProfile{
 				ID:         id,
 				Name:       string(e.Name),
 				Properties: []user.Property(e.Properties),
 			}
 		}
-		if actions.Has(play.PlayerInfoInitializeChat) {
+		if actions.Has(types.PlayerInfoUpdateActionInitializeChat) {
 			if e.ChatSession.Has {
-				session := e.ChatSession.Val
-				player.ChatSession = &session
+				d := e.ChatSession.Val
+				key, err := user.ParsePublicKey(int64(d.ProfilePublicKey.ExpiresAt), d.ProfilePublicKey.Key, d.ProfilePublicKey.KeySignature)
+				if err != nil {
+					return err
+				}
+				player.ChatSession = &sign.Session{SessionID: uuid.UUID(d.SessionID), PublicKey: key}
 				player.ChatSession.InitValidate()
 			} else {
 				player.ChatSession = nil
 			}
 		}
-		if actions.Has(play.PlayerInfoUpdateGameMode) {
+		if actions.Has(types.PlayerInfoUpdateActionUpdateGameMode) {
 			player.Gamemode = int32(e.GameMode)
 		}
-		if actions.Has(play.PlayerInfoUpdateListed) {
+		if actions.Has(types.PlayerInfoUpdateActionUpdateListed) {
 			player.Listed = bool(e.Listed)
 		}
-		if actions.Has(play.PlayerInfoUpdateLatency) {
+		if actions.Has(types.PlayerInfoUpdateActionUpdateLatency) {
 			player.Latency = int32(e.Latency)
 		}
-		if actions.Has(play.PlayerInfoUpdateDisplayName) {
+		if actions.Has(types.PlayerInfoUpdateActionUpdateDisplayName) {
 			if e.DisplayName.Has {
 				name := e.DisplayName.Val
 				player.DisplayName = &name
@@ -88,10 +93,10 @@ func (pl *PlayerList) handlePlayerInfoUpdatePacket(p pk.Packet) error {
 				player.DisplayName = nil
 			}
 		}
-		if actions.Has(play.PlayerInfoUpdateListOrder) {
+		if actions.Has(types.PlayerInfoUpdateActionUpdateListOrder) {
 			player.ListOrder = int32(e.ListOrder)
 		}
-		if actions.Has(play.PlayerInfoUpdateHat) {
+		if actions.Has(types.PlayerInfoUpdateActionUpdateHat) {
 			player.ShowHat = bool(e.ShowHat)
 		}
 	}

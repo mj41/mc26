@@ -39,7 +39,7 @@ import java.nio.file.*;
 import java.util.*;
 
 public class GenPacketSchema {
-    static final int MAX_DEPTH = 6;
+    static final int MAX_DEPTH = 10;
     static final String[][] TYPES_CLASSES = {
         {"net.minecraft.network.protocol.handshake.HandshakePacketTypes", "handshake"},
         {"net.minecraft.network.protocol.status.StatusPacketTypes", "status"},
@@ -79,6 +79,26 @@ public class GenPacketSchema {
         return m;
     }
     static Map<String, Object> prim(String t) { return node("prim", "t", t); }
+    static Map<String, Object> field(String name, Map<String, Object> type) {
+        Map<String, Object> f = new LinkedHashMap<>();
+        f.put("name", name); f.put("type", type);
+        return f;
+    }
+    /**
+     * Readers whose wire form only the writer shows: ServerboundCustomQueryAnswerPacket reads
+     * "whatever is left" and discards it, but clients write writeNullable(payload).
+     */
+    static final Map<String, Map<String, Object>> READER_RULES = Map.ofEntries(
+        Map.entry("net/minecraft/network/protocol/login/ServerboundCustomQueryAnswerPacket.readPayload", node("optional", "elem", prim("REST_BYTES"))),
+        // entity data: index bytes terminated by 0xff, each with a serializer id and the serializer's value (GenEntityData types them)
+        Map.entry("net/minecraft/network/protocol/game/ClientboundSetEntityDataPacket.unpack", prim("ENTITY_DATA")),
+        // one VarInt, 0 for empty, else the value + 1 (the anonymous serializers of EntityDataSerializers)
+        Map.entry("net/minecraft/network/syncher/EntityDataSerializers$2.decode", prim("OPTIONAL_VAR_INT")),
+        Map.entry("net/minecraft/network/syncher/EntityDataSerializers$3.decode", prim("OPTIONAL_VAR_INT"))
+    );
+    /** Naming hints for values a reader produces without storing them in a field: the read method's noun. */
+    static final Map<Map<String, Object>, String> hintOf = new IdentityHashMap<>();
+    static int guardExpansions = 0;
     static Map<String, Object> opaque(String java) { return node("opaque", "java", java); }
 
     /** Values on the simulated operand stack. */
@@ -100,13 +120,13 @@ public class GenPacketSchema {
         Map.entry("VAR_LONG", "VAR_LONG"), Map.entry("OPTIONAL_VAR_INT", "OPTIONAL_VAR_INT"),
         Map.entry("STRING_UTF8", "STRING"), Map.entry("BYTE_ARRAY", "BYTE_ARRAY"),
         Map.entry("LONG_ARRAY", "LONG_ARRAY"), Map.entry("VAR_INT_ARRAY", "VAR_INT_ARRAY"),
-        Map.entry("BIT_SET", "BIT_SET"), Map.entry("INSTANT", "INSTANT"), Map.entry("GAME_PROFILE", "GAME_PROFILE"),
+        Map.entry("BIT_SET", "BIT_SET"), Map.entry("INSTANT", "INSTANT"),
         Map.entry("PUBLIC_KEY", "PUBLIC_KEY"), Map.entry("TAG", "NBT"), Map.entry("TRUSTED_TAG", "NBT"),
         Map.entry("COMPOUND_TAG", "NBT"), Map.entry("TRUSTED_COMPOUND_TAG", "NBT"),
-        Map.entry("OPTIONAL_COMPOUND_TAG", "OPTIONAL_NBT"), Map.entry("VECTOR3F", "VECTOR3F"),
-        Map.entry("QUATERNIONF", "QUATERNIONF"), Map.entry("CONTAINER_ID", "CONTAINER_ID"),
+        Map.entry("OPTIONAL_COMPOUND_TAG", "OPTIONAL_NBT"), Map.entry("CONTAINER_ID", "CONTAINER_ID"),
         Map.entry("ROTATION_BYTE", "ROTATION_BYTE"), Map.entry("VAR_INT_UNSIGNED", "VAR_INT"),
-        Map.entry("RGB_COLOR", "INT"), Map.entry("ARGB_COLOR", "INT")
+        Map.entry("RGB_COLOR", "INT"), Map.entry("ARGB_COLOR", "INT"),
+        Map.entry("PLAYER_NAME", "STRING"), Map.entry("GAME_PROFILE_PROPERTIES", "GAME_PROFILE_PROPERTIES")
     );
     /** Well-known codec constants on other classes that are wire primitives for our purposes. */
     static final Map<String, String> KNOWN_CODEC_FIELDS = Map.ofEntries(
@@ -115,14 +135,13 @@ public class GenPacketSchema {
         Map.entry("net/minecraft/resources/ResourceLocation.STREAM_CODEC", "IDENTIFIER"),
         Map.entry("net/minecraft/core/BlockPos.STREAM_CODEC", "BLOCK_POS"),
         Map.entry("net/minecraft/world/level/ChunkPos.STREAM_CODEC", "CHUNK_POS"),
-        Map.entry("net/minecraft/core/GlobalPos.STREAM_CODEC", "GLOBAL_POS"),
-        Map.entry("net/minecraft/world/phys/Vec3.STREAM_CODEC", "VEC3"),
         Map.entry("net/minecraft/world/phys/Vec3.LP_STREAM_CODEC", "LP_VEC3"),
         Map.entry("net/minecraft/network/chat/ComponentSerialization.STREAM_CODEC", "TEXT"),
         Map.entry("net/minecraft/network/chat/ComponentSerialization.TRUSTED_STREAM_CODEC", "TEXT"),
         Map.entry("net/minecraft/network/chat/ComponentSerialization.OPTIONAL_STREAM_CODEC", "OPTIONAL_TEXT"),
         Map.entry("net/minecraft/network/chat/ComponentSerialization.TRUSTED_OPTIONAL_STREAM_CODEC", "OPTIONAL_TEXT"),
         Map.entry("net/minecraft/world/item/ItemStack.STREAM_CODEC", "ITEM_STACK"),
+        Map.entry("net/minecraft/core/component/TypedDataComponent.STREAM_CODEC", "TYPED_DATA_COMPONENT"),
         Map.entry("net/minecraft/world/item/ItemStack.OPTIONAL_STREAM_CODEC", "OPTIONAL_ITEM_STACK"),
         Map.entry("net/minecraft/world/item/ItemStack.OPTIONAL_LIST_STREAM_CODEC", "OPTIONAL_ITEM_STACK_LIST"),
         Map.entry("net/minecraft/core/component/DataComponentPatch.STREAM_CODEC", "COMPONENT_PATCH"),
@@ -138,14 +157,13 @@ public class GenPacketSchema {
         Map.entry("readResourceLocation", "IDENTIFIER"), Map.entry("readByteArray", "BYTE_ARRAY"),
         Map.entry("readVarIntArray", "VAR_INT_ARRAY"), Map.entry("readLongArray", "LONG_ARRAY"),
         Map.entry("readBitSet", "BIT_SET"), Map.entry("readFixedBitSet", "FIXED_BIT_SET"), Map.entry("readInstant", "INSTANT"),
-        Map.entry("readBlockPos", "BLOCK_POS"), Map.entry("readChunkPos", "CHUNK_POS"), Map.entry("readGlobalPos", "GLOBAL_POS"),
-        Map.entry("readVec3", "VEC3"), Map.entry("readLpVec3", "LP_VEC3"), Map.entry("readVector3f", "VECTOR3F"),
-        Map.entry("readQuaternion", "QUATERNIONF"), Map.entry("readNbt", "NBT"), Map.entry("readGameProfile", "GAME_PROFILE"),
+        Map.entry("readBlockPos", "BLOCK_POS"), Map.entry("readChunkPos", "CHUNK_POS"),
+        Map.entry("readLpVec3", "LP_VEC3"), Map.entry("readNbt", "NBT"),
         Map.entry("readPublicKey", "PUBLIC_KEY"), Map.entry("readBytes", "RAW_BYTES"), Map.entry("readIntIdList", "VAR_INT_LIST"),
         Map.entry("readChar", "CHAR"), Map.entry("readComponent", "TEXT"), Map.entry("readComponentTrusted", "TEXT"),
         Map.entry("readJsonWithCodec", "JSON"), Map.entry("readWithCodec", "NBT"),
         Map.entry("readContainerId", "CONTAINER_ID"), Map.entry("readRegistryKey", "REGISTRY_KEY"),
-        Map.entry("readBlockHitResult", "BLOCK_HIT_RESULT"), Map.entry("readableBytes", "REST_BYTES"),
+        Map.entry("readableBytes", "REST_BYTES"),
         Map.entry("readSectionPos", "SECTION_POS"), Map.entry("readDate", "LONG")
     );
 
@@ -171,7 +189,7 @@ public class GenPacketSchema {
                 String name = String.valueOf(pt.getClass().getMethod("id").invoke(pt));
                 Class<?> packetClass = packetClassOf(f);
                 Map<String, Object> type = packetClass == null ? opaque("no-packet-class")
-                    : codecFieldNode(packetClass.getName().replace('.', '/'), "STREAM_CODEC", 0);
+                    : codecFieldNode(packetClass.getName().replace('.', '/'), streamCodecField(packetClass.getName().replace('.', '/')), 0);
                 packets.add(new Entry(flow + "/" + name, tc[1], packetClass == null ? null : packetClass.getName(), type));
             }
         }
@@ -183,16 +201,77 @@ public class GenPacketSchema {
             structs.add(new Entry(shortName(owner) + "." + member, "struct", owner.replace('/', '.'), type));
         }
         packets.sort(Comparator.comparing((Entry e) -> e.state).thenComparing(e -> e.key));
+        List<Entry> components = componentEntries();
 
         StringBuilder sb = new StringBuilder("{\n  \"version\": 2,\n  \"packets\": {\n");
         writeEntries(sb, packets);
         sb.append("  },\n  \"structs\": {\n");
         writeEntries(sb, structs);
+        sb.append("  },\n  \"components\": {\n");
+        writeEntries(sb, components);
         sb.append("  }\n}\n");
         Files.writeString(Path.of("packet_schema.json"), sb.toString(), StandardCharsets.UTF_8);
         long full = packets.stream().filter(e -> coverage(e.type).equals("full")).count();
-        System.err.printf("GenPacketSchema: %d packets (%d fully typed, %d partial) + %d structs written to packet_schema.json%n",
-            packets.size(), full, packets.size() - full, structs.size());
+        long fullC = components.stream().filter(e -> coverage(e.type).equals("full")).count();
+        System.err.printf("GenPacketSchema: %d packets (%d fully typed, %d partial) + %d structs + %d data components (%d fully typed) written to packet_schema.json%n",
+            packets.size(), full, packets.size() - full, structs.size(), components.size(), fullC);
+    }
+
+    // ---- data components -----------------------------------------------------------
+
+    static final String DATA_COMPONENTS = "net/minecraft/core/component/DataComponents";
+
+    /**
+     * One entry per data component registered in DataComponents.<clinit>:
+     * register("name", builder -> builder.persistent(CODEC).networkSynchronized(STREAM_CODEC)).
+     * The wire form is the stream codec given to networkSynchronized; a component without one
+     * is sent as the NBT of its persistent codec (a chat component as text).
+     */
+    static List<Entry> componentEntries() {
+        List<Entry> out = new ArrayList<>();
+        ClassModel cm = classModel(DATA_COMPONENTS);
+        if (cm == null) { System.err.println("GenPacketSchema: no DataComponents (components skipped)"); return out; }
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("<clinit>")) continue;
+            String name = null;
+            LambdaV lambda = null;
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof ConstantInstruction ci && ci.constantValue() instanceof String s) name = s;
+                else if (el instanceof InvokeDynamicInstruction idi) lambda = lambdaOf(idi);
+                else if (el instanceof InvokeInstruction ii && ii.name().stringValue().equals("register")
+                        && ii.owner().asInternalName().equals(DATA_COMPONENTS)) {
+                    if (name != null && lambda != null) out.add(new Entry("minecraft:" + name, "component", null, componentNode(lambda)));
+                    name = null;
+                    lambda = null;
+                }
+            }
+        }
+        return out;
+    }
+
+    /** The wire node of one registration lambda (see componentEntries). */
+    static Map<String, Object> componentNode(LambdaV l) {
+        ClassModel cm = classModel(l.owner());
+        if (cm == null) return opaque("component:no-class:" + l.owner());
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals(l.name()) || !m.methodType().stringValue().equals(l.desc())) continue;
+            Deque<Value> stack = new ArrayDeque<>();
+            Value persistent = null;
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof InvokeInstruction ii && ii.owner().asInternalName().endsWith("DataComponentType$Builder")) {
+                    String method = ii.name().stringValue();
+                    Value arg = arity(ii.typeSymbol().descriptorString()) == 0 ? null : (stack.isEmpty() ? null : stack.pop());
+                    if (!stack.isEmpty()) stack.pop();      // the builder
+                    stack.push(new OtherV("builder"));
+                    if (method.equals("networkSynchronized")) return arg instanceof CodecV cv ? cv.n() : opaque("component:" + lambdaOrOther(arg));
+                    if (method.equals("persistent")) persistent = arg;
+                    continue;
+                }
+                step(el, stack, l.owner(), 0);
+            }
+            return persistent == null ? opaque("component:no-codec") : nbtOrText(persistent);
+        }
+        return opaque("component:no-lambda:" + l.name());
     }
 
     static void writeEntries(StringBuilder sb, List<Entry> entries) {
@@ -239,6 +318,15 @@ public class GenPacketSchema {
         for (FieldModel f : cm.fields()) if (f.fieldName().stringValue().equals(field)) return true;
         return false;
     }
+    /** STREAM_CODEC, or the first other static StreamCodec field (ClientboundCustomPayloadPacket has GAMEPLAY_ and CONFIG_STREAM_CODEC). */
+    static String streamCodecField(String internalName) {
+        if (hasStaticField(internalName, "STREAM_CODEC")) return "STREAM_CODEC";
+        ClassModel cm = classModel(internalName);
+        if (cm != null) for (FieldModel f : cm.fields()) {
+            if ((f.flags().flagsMask() & 0x0008) != 0 && f.fieldType().stringValue().contains("StreamCodec")) return f.fieldName().stringValue();
+        }
+        return "STREAM_CODEC";
+    }
     static String shortName(String internalName) { return internalName.substring(internalName.lastIndexOf('/') + 1); }
     static Class<?> loadClass(String internalName) {
         try { return Class.forName(internalName.replace('/', '.'), false, GenPacketSchema.class.getClassLoader()); }
@@ -275,14 +363,13 @@ public class GenPacketSchema {
             return null;
         }
     }
-    static List<String> ctorParamNames(String internalName, String desc) {
-        Class<?> c = loadClass(internalName);
-        if (c == null) return null;
+    static List<String> ctorParamNames(String internalName, String desc) { return ctorParamNames(internalName, desc, "<init>"); }
+    static List<String> ctorParamNames(String internalName, String desc, String method) {
         // Unobfuscated 26.x jars keep parameter names (MethodParameters attribute).
         ClassModel cm = classModel(internalName);
         if (cm == null) return null;
         for (MethodModel m : cm.methods()) {
-            if (!m.methodName().stringValue().equals("<init>") || !m.methodType().stringValue().equals(desc)) continue;
+            if (!m.methodName().stringValue().equals(method) || !m.methodType().stringValue().equals(desc)) continue;
             for (var attr : m.attributes()) {
                 if (attr instanceof java.lang.classfile.attribute.MethodParametersAttribute mp) {
                     List<String> names = new ArrayList<>();
@@ -306,10 +393,7 @@ public class GenPacketSchema {
             ClassModel cm0 = classModel(owner);
             if (cm0 != null && cm0.fields().isEmpty()) return node("unit");   // e.g. bundle delimiter: no payload
         }
-        if (owner.endsWith("ByteBufCodecs")) {
-            String t = BYTEBUF_CODECS.get(field);
-            return t != null ? prim(t) : opaque("ByteBufCodecs." + field);
-        }
+        if (owner.endsWith("ByteBufCodecs") && BYTEBUF_CODECS.containsKey(field)) return prim(BYTEBUF_CODECS.get(field));
         String key = owner + "." + field;
         if (codecFieldCache.containsKey(key)) return codecFieldCache.get(key);
         if (depth > MAX_DEPTH) return opaque("depth:" + key);
@@ -345,11 +429,15 @@ public class GenPacketSchema {
             case FieldInstruction fi when fi.opcode() == Opcode.GETSTATIC -> {
                 String o = fi.owner().asInternalName(), n = fi.name().stringValue(), d = fi.typeSymbol().descriptorString();
                 if (o.endsWith("core/registries/Registries") || d.contains("ResourceKey")) stack.push(new KeyV(registryName(n)));
-                else if (d.contains("Codec") || o.endsWith("ByteBufCodecs")) stack.push(new CodecV(codecFieldNode(o, n, depth + 1)));
+                else if (d.contains("Codec") || o.endsWith("ByteBufCodecs")) {
+                    Map<String, Object> cn = codecFieldNode(o, n, depth + 1);
+                    hintOf.putIfAbsent(cn, o.endsWith("ByteBufCodecs") ? hintName("read" + camel(n)) : lowerFirst(shortName(o).replace("$", "")));
+                    stack.push(new CodecV(cn));
+                }
                 else if (d.contains("IdMap") || d.contains("Registry;")) stack.push(new OtherV("idmap:" + shortName(o) + "." + n));
                 else stack.push(new OtherV(shortName(o) + "." + n));
             }
-            case InvokeDynamicInstruction idi -> stack.push(lambdaOf(idi));
+            case InvokeDynamicInstruction idi -> { popArgs(stack, arity(idi.typeSymbol().descriptorString())); stack.push(lambdaOf(idi)); }
             case ConstantInstruction ci -> {
                 Object v = ci.constantValue();
                 if (v instanceof ClassDesc cd) stack.push(new ClassV(cd.descriptorString().replaceAll("^L|;$", "")));
@@ -409,7 +497,15 @@ public class GenPacketSchema {
                 case "unit" -> { stack.push(new CodecV(node("unit"))); return; }
                 case "apply" -> { stack.push(new CodecV(applyFn(recv, arg(args, 0)))); return; }
                 case "map", "cast", "mapStream", "dispatchToStream" -> { stack.push(recv instanceof CodecV cv ? cv : new CodecV(opaque("StreamCodec." + name))); return; }
-                case "dispatch" -> { stack.push(new CodecV(node("dispatch", "key", nodeOf(recv)))); return; }
+                case "dispatch" -> {
+                    Map<String, Object> key = nodeOf(recv);
+                    Map<String, Object> d = node("dispatch", "name", shortName(self), "key", key);
+                    if ("registry".equals(key.get("k"))) {
+                        List<Map<String, Object>> cases = registryCases(String.valueOf(key.get("registry")), depth);
+                        if (cases != null) d.put("cases", cases);
+                    }
+                    stack.push(new CodecV(d)); return;
+                }
                 case "of", "ofMember" -> { stack.push(new CodecV(readerNode(arg(args, args.size() - 1), depth))); return; }
                 case "recursive" -> { stack.push(new CodecV(opaque("StreamCodec.recursive"))); return; }
                 case "codec" -> { stack.push(new CodecV(readerNode(arg(args, args.size() - 1), depth))); return; }
@@ -450,13 +546,146 @@ public class GenPacketSchema {
         if (owner.endsWith("world/item/ItemStack") && name.equals("validatedStreamCodec")) { stack.push(new CodecV(prim("ITEM_STACK"))); return; }
         if (owner.endsWith("resources/ResourceKey") && name.equals("createRegistryKey")) { stack.push(new KeyV("dynamic")); return; }
         if (name.equals("enumStreamCodec") || (name.equals("streamCodec") && ret.contains("StreamCodec"))) {
-            // e.g. XyzEnum.enumStreamCodec(...) or Foo.streamCodec(...) — a codec of the owner
+            // an enum's codec, or a static factory (Filterable.streamCodec(c), TypedEntityData.streamCodec(c), …)
+            // whose body is interpreted with the arguments bound
+            if (isStatic && enumValues(owner) == null) {
+                Map<String, Object> inlined = inlineFactory(owner, name, desc, args, depth);
+                if (inlined != null) { stack.push(new CodecV(inlined)); return; }
+            }
             stack.push(new CodecV(codecOfOwner(owner, name, depth)));
             return;
         }
-        // --- anything else returning a codec: expand the owner's field if it is a plain forwarder, else opaque
-        if (ret.contains("StreamCodec")) { stack.push(new CodecV(opaque(o + "." + name))); return; }
+        // --- custom payloads: a channel id, then the rest of the packet (the payload codecs are keyed by channel)
+        if (owner.endsWith("custom/CustomPacketPayload") && name.equals("codec")) {
+            stack.push(new CodecV(node("struct", "name", "CustomPacketPayload", "fields", List.of(
+                field("channel", prim("IDENTIFIER")), field("data", prim("REST_BYTES"))))));
+            return;
+        }
+        // --- anything else returning a codec: a static factory is interpreted, else opaque
+        if (ret.contains("StreamCodec")) {
+            Map<String, Object> inlined = isStatic ? inlineFactory(owner, name, desc, args, depth) : null;
+            stack.push(new CodecV(inlined != null ? inlined : opaque(o + "." + name)));
+            return;
+        }
+        if (owner.endsWith("syncher/EntityDataSerializer") && name.equals("forValueType")) { stack.push(arg(args, 0)); return; }
+        if (name.equals("<init>") && recv instanceof OtherV ov && ov.what().startsWith("new:")) {
+            // new Vec3$1() / new ByteBufCodecs$20(): an anonymous StreamCodec whose decode(buf) is the reader;
+            // new EntityDataSerializers$1(): an anonymous serializer whose codec() returns the codec
+            String cls = ov.what().substring(4);
+            String decodeDesc = methodDesc(cls, "decode", "ByteBuf");
+            String codecDesc = decodeDesc == null ? methodDesc(cls, "codec", "") : null;
+            if (decodeDesc != null || codecDesc != null) {
+                if (!stack.isEmpty() && stack.peek() instanceof OtherV top && top.what().equals(ov.what())) stack.pop();
+                if (decodeDesc != null) stack.push(new CodecV(readerNode(cls, "decode", decodeDesc, depth + 1)));
+                else {
+                    Map<String, Object> n0 = inlineMethod(cls, "codec", codecDesc, List.of(), depth, false);
+                    stack.push(new CodecV(n0 != null ? n0 : opaque(shortName(cls) + ".codec")));
+                }
+            }
+            return;
+        }
         if (!ret.equals("V")) stack.push(new OtherV(o + "." + name));
+    }
+
+    /** The descriptor of the first method of a class with this name whose parameters mention the type, or null. */
+    static String methodDesc(String internalName, String method, String paramType) {
+        ClassModel cm = classModel(internalName);
+        if (cm == null) return null;
+        for (MethodModel m : cm.methods()) {
+            String d = m.methodType().stringValue();
+            if (m.methodName().stringValue().equals(method) && d.substring(0, d.indexOf(')')).contains(paramType)) return d;
+        }
+        return null;
+    }
+
+    /**
+     * Registries whose elements carry their own stream codec, given at registration in a bootstrap
+     * class: register("block", …, BlockParticleOption::streamCodec) — a dispatch on such a registry
+     * has one case per element, its codec interpreted with the element type bound.
+     */
+    static final Map<String, String> REGISTRY_BOOTSTRAP = Map.of(
+        "particle_type", "net/minecraft/core/particles/ParticleTypes"
+    );
+
+    static final Map<String, List<Map<String, Object>>> registryCasesCache = new HashMap<>();
+
+    static List<Map<String, Object>> registryCases(String registry, int depth) {
+        String cls = REGISTRY_BOOTSTRAP.get(registry);
+        if (cls == null) return null;
+        if (registryCasesCache.containsKey(registry)) return registryCasesCache.get(registry);
+        registryCasesCache.put(registry, null);   // recursion guard
+        ClassModel cm = classModel(cls);
+        if (cm == null) return null;
+        List<Map<String, Object>> cases = new ArrayList<>();
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("<clinit>")) continue;
+            Deque<Value> stack = new ArrayDeque<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESTATIC && ii.name().stringValue().equals("register")
+                        && ii.owner().asInternalName().equals(cls)) {
+                    List<Value> a = popArgs(stack, arity(ii.typeSymbol().descriptorString()));
+                    String name = a.size() > 0 && a.get(0) instanceof ConstV c && c.v() instanceof String s0 ? s0 : null;
+                    if (name == null) { stack.push(new OtherV("register")); continue; }
+                    Map<String, Object> type = node("unit");
+                    for (Value v : a) {
+                        if (v instanceof LambdaV l && l.desc().endsWith("StreamCodec;")) {
+                            Map<String, Object> t = inlineMethod(l.owner(), l.name(), l.desc(), List.of(new OtherV("type")), depth + 1, false);
+                            type = t != null ? t : opaque("registry-case:" + shortName(l.owner()) + "." + l.name());
+                        }
+                    }
+                    cases.add(node("case", "id", name.contains(":") ? name : "minecraft:" + name, "type", type));
+                    stack.push(new OtherV("register:" + name));
+                    continue;
+                }
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC) { stack.clear(); continue; }
+                step(el, stack, cls, depth);
+            }
+            break;
+        }
+        List<Map<String, Object>> out = cases.isEmpty() ? null : cases;
+        registryCasesCache.put(registry, out);
+        return out;
+    }
+
+    /** The codec a static factory method returns, interpreting its body with the parameters bound to the call's arguments. */
+    static Map<String, Object> inlineFactory(String owner, String name, String desc, List<Value> args, int depth) {
+        return inlineMethod(owner, name, desc, args, depth, true);
+    }
+    static Map<String, Object> inlineMethod(String owner, String name, String desc, List<Value> args, int depth, boolean requireStatic) {
+        if (depth > MAX_DEPTH) return null;
+        ClassModel cm = classModel(owner);
+        if (cm == null) return null;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals(name) || !m.methodType().stringValue().equals(desc)) continue;
+            boolean isStatic = (m.flags().flagsMask() & 0x0008) != 0;
+            if (requireStatic && !isStatic) return null;
+            Map<Integer, Value> locals = new HashMap<>();
+            int slot = isStatic ? 0 : 1, ai = 0;
+            if (!isStatic) locals.put(0, new OtherV("this"));
+            for (int i = 1; desc.charAt(i) != ')'; ) {
+                char c = desc.charAt(i);
+                if (c == '[') { i++; continue; }
+                int width = (c == 'J' || c == 'D') ? 2 : 1;
+                i = c == 'L' ? desc.indexOf(';', i) + 1 : i + 1;
+                if (ai < args.size()) locals.put(slot, args.get(ai));
+                slot += width;
+                ai++;
+            }
+            Deque<Value> stack = new ArrayDeque<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                switch (el) {
+                    case LoadInstruction li -> stack.push(locals.getOrDefault(li.slot(), new OtherV("local:" + li.slot())));
+                    case StoreInstruction st -> { if (!stack.isEmpty()) locals.put(st.slot(), stack.pop()); }
+                    case ReturnInstruction ri when ri.opcode() == Opcode.ARETURN -> {
+                        Value top = stack.isEmpty() ? null : stack.pop();
+                        return top instanceof CodecV cv ? cv.n() : null;
+                    }
+                    default -> step(el, stack, owner, depth + 1);
+                }
+            }
+            return null;
+        }
+        return null;
     }
 
     static Map<String, Object> codecOfOwner(String owner, String method, int depth) {
@@ -505,12 +734,26 @@ public class GenPacketSchema {
         if (ctor instanceof LambdaV l && !l.owner().equals("?")) structName = shortName(l.owner());
         for (int i = 0; i + 1 < args.size() - 1; i += 2) {
             Map<String, Object> f = new LinkedHashMap<>();
-            String fname = args.get(i + 1) instanceof LambdaV l ? l.name() : "f" + (i / 2);
+            String fname = args.get(i + 1) instanceof LambdaV l ? getterName(l) : "f" + (i / 2);
             f.put("name", fname);
             f.put("type", nodeOf(args.get(i)));
             fields.add(f);
         }
         return node("struct", "name", structName, "fields", fields);
+    }
+
+    /** A getter reference names the field; a synthetic lambda (d -> d.heightmaps, d -> d.heightmaps()) is read for the field or accessor it returns. */
+    static String getterName(LambdaV l) {
+        if (!l.name().startsWith("lambda$")) return l.name();
+        ClassModel cm = classModel(l.owner());
+        if (cm != null) for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals(l.name()) || !m.methodType().stringValue().equals(l.desc())) continue;
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.GETFIELD) return fi.name().stringValue();
+                if (el instanceof InvokeInstruction ii && arity(ii.typeSymbol().descriptorString()) == 0 && !ii.name().stringValue().equals("<init>")) return ii.name().stringValue();
+            }
+        }
+        return l.name();
     }
 
     static Map<String, Object> nodeOf(Value v) {
@@ -555,6 +798,8 @@ public class GenPacketSchema {
 
     /** Interprets a method that reads one value from a FriendlyByteBuf and returns its node. */
     static Map<String, Object> readerNode(String owner, String name, String desc, int depth) {
+        Map<String, Object> rule = READER_RULES.get(owner + "." + name);
+        if (rule != null) return rule;
         String key = owner + "." + name + desc;
         if (readerCache.containsKey(key)) return readerCache.get(key);
         if (depth > MAX_DEPTH) return opaque("depth:" + shortName(owner) + "." + name);
@@ -578,23 +823,40 @@ public class GenPacketSchema {
         List<Map<String, Object>> values = new ArrayList<>();   // for static readers: values produced in order
         Deque<Value> stack = new ArrayDeque<>();
         Map<Integer, Value> locals = new HashMap<>();   // slot → last stored value (array sizes, read values)
+        Map<String, Value> fieldValues = new HashMap<>(); // this.x set earlier in this reader (new byte[n] then readBytes(this.buffer))
+        // A read is conditional when it sits between a forward branch and its target (an if
+        // whose body reads) or inside a loop (a backward jump); a branch that only guards a
+        // throw (size checks) has no read in its region and does not count.
+        List<Label> pending = new ArrayList<>();
+        Set<Label> bound = new HashSet<>();
         boolean conditional = false;
+        int expansionsBefore = guardExpansions;
         Map<String, Object> returned = null;
         for (CodeElement el : target.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
             switch (el) {
-                case BranchInstruction bi -> conditional = true;
-                case LookupSwitchInstruction ls -> conditional = true;
-                case TableSwitchInstruction ts -> conditional = true;
+                case BranchInstruction bi -> { if (bound.contains(bi.target())) conditional = true; else pending.add(bi.target()); }
+                case LookupSwitchInstruction ls -> { pending.add(ls.defaultTarget()); for (var c : ls.cases()) pending.add(c.target()); }
+                case TableSwitchInstruction ts -> { pending.add(ts.defaultTarget()); for (var c : ts.cases()) pending.add(c.target()); }
+                case LabelTarget lt -> { bound.add(lt.label()); pending.removeIf(l -> l.equals(lt.label())); }
                 case FieldInstruction fi when fi.opcode() == Opcode.PUTFIELD -> {
                     Value v = stack.isEmpty() ? new OtherV("underflow") : stack.pop();
+                    fieldValues.put(fi.name().stringValue(), v);
                     if (v instanceof CodecV c) {
                         Map<String, Object> f = new LinkedHashMap<>();
                         f.put("name", fi.name().stringValue()); f.put("type", c.n()); fields.add(f);
                     }
                 }
+                case FieldInstruction fi when fi.opcode() == Opcode.GETFIELD -> {
+                    if (!stack.isEmpty()) stack.pop();   // the object
+                    stack.push(fieldValues.getOrDefault(fi.name().stringValue(), new OtherV("field:" + fi.name().stringValue())));
+                }
                 case FieldInstruction fi when fi.opcode() == Opcode.GETSTATIC -> step(el, stack, owner, depth);
-                case InvokeInstruction ii -> readerInvoke(ii, stack, owner, depth, values);
-                case InvokeDynamicInstruction idi -> stack.push(lambdaOf(idi));
+                case InvokeInstruction ii -> {
+                    int before = values.size();
+                    readerInvoke(ii, stack, owner, depth, values);
+                    if (values.size() > before && !pending.isEmpty()) conditional = true;
+                }
+                case InvokeDynamicInstruction idi -> { popArgs(stack, arity(idi.typeSymbol().descriptorString())); stack.push(lambdaOf(idi)); }
                 case ConstantInstruction ci -> step(el, stack, owner, depth);
                 case NewObjectInstruction no -> stack.push(new OtherV("new:" + no.className().asInternalName()));
                 case LoadInstruction li -> stack.push(locals.getOrDefault(li.slot(), new OtherV("local:" + li.slot())));
@@ -606,21 +868,29 @@ public class GenPacketSchema {
                 default -> { }
             }
         }
+        if (guardExpansions > expansionsBefore) conditional = false;   // the loop was the EnumSet-guarded reader loop
         Map<String, Object> result;
         if (isCtor && !fields.isEmpty()) {
+            result = node("struct", "name", shortName(owner), "fields", fields);
+        } else if (!isCtor && !fields.isEmpty() && fields.size() == values.size()) {
+            // a builder-style reader: every value read was stored into a named field
             result = node("struct", "name", shortName(owner), "fields", fields);
         } else if (returned != null && !isCtor) {
             result = returned;
         } else if (!values.isEmpty() && !isCtor) {
-            // static X.read(buf) building new X(v1, v2, ...): name the values by record components / ctor params
-            List<String> names = recordComponents(owner);
+            // static X.read(buf) or buf.readX() building the value from what was read: the struct is
+            // named after the returned type, its fields by record components or the reads
+            String ret = desc.substring(desc.indexOf(')') + 1);
+            String structName = ret.startsWith("L") && ret.startsWith("Lnet/minecraft/") ? shortName(ret.substring(1, ret.length() - 1)) : shortName(owner);
+            String structClass = ret.startsWith("L") ? ret.substring(1, ret.length() - 1) : owner;
+            List<String> names = recordComponents(structClass);
             List<Map<String, Object>> fs = new ArrayList<>();
             for (int i = 0; i < values.size(); i++) {
                 Map<String, Object> f = new LinkedHashMap<>();
-                f.put("name", names != null && i < names.size() && names.size() == values.size() ? names.get(i) : "v" + i);
+                f.put("name", names != null && i < names.size() && names.size() == values.size() ? names.get(i) : hintOf.getOrDefault(values.get(i), "v" + i));
                 f.put("type", values.get(i)); fs.add(f);
             }
-            result = fs.size() == 1 ? fs.get(0).get("type") instanceof Map<?, ?> m ? castNode(m) : opaque("?") : node("struct", "name", shortName(owner), "fields", fs);
+            result = fs.size() == 1 ? fs.get(0).get("type") instanceof Map<?, ?> m ? castNode(m) : opaque("?") : node("struct", "name", structName, "fields", fs);
         } else if (isCtor && !values.isEmpty()) {
             result = node("struct", "name", shortName(owner), "fields", namedByCtor(owner, desc, values));
         } else {
@@ -635,14 +905,102 @@ public class GenPacketSchema {
 
     static List<Map<String, Object>> namedByCtor(String owner, String desc, List<Map<String, Object>> values) {
         List<String> names = recordComponents(owner);
+        if (names == null || names.size() != values.size()) {
+            List<String> params = ctorParamNames(owner, desc);
+            if (params != null && params.size() == values.size()) names = params;
+        }
         List<Map<String, Object>> fs = new ArrayList<>();
         for (int i = 0; i < values.size(); i++) {
             Map<String, Object> f = new LinkedHashMap<>();
-            f.put("name", names != null && names.size() == values.size() ? names.get(i) : "v" + i);
+            f.put("name", names != null && names.size() == values.size() ? names.get(i) : hintOf.getOrDefault(values.get(i), "v" + i));
             f.put("type", values.get(i)); fs.add(f);
         }
         return fs;
     }
+
+    /**
+     * A constructor call inside a reader: new X(v1, v2, …). All arguments wire values → a struct
+     * X of them; some of them (new GameProfile(uuid, name, properties) with the uuid read
+     * earlier) → the constructor names the wire values, which stay in the enclosing reader in
+     * read order; none → an ordinary object, not a wire value.
+     */
+    static Map<String, Object> constructed(String cls, String desc, List<Value> args, List<Map<String, Object>> values) {
+        List<Map<String, Object>> wire = new ArrayList<>();
+        for (Value a : args) if (a instanceof CodecV c) wire.add(c.n());
+        if (wire.isEmpty()) return null;
+        List<String> params = ctorParamNames(cls, desc);
+        List<String> comps = recordComponents(cls);
+        List<String> names = params != null && params.size() == args.size() ? params : comps != null && comps.size() == args.size() ? comps : null;
+        if (wire.size() < args.size()) {
+            // some arguments were computed (new Vec3(pos.x + dx, …)): the wire values keep their
+            // read order in the enclosing reader; the constructor only names them
+            if (names != null) for (int i = 0; i < args.size(); i++) if (args.get(i) instanceof CodecV c) hintOf.put(c.n(), names.get(i));
+            return null;
+        }
+        for (Map<String, Object> w : wire) removeIdentity(values, w);
+        List<Map<String, Object>> fs = new ArrayList<>();
+        for (int i = 0; i < wire.size(); i++) {
+            Map<String, Object> f = new LinkedHashMap<>();
+            f.put("name", names != null ? names.get(i) : hintOf.getOrDefault(wire.get(i), "v" + i));
+            f.put("type", wire.get(i)); fs.add(f);
+        }
+        return node("struct", "name", shortName(cls), "fields", fs);
+    }
+
+    static void removeIdentity(List<Map<String, Object>> values, Map<String, Object> v) {
+        for (int i = values.size() - 1; i >= 0; i--) if (values.get(i) == v) { values.remove(i); return; }
+    }
+
+    /**
+     * enum X { A(reader, writer), … } with the reader lambdas applied in a loop over an EnumSet
+     * (ClientboundPlayerInfoUpdatePacket.Action): every constant's reader is interpreted and its
+     * fields join the builder's struct, guarded by the constant ("when"); the struct records the
+     * enum ("guard") so the generator finds the packet's EnumSet field.
+     */
+    static boolean expandEnumReaders(String enumClass, Map<String, Object> builder, int depth) {
+        ClassModel cm = classModel(enumClass);
+        if (cm == null || enumValues(enumClass) == null) return false;
+        List<Map<String, Object>> fields = castList(builder.get("fields"));
+        if (fields == null) return false;
+        int added = 0;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("<clinit>")) continue;
+            Deque<Value> stack = new ArrayDeque<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESPECIAL && ii.name().stringValue().equals("<init>")
+                        && ii.owner().asInternalName().equals(enumClass)) {
+                    List<Value> a = popArgs(stack, arity(ii.typeSymbol().descriptorString()));
+                    if (!stack.isEmpty()) stack.pop();
+                    String constant = a.size() > 0 && a.get(0) instanceof ConstV c && c.v() instanceof String s ? s : null;
+                    LambdaV reader = null;
+                    for (Value v : a) {
+                        // the reader takes the buffer last: (Builder, FriendlyByteBuf)V; the writer takes it first
+                        if (v instanceof LambdaV l && l.desc().matches("\\(.*FriendlyByteBuf;\\)V")) reader = l;
+                    }
+                    if (constant == null || reader == null) continue;
+                    Map<String, Object> part = readerNode(reader.owner(), reader.name(), reader.desc(), depth + 1);
+                    if (!"struct".equals(part.get("k"))) continue;
+                    for (Map<String, Object> f : castList(part.get("fields"))) {
+                        Map<String, Object> g = new LinkedHashMap<>(f);
+                        g.put("when", constant);
+                        fields.add(g);
+                        added++;
+                    }
+                    continue;
+                }
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC) { stack.clear(); continue; }
+                step(el, stack, enumClass, depth);
+            }
+            break;
+        }
+        if (added == 0) return false;
+        builder.put("guard", enumClass);
+        guardExpansions++;
+        return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    static List<Map<String, Object>> castList(Object o) { return o instanceof List<?> l ? (List<Map<String, Object>>) l : null; }
 
     /** Invocations inside a reader: buffer reads, codec decodes, nested readers, constructors. */
     static void readerInvoke(InvokeInstruction ii, Deque<Value> stack, String self, int depth, List<Map<String, Object>> values) {
@@ -674,33 +1032,57 @@ public class GenPacketSchema {
                 case "readJsonWithCodec", "readWithCodec" -> produced = nbtOrText(args.isEmpty() ? null : arg(args, 0));
                 case "readEnumSet" -> produced = arg(args, 0) instanceof ClassV cv ? node("enumset", "name", shortName(cv.internal()), "values", enumValues(cv.internal())) : opaque("readEnumSet");
                 case "readFixedBitSet" -> produced = node("prim", "t", "FIXED_BIT_SET", "bits", constOf(arg(args, 0)));
-                case "readBytes" -> produced = constOf(arg(args, 0)) != null
-                    ? node("prim", "t", "FIXED_BYTES", "len", constOf(arg(args, 0)))   // readBytes(256): a fixed-size block
-                    : prim("RAW_BYTES");
+                case "readBytes" -> {
+                    if (constOf(arg(args, 0)) != null) produced = node("prim", "t", "FIXED_BYTES", "len", constOf(arg(args, 0)));   // readBytes(256): a fixed-size block
+                    else if (arg(args, 0) instanceof CodecV len && "prim".equals(len.n().get("k")) && "VAR_INT".equals(len.n().get("t"))) {
+                        len.n().put("t", "BYTE_ARRAY");   // new byte[buf.readVarInt()] + readBytes(array): the length node becomes the array, in place
+                        return;
+                    } else produced = prim("RAW_BYTES");
+                }
                 case "readEither" -> produced = node("either", "left", readerOf(arg(args, 0), depth), "right", readerOf(arg(args, 1), depth));
                 case "readUtf" -> produced = node("string", "max", args.isEmpty() ? null : constOf(arg(args, 0)));
                 case "read" -> produced = prim(owner.endsWith("VarInt") ? "VAR_INT" : owner.endsWith("VarLong") ? "VAR_LONG" : "STRING");
-                default -> { String t = BUF_READS.get(name); produced = t != null ? prim(t) : opaque("buf." + name); }
+                default -> {
+                    String t = BUF_READS.get(name);
+                    produced = t != null ? prim(t) : owner.startsWith("net/minecraft/") ? readerNode(owner, name, desc, depth + 1) : opaque("buf." + name);
+                }
             }
+        } else if (isBuf) {
+            return; // writes / bookkeeping on the buffer (skipBytes, readableBytes was a read)
         } else if (name.equals("decode") && recv instanceof CodecV c) {
-            produced = c.n();
+            produced = new LinkedHashMap<>(c.n());
+            String h = hintOf.get(c.n());
+            if (h != null) hintOf.put(produced, h);
+        } else if (name.equals("<init>") && !(recv instanceof OtherV ov0 && ov0.what().startsWith("new:"))) {
+            // this(v1, v2, …): a delegating constructor names the values by its parameters
+            List<String> params = ctorParamNames(owner, desc);
+            if (params != null && params.size() == args.size()) {
+                for (int i = 0; i < args.size(); i++) if (args.get(i) instanceof CodecV c) hintOf.put(c.n(), params.get(i));
+            }
+            return;
         } else if (name.equals("<init>") && recv instanceof OtherV ov && ov.what().startsWith("new:")) {
             String cls = ov.what().substring(4);
             // `new X; dup; <args>; invokespecial <init>` leaves the dup'd reference on the
             // stack: the constructed value replaces it rather than sitting on top of it.
             if (!stack.isEmpty() && stack.peek() instanceof OtherV top && top.what().equals(ov.what())) stack.pop();
-            if (desc.contains("FriendlyByteBuf") || desc.contains("io/netty/buffer/ByteBuf")) {
+            if (cls.endsWith("Exception") || cls.endsWith("Error")) {
+                return; // a validation failure, not a wire value
+            } else if (desc.contains("FriendlyByteBuf") || desc.contains("io/netty/buffer/ByteBuf")) {
                 produced = readerNode(cls, "<init>", desc, depth + 1);
-            } else if (!args.isEmpty() && args.stream().allMatch(a -> a instanceof CodecV)) {
-                // new X(v1, v2, ...) with values read before: a struct named X with those fields
-                List<Map<String, Object>> vals = new ArrayList<>();
-                for (Value a : args) vals.add(((CodecV) a).n());
-                produced = node("struct", "name", shortName(cls), "fields", namedByCtor(cls, desc, vals));
             } else if (cls.equals(self)) {
                 produced = null; // the packet's own constructor from already-collected values (handled by caller)
             } else {
-                produced = opaque("new:" + shortName(cls));
+                Map<String, Object> st = constructed(cls, desc, args, values);
+                if (st == null) { stack.push(new OtherV("obj:" + shortName(cls))); return; }
+                produced = st;
             }
+        } else if (name.equals("read") && ret.equals("V") && (desc.contains("FriendlyByteBuf") || desc.contains("io/netty/buffer/ByteBuf"))
+                && owner.contains("$") && arg(args, 0) instanceof CodecV builder && "struct".equals(builder.n().get("k"))) {
+            // Action.Reader.read(builder, buf) in a loop over the packet's EnumSet<Action>
+            String enumClass = owner.substring(0, owner.lastIndexOf('$'));
+            if (expandEnumReaders(enumClass, builder.n(), depth)) return;
+            stack.push(new CodecV(opaque("reader-loop:" + shortName(owner))));
+            return;
         } else if (owner.startsWith("net/minecraft/") && (desc.contains("FriendlyByteBuf") || desc.contains("io/netty/buffer/ByteBuf")) && !ret.equals("V")) {
             produced = readerNode(owner, name, desc, depth + 1);
         } else if (ret.contains("StreamCodec")) {
@@ -723,6 +1105,21 @@ public class GenPacketSchema {
             for (Value a : args) if (a instanceof CodecV c) wire.add(c.n());
             if (recv instanceof CodecV c) wire.add(c.n());
             if (wire.size() == 1) { stack.push(new CodecV(wire.get(0))); return; }
+            if (wire.size() > 1 && isStatic && owner.startsWith("net/minecraft/") && ret.startsWith("L") && wire.size() == args.size()) {
+                // GlobalPos.of(dimension, pos): a factory of the returned type from the values read
+                String cls = ret.substring(1, ret.length() - 1);
+                List<String> params = ctorParamNames(owner, desc, name);
+                List<Map<String, Object>> fs = new ArrayList<>();
+                for (int i = 0; i < wire.size(); i++) {
+                    Map<String, Object> f = new LinkedHashMap<>();
+                    f.put("name", params != null && params.size() == wire.size() ? params.get(i) : hintOf.getOrDefault(wire.get(i), "v" + i));
+                    f.put("type", wire.get(i)); fs.add(f);
+                }
+                for (Map<String, Object> w : wire) removeIdentity(values, w);
+                Map<String, Object> st = node("struct", "name", shortName(cls), "fields", fs);
+                stack.push(new CodecV(st)); values.add(st);
+                return;
+            }
             if (wire.size() > 1) { stack.push(new CodecV(opaque("combined:" + shortName(owner) + "." + name))); return; }
             stack.push(new OtherV(shortName(owner) + "." + name));
             return;
@@ -732,7 +1129,24 @@ public class GenPacketSchema {
         if (produced != null) {
             stack.push(new CodecV(produced));
             values.add(produced);
+            if (!hintOf.containsKey(produced)) hintOf.put(produced, hintName(name));
         }
+    }
+
+    static String camel(String constant) {   // VAR_INT → VarInt
+        StringBuilder sb = new StringBuilder();
+        for (String w : constant.toLowerCase(Locale.ROOT).split("_")) if (!w.isEmpty()) sb.append(Character.toUpperCase(w.charAt(0))).append(w.substring(1));
+        return sb.toString();
+    }
+    static String lowerFirst(String s) { return s.isEmpty() ? s : Character.toLowerCase(s.charAt(0)) + s.substring(1); }
+
+    /** readVarInt → varInt, readIdentifier → identifier, readPayload → payload, readableBytes → data. */
+    static String hintName(String method) {
+        if (method.equals("readableBytes")) return "data";
+        String s = method.startsWith("read") ? method.substring(4) : method;
+        if (s.isEmpty()) return method;
+        if (s.equals("UUID")) return "uuid";
+        return Character.toLowerCase(s.charAt(0)) + s.substring(1);
     }
 
     static Map<String, Object> elemOf(List<Value> args, int depth) {
@@ -743,7 +1157,7 @@ public class GenPacketSchema {
     static Map<String, Object> readerOf(Value v, int depth) {
         if (v instanceof LambdaV l) {
             if (l.owner().endsWith("FriendlyByteBuf") || l.owner().endsWith("RegistryFriendlyByteBuf")) {
-                String t = BUF_READS.get(l.name()); return t != null ? prim(t) : opaque("buf." + l.name());
+                String t = BUF_READS.get(l.name()); return t != null ? prim(t) : readerNode(l.owner(), l.name(), l.desc(), depth + 1);
             }
             if (l.owner().endsWith("UUIDUtil")) return prim("UUID");
             return readerNode(l.owner(), l.name(), l.desc(), depth + 1);
@@ -758,7 +1172,8 @@ public class GenPacketSchema {
     @SuppressWarnings("unchecked")
     static boolean hasHole(Map<String, Object> n) {
         String k = (String) n.get("k");
-        if (k.equals("opaque") || k.equals("dispatch") || k.equals("either")) return true;
+        if (k.equals("opaque") || k.equals("either")) return true;
+        if (k.equals("dispatch") && n.get("cases") == null) return true;
         if (Boolean.TRUE.equals(n.get("conditional"))) return true;
         if (k.equals("enum") && n.get("values") == null) return true;
         for (Object v : n.values()) {

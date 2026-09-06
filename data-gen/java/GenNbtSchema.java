@@ -1,0 +1,731 @@
+/**
+ * GenNbtSchema — Extracts the NBT shape of the registry elements a server sends in the
+ * configuration phase (RegistryDataLoader.SYNCHRONIZED_REGISTRIES) and of a few shared
+ * structures (chat style and events, the chat type decoration), by interpreting their
+ * DataFixerUpper codec chains from the jar's bytecode (java.lang.classfile, JDK 24+).
+ *
+ * Output: nbt_schema.json in the current directory:
+ *   { "version": 1,
+ *     "registries": {
+ *       "minecraft:dimension_type": {
+ *         "class": "net.minecraft.world.level.dimension.DimensionType", "field": "NETWORK_CODEC",
+ *         "coverage": "full" | "partial",           // partial = contains opaque/dispatch-without-cases/either nodes
+ *         "type": { "k": "struct", "name": "DimensionType", "java": "net/minecraft/…/DimensionType", "fields": [
+ *                    {"name": "hasSkylight", "key": "has_skylight", "type": {"k": "prim", "t": "BOOL"}},
+ *                    {"name": "skybox", "key": "skybox", "optional": true, "default": "OVERWORLD", "type": {"k": "enum", …}},
+ *                    {"name": "monsterSettings", "inline": true, "type": {"k": "struct", …}},   // a MapCodec: its keys sit in the parent
+ *                    … ] } },
+ *       … },
+ *     "types": { "net.minecraft.network.chat.Style": { …same shape… }, … } }
+ *
+ * Node kinds: prim(t: BOOL BYTE SHORT INT LONG FLOAT DOUBLE STRING IDENTIFIER UUID UUID_LENIENT
+ * RGB_COLOR INT_ARRAY LONG_ARRAY BYTE_ARRAY) · struct(name, java, fields) · list(elem) · map(key, val) ·
+ * enum(name, java, values, ids) — a StringRepresentable enum, ids are the serialized names ·
+ * holder(registry, direct?) — an id string or the inline element · holderset(registry) — "#tag",
+ * an id or a list of ids · resourcekey(registry) · registry(registry) — an id string · text — a
+ * chat component · nbt — an arbitrary tag · either(left, right) · dispatch(name, key, cases[{id,
+ * name, type}]) — a type-keyed union; cases are resolved when the key codec is an enum whose
+ * constants carry their MapCodec · unit · opaque(java) — a combinator the walker does not know.
+ *
+ * How: RecordCodecBuilder.create/mapCodec(lambda) interprets the lambda with an operand stack:
+ * fieldOf/optionalFieldOf carry the key and optionality, forGetter the field name, group/and/apply
+ * build the struct. Static codec fields and codec-returning static methods are resolved lazily, so
+ * only the chains that flow into the requested fields are walked. Shares the class-file access,
+ * enum reflection and JSON helpers of GenPacketSchema (compiled together by ExtractAll).
+ */
+import java.lang.classfile.*;
+import java.lang.classfile.instruction.*;
+import java.lang.constant.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+
+public class GenNbtSchema {
+    static final int MAX_DEPTH = 14;
+
+    /** Shared structures written to the "types" section: owner class (internal name) and codec field. */
+    static final String[][] TYPES = {
+        {"net/minecraft/network/chat/Style$Serializer", "MAP_CODEC"},
+        {"net/minecraft/network/chat/ClickEvent", "CODEC"},
+        {"net/minecraft/network/chat/HoverEvent", "CODEC"},
+        {"net/minecraft/network/chat/ChatTypeDecoration", "CODEC"},
+        {"net/minecraft/world/level/storage/LevelData$RespawnData", "MAP_CODEC"},
+        {"net/minecraft/world/level/WorldDataConfiguration", "MAP_CODEC"},
+        {"net/minecraft/world/level/DataPackConfig", "CODEC"},
+        {"net/minecraft/world/level/LevelSettings", "CODEC"},
+        {"net/minecraft/world/level/levelgen/WorldOptions", "CODEC"},
+        {"net/minecraft/world/level/levelgen/WorldDimensions", "CODEC"},
+        {"net/minecraft/world/item/ItemStack", "CODEC"},
+    };
+
+    static final String REGISTRY_DATA_LOADER = "net/minecraft/resources/RegistryDataLoader";
+    static final String REGISTRY_DATA = "net/minecraft/resources/RegistryDataLoader$RegistryData";
+
+    // ---- values on the simulated operand stack ------------------------------------
+
+    sealed interface V permits CodecV, RefV, CallV, LambdaV, ConstV, KeyV, ClassV, OtherV {}
+    record CodecV(Map<String, Object> n) implements V {}
+    record RefV(String owner, String field) implements V {}                                  // a static codec field, resolved on demand
+    record CallV(String owner, String name, String desc, List<V> args) implements V {}          // a codec-returning static method, resolved on demand
+    record LambdaV(String owner, String name, String desc, boolean ctor, List<V> captured) implements V {}
+    record ConstV(Object v) implements V {}
+    record KeyV(String registry) implements V {}                                                // Registries.X → "minecraft:x"
+    record ClassV(String internal) implements V {}
+    record OtherV(String what) implements V {}
+
+    static Map<String, Object> node(String kind, Object... kv) { return GenPacketSchema.node(kind, kv); }
+    static Map<String, Object> prim(String t) { return GenPacketSchema.prim(t); }
+    static Map<String, Object> opaque(String java) { return GenPacketSchema.opaque(java); }
+    static String shortName(String internal) { return GenPacketSchema.shortName(internal); }
+    static ClassModel classModel(String internal) { return GenPacketSchema.classModel(internal); }
+
+    // ---- well-known codec constants -------------------------------------------------
+
+    static final Map<String, Map<String, Object>> KNOWN_FIELDS = new HashMap<>();
+    static void known(String owner, String field, Map<String, Object> n) { KNOWN_FIELDS.put(owner + "." + field, n); }
+    static {
+        String codec = "com/mojang/serialization/Codec";
+        for (String p : new String[]{"BOOL", "BYTE", "SHORT", "INT", "LONG", "FLOAT", "DOUBLE", "STRING"}) known(codec, p, prim(p));
+        known(codec, "BYTE_BUFFER", prim("BYTE_ARRAY"));
+        known(codec, "INT_STREAM", prim("INT_ARRAY"));
+        known(codec, "LONG_STREAM", prim("LONG_ARRAY"));
+        known(codec, "PASSTHROUGH", node("nbt"));
+        known(codec, "EMPTY", node("unit"));
+        String extra = "net/minecraft/util/ExtraCodecs";
+        known(extra, "STRING_RGB_COLOR", prim("RGB_COLOR"));   // "#rrggbb" with an int alternative
+        known(extra, "RGB_COLOR_CODEC", prim("INT"));
+        known(extra, "ARGB_COLOR_CODEC", prim("INT"));
+        known(extra, "POSITIVE_INT", prim("INT"));
+        known(extra, "NON_NEGATIVE_INT", prim("INT"));
+        known(extra, "POSITIVE_FLOAT", prim("FLOAT"));
+        known(extra, "NON_NEGATIVE_FLOAT", prim("FLOAT"));
+        known(extra, "UUID", prim("UUID"));
+        known(extra, "NON_EMPTY_STRING", prim("STRING"));
+        known(extra, "PLAYER_NAME", prim("STRING"));
+        known(extra, "TAG_OR_ELEMENT_ID", prim("STRING"));
+        known(extra, "INSTANT_ISO8601", prim("STRING"));
+        known(extra, "BASE64_STRING", prim("STRING"));
+        known(extra, "JSON", node("nbt"));
+        known(extra, "VECTOR3F", node("list", "elem", prim("FLOAT")));
+        known(extra, "VECTOR4F", node("list", "elem", prim("FLOAT")));
+        known(extra, "QUATERNIONF", node("list", "elem", prim("FLOAT")));
+        known(extra, "AXISANGLE4F", node("list", "elem", prim("FLOAT")));
+        known(extra, "MATRIX4F", node("list", "elem", prim("FLOAT")));
+        known("net/minecraft/resources/Identifier", "CODEC", prim("IDENTIFIER"));
+        known("net/minecraft/resources/ResourceLocation", "CODEC", prim("IDENTIFIER"));
+        known("net/minecraft/core/UUIDUtil", "CODEC", prim("UUID"));
+        known("net/minecraft/core/UUIDUtil", "STRING_CODEC", prim("UUID_LENIENT"));
+        known("net/minecraft/core/UUIDUtil", "LENIENT_CODEC", prim("UUID_LENIENT"));
+        known("net/minecraft/core/UUIDUtil", "AUTHLIB_CODEC", prim("UUID_LENIENT"));
+        known("net/minecraft/core/BlockPos", "CODEC", prim("INT_ARRAY"));
+        known("net/minecraft/world/phys/Vec3", "CODEC", node("list", "elem", prim("DOUBLE")));
+        known("net/minecraft/nbt/CompoundTag", "CODEC", node("nbt"));
+        known("net/minecraft/nbt/TagParser", "AS_CODEC", node("nbt"));
+        known("net/minecraft/nbt/TagParser", "LENIENT_CODEC", node("nbt"));
+        for (String f : new String[]{"CODEC", "FLAT_CODEC", "TRUSTED_CODEC", "TRUSTED_FLAT_CODEC", "FLAT_TRUSTED_CODEC", "TRUSTED_CONTEXT_FREE_CODEC"})
+            known("net/minecraft/network/chat/ComponentSerialization", f, node("text"));
+        known("net/minecraft/core/component/DataComponentMap", "CODEC", node("nbt"));
+        known("net/minecraft/core/component/DataComponentPatch", "CODEC", node("nbt"));
+        known("net/minecraft/world/item/component/CustomData", "CODEC", node("nbt"));
+    }
+
+    static final Map<String, Map<String, Object>> fieldCache = new HashMap<>();
+    static final Map<String, String> registryIds = new HashMap<>();
+
+    // ---- entry point ----------------------------------------------------------------
+
+    record Entry(String key, String className, String field, Map<String, Object> type) {}
+
+    public static void main(String[] args) throws Exception {
+        // Enum reflection (serialized names) initialises MC classes that touch the registries.
+        net.minecraft.SharedConstants.tryDetectVersion();
+        net.minecraft.server.Bootstrap.bootStrap();
+
+        List<Entry> registries = synchronizedRegistries();
+        List<Entry> types = new ArrayList<>();
+        for (String[] t : TYPES) {
+            if (classModel(t[0]) == null) { System.err.println("GenNbtSchema: no class " + t[0] + " (type skipped)"); continue; }
+            types.add(new Entry(t[0].replace('/', '.'), t[0].replace('/', '.'), t[1], codecField(t[0], t[1], 0)));
+        }
+
+        StringBuilder sb = new StringBuilder("{\n  \"version\": 1,\n  \"registries\": {\n");
+        writeEntries(sb, registries);
+        sb.append("  },\n  \"types\": {\n");
+        writeEntries(sb, types);
+        sb.append("  }\n}\n");
+        Files.writeString(Path.of("nbt_schema.json"), sb.toString(), StandardCharsets.UTF_8);
+        long full = registries.stream().filter(e -> !hasHole(e.type)).count();
+        long fullT = types.stream().filter(e -> !hasHole(e.type)).count();
+        System.err.printf("GenNbtSchema: %d synchronized registries (%d fully typed) + %d shared types (%d fully typed) written to nbt_schema.json%n",
+            registries.size(), full, types.size(), fullT);
+    }
+
+    static void writeEntries(StringBuilder sb, List<Entry> entries) {
+        for (int i = 0; i < entries.size(); i++) {
+            Entry e = entries.get(i);
+            sb.append("    ").append(GenPacketSchema.json(e.key)).append(": {");
+            if (e.className != null) sb.append("\"class\": ").append(GenPacketSchema.json(e.className)).append(", ");
+            if (e.field != null) sb.append("\"field\": ").append(GenPacketSchema.json(e.field)).append(", ");
+            sb.append("\"coverage\": ").append(GenPacketSchema.json(hasHole(e.type) ? "partial" : "full"));
+            sb.append(", \"type\": ").append(GenPacketSchema.jsonNode(e.type)).append("}");
+            sb.append(i + 1 < entries.size() ? ",\n" : "\n");
+        }
+    }
+
+    /**
+     * The (registry key, codec) pairs of RegistryDataLoader.SYNCHRONIZED_REGISTRIES: every
+     * new RegistryData(key, codec, …) between the previous list's PUTSTATIC and this one.
+     */
+    static List<Entry> synchronizedRegistries() {
+        List<Entry> out = new ArrayList<>();
+        ClassModel cm = classModel(REGISTRY_DATA_LOADER);
+        if (cm == null) { System.err.println("GenNbtSchema: no " + REGISTRY_DATA_LOADER); return out; }
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("<clinit>")) continue;
+            Deque<V> stack = new ArrayDeque<>();
+            Map<Integer, V> locals = new HashMap<>();
+            List<V[]> pending = new ArrayList<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC) {
+                    if (fi.name().stringValue().equals("SYNCHRONIZED_REGISTRIES")) {
+                        for (V[] p : pending) {
+                            String key = p[0] instanceof KeyV k ? k.registry() : String.valueOf(p[0]);
+                            String cls = p[1] instanceof RefV r ? r.owner().replace('/', '.') : null;
+                            String field = p[1] instanceof RefV r ? r.field() : null;
+                            out.add(new Entry(key, cls, field, nodeOf(p[1], 0)));
+                        }
+                        break;
+                    }
+                    pending.clear();
+                    stack.clear();
+                    continue;
+                }
+                if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESPECIAL
+                        && ii.owner().asInternalName().equals(REGISTRY_DATA) && ii.name().stringValue().equals("<init>")) {
+                    List<V> a = popArgs(stack, GenPacketSchema.arity(ii.typeSymbol().descriptorString()));
+                    if (!stack.isEmpty()) stack.pop();   // the receiver (new/dup)
+                    if (a.size() >= 2) pending.add(new V[]{a.get(0), a.get(1)});
+                    continue;
+                }
+                step(el, stack, locals, REGISTRY_DATA_LOADER, 0);
+            }
+            break;
+        }
+        return out;
+    }
+
+    // ---- static codec fields (lazy) -------------------------------------------------
+
+    /** The node of a static codec field, interpreting the owner's <clinit> up to its PUTSTATIC. */
+    static Map<String, Object> codecField(String owner, String field, int depth) {
+        String key = owner + "." + field;
+        Map<String, Object> known = KNOWN_FIELDS.get(key);
+        if (known != null) return known;
+        if (fieldCache.containsKey(key)) return fieldCache.get(key);
+        if (depth > MAX_DEPTH) return opaque("depth:" + key);
+        fieldCache.put(key, opaque("recursive:" + key));   // cycle guard
+        Map<String, Object> result = opaque("no-clinit:" + key);
+        ClassModel cm = classModel(owner);
+        if (cm != null) {
+            for (MethodModel m : cm.methods()) {
+                if (!m.methodName().stringValue().equals("<clinit>")) continue;
+                Deque<V> stack = new ArrayDeque<>();
+                Map<Integer, V> locals = new HashMap<>();
+                for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                    if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC && fi.owner().asInternalName().equals(owner)) {
+                        V top = stack.isEmpty() ? null : stack.pop();
+                        if (fi.name().stringValue().equals(field)) {
+                            result = top == null ? opaque("not-a-codec:" + key) : nodeOf(top, depth + 1);
+                            break;
+                        }
+                        stack.clear();
+                        continue;
+                    }
+                    step(el, stack, locals, owner, depth);
+                }
+                break;
+            }
+        }
+        fieldCache.put(key, result);
+        return result;
+    }
+
+    /** Resolves a stack value to a node (static fields, factory calls and codec lambdas on demand). */
+    static Map<String, Object> nodeOf(V v, int depth) {
+        if (v instanceof CodecV c) return c.n();
+        if (v instanceof RefV r) return codecField(r.owner(), r.field(), depth + 1);
+        if (v instanceof CallV c) {
+            Map<String, Object> n = interpretMethod(c.owner(), c.name(), c.desc(), c.args(), depth + 1);
+            return n != null ? n : opaque(shortName(c.owner()) + "." + c.name());
+        }
+        if (v instanceof LambdaV l) {
+            if (l.ctor()) return opaque("ctor:" + shortName(l.owner()));
+            // a bound method reference on a codec (MAP_CODEC::codec, CODEC::listOf): the receiver is the first capture
+            if (l.owner().startsWith("com/mojang/serialization/") && !l.captured().isEmpty()) {
+                Map<String, Object> base = nodeOf(l.captured().get(0), depth + 1);
+                return l.name().equals("listOf") ? node("list", "elem", base) : base;
+            }
+            Map<String, Object> n = interpretMethod(l.owner(), l.name(), l.desc(), l.captured(), depth + 1);
+            return n != null ? n : opaque("lambda:" + shortName(l.owner()) + "." + l.name());
+        }
+        if (v == null) return opaque("null");
+        return opaque(v.toString());
+    }
+
+    /**
+     * Interprets a method body with its parameters bound to args (a codec factory, or the
+     * lambda of RecordCodecBuilder.create with its captured values followed by the Instance)
+     * and returns the node it returns, null when the method is unknown or returns no codec.
+     */
+    static Map<String, Object> interpretMethod(String owner, String name, String desc, List<V> args, int depth) {
+        if (depth > MAX_DEPTH) return opaque("depth:" + shortName(owner) + "." + name);
+        ClassModel cm = classModel(owner);
+        if (cm == null) return null;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals(name) || !m.methodType().stringValue().equals(desc)) continue;
+            boolean isStatic = (m.flags().flagsMask() & 0x0008) != 0;
+            Map<Integer, V> locals = new HashMap<>();
+            int slot = isStatic ? 0 : 1, ai = 0;
+            if (!isStatic) locals.put(0, new OtherV("this"));
+            for (int i = 1; desc.charAt(i) != ')'; ) {
+                char c = desc.charAt(i);
+                if (c == '[') { i++; continue; }
+                int width = (c == 'J' || c == 'D') ? 2 : 1;
+                i = c == 'L' ? desc.indexOf(';', i) + 1 : i + 1;
+                locals.put(slot, ai < args.size() ? args.get(ai) : new OtherV("param:" + ai));
+                slot += width;
+                ai++;
+            }
+            Deque<V> stack = new ArrayDeque<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof ReturnInstruction ri && ri.opcode() == Opcode.ARETURN) {
+                    V top = stack.isEmpty() ? null : stack.pop();
+                    if (top instanceof OtherV || top instanceof ConstV || top == null) return null;
+                    return nodeOf(top, depth + 1);
+                }
+                step(el, stack, locals, owner, depth);
+            }
+            return null;
+        }
+        return null;
+    }
+
+    // ---- the interpreter ------------------------------------------------------------
+
+    static void step(CodeElement el, Deque<V> stack, Map<Integer, V> locals, String self, int depth) {
+        switch (el) {
+            case FieldInstruction fi when fi.opcode() == Opcode.GETSTATIC -> {
+                String o = fi.owner().asInternalName(), n = fi.name().stringValue(), d = fi.typeSymbol().descriptorString();
+                if (o.endsWith("core/registries/Registries") && d.contains("ResourceKey")) stack.push(new KeyV(registryId(n)));
+                else if (o.endsWith("core/registries/BuiltInRegistries")) stack.push(new OtherV("builtin:" + builtinRegistryId(n)));
+                else if (d.contains("ResourceKey")) stack.push(new KeyV("minecraft:" + n.toLowerCase(Locale.ROOT)));
+                else if (d.contains("Codec") && !d.contains("StreamCodec")) stack.push(new RefV(o, n));
+                else stack.push(new OtherV(shortName(o) + "." + n));
+            }
+            case InvokeDynamicInstruction idi -> {
+                List<V> captured = popArgs(stack, GenPacketSchema.arity(idi.typeSymbol().descriptorString()));
+                stack.push(lambdaOf(idi, captured));
+            }
+            case ConstantInstruction ci -> {
+                Object v = ci.constantValue();
+                if (v instanceof ClassDesc cd) stack.push(new ClassV(cd.descriptorString().replaceAll("^L|;$", "")));
+                else stack.push(new ConstV(v));
+            }
+            case InvokeInstruction ii -> invoke(ii, stack, locals, self, depth);
+            case NewObjectInstruction no -> stack.push(new OtherV("new:" + no.className().asInternalName()));
+            case LoadInstruction li -> stack.push(locals.getOrDefault(li.slot(), new OtherV("local:" + li.slot())));
+            case StoreInstruction st -> { if (!stack.isEmpty()) locals.put(st.slot(), stack.pop()); }
+            case StackInstruction si when si.opcode() == Opcode.DUP -> { if (!stack.isEmpty()) stack.push(stack.peek()); }
+            case StackInstruction si when si.opcode() == Opcode.POP -> { if (!stack.isEmpty()) stack.pop(); }
+            default -> { }
+        }
+    }
+
+    static LambdaV lambdaOf(InvokeDynamicInstruction idi, List<V> captured) {
+        for (ConstantDesc cd : idi.bootstrapArgs()) {
+            if (cd instanceof DirectMethodHandleDesc dmh) {
+                return new LambdaV(dmh.owner().descriptorString().replaceAll("^L|;$", ""), dmh.methodName(), dmh.lookupDescriptor(),
+                    dmh.kind() == DirectMethodHandleDesc.Kind.CONSTRUCTOR, captured);
+            }
+        }
+        return new LambdaV("?", "?", "", false, captured);
+    }
+
+    static List<V> popArgs(Deque<V> stack, int n) {
+        List<V> args = new ArrayList<>();
+        for (int i = 0; i < n; i++) args.add(0, stack.isEmpty() ? new OtherV("underflow") : stack.pop());
+        return args;
+    }
+
+    static V arg(List<V> a, int i) { return i < a.size() ? a.get(i) : null; }
+    static String keyOf(V v) { return v instanceof KeyV k ? k.registry() : "?"; }
+    static String strOf(V v) { return v instanceof ConstV c && c.v() instanceof String s ? s : null; }
+    static boolean isCodec(String ret) { return ret.contains("Codec") && !ret.contains("StreamCodec"); }
+
+    static void invoke(InvokeInstruction ii, Deque<V> stack, Map<Integer, V> locals, String self, int depth) {
+        String owner = ii.owner().asInternalName(), name = ii.name().stringValue(), desc = ii.typeSymbol().descriptorString();
+        boolean isStatic = ii.opcode() == Opcode.INVOKESTATIC;
+        List<V> args = popArgs(stack, GenPacketSchema.arity(desc));
+        V recv = isStatic ? null : (stack.isEmpty() ? new OtherV("underflow") : stack.pop());
+        String ret = desc.substring(desc.indexOf(')') + 1);
+        String o = shortName(owner);
+
+        // --- JDK: boxing and constant containers used as defaults ---------------------
+        if (owner.startsWith("java/lang/") && name.equals("valueOf") && args.size() == 1) { stack.push(args.get(0)); return; }
+        if (owner.equals("java/util/Optional")) {
+            if (name.equals("empty")) { stack.push(new ConstV(null)); return; }
+            if (name.equals("of") || name.equals("ofNullable")) { stack.push(arg(args, 0)); return; }
+        }
+        if ((owner.equals("java/util/List") || owner.equals("java/util/Set") || owner.endsWith("ImmutableList") || owner.endsWith("ImmutableSet")) && name.equals("of")) { stack.push(new ConstV("[]")); return; }
+        if ((owner.equals("java/util/Map") || owner.endsWith("ImmutableMap")) && name.equals("of")) { stack.push(new ConstV("{}")); return; }
+        if (owner.endsWith("core/HolderSet") && name.equals("empty")) { stack.push(new ConstV("[]")); return; }
+
+        // --- DataFixerUpper combinators ----------------------------------------------
+        if (owner.startsWith("com/mojang/serialization/") || owner.startsWith("com/mojang/datafixers/")) {
+            switch (name) {
+                case "fieldOf" -> { stack.push(new CodecV(field(nodeOf(recv, depth), strOf(arg(args, 0)), false, null))); return; }
+                case "optionalFieldOf", "lenientOptionalFieldOf", "strictOptionalFieldOf" -> {
+                    stack.push(new CodecV(field(nodeOf(recv, depth), strOf(arg(args, 0)), true, args.size() >= 2 ? arg(args, 1) : null))); return;
+                }
+                case "forGetter" -> { stack.push(new CodecV(named(nodeOf(recv, depth), arg(args, 0)))); return; }
+                case "group" -> {
+                    List<Object> fields = new ArrayList<>();
+                    for (V a : args) fields.add(nodeOf(a, depth));
+                    stack.push(new CodecV(node("group", "fields", fields))); return;
+                }
+                case "and" -> {
+                    Map<String, Object> g = nodeOf(recv, depth);
+                    List<Object> fields = new ArrayList<>(g.get("fields") instanceof List<?> l ? castList(l) : List.of());
+                    for (V a : args) fields.add(nodeOf(a, depth));
+                    stack.push(new CodecV(node("group", "fields", fields))); return;
+                }
+                case "apply" -> { stack.push(new CodecV(structOf(nodeOf(recv, depth), arg(args, args.size() - 1), self))); return; }
+                case "create", "mapCodec" -> {   // RecordCodecBuilder.create(instance -> …) / mapCodec(…)
+                    if (owner.endsWith("RecordCodecBuilder") && arg(args, 0) instanceof LambdaV l) {
+                        List<V> bound = new ArrayList<>(l.captured());
+                        bound.add(new OtherV("instance"));
+                        Map<String, Object> n = interpretMethod(l.owner(), l.name(), l.desc(), bound, depth + 1);
+                        stack.push(new CodecV(n != null ? n : opaque("RecordCodecBuilder." + name + ":" + shortName(l.owner()) + "." + l.name()))); return;
+                    }
+                    stack.push(new CodecV(opaque(o + "." + name))); return;
+                }
+                case "codec", "xmap", "flatXmap", "comapFlatMap", "flatComapMap", "validate", "stable", "promotePartial",
+                     "orElse", "orElseGet", "setPartial", "withLifecycle", "lenient", "compressed", "fieldOfDefault",
+                     "assumeMapUnsafe", "forRest", "mapResult", "dependent" -> { stack.push(recv == null ? new CodecV(opaque(o + "." + name)) : recv); return; }
+                case "listOf" -> { stack.push(new CodecV(node("list", "elem", nodeOf(recv, depth)))); return; }
+                case "list" -> { stack.push(new CodecV(node("list", "elem", nodeOf(arg(args, 0), depth)))); return; }
+                case "unboundedMap", "simpleMap", "dispatchedMap" -> {
+                    stack.push(new CodecV(node("map", "key", nodeOf(arg(args, 0), depth), "val", name.equals("dispatchedMap") ? node("nbt") : nodeOf(arg(args, 1), depth)))); return;
+                }
+                case "either", "xor" -> { stack.push(new CodecV(node("either", "left", nodeOf(arg(args, 0), depth), "right", nodeOf(arg(args, 1), depth)))); return; }
+                case "withAlternative" -> {
+                    Map<String, Object> left = nodeOf(arg(args, 0), depth);
+                    Map<String, Object> n = new LinkedHashMap<>(left);
+                    n.put("alt", summary(nodeOf(arg(args, 1), depth)));
+                    stack.push(new CodecV(n)); return;
+                }
+                case "dispatch", "dispatchStable", "partialDispatch" -> { stack.push(new CodecV(dispatch(nodeOf(recv, depth), args, self, depth))); return; }
+                case "intRange", "longRange" -> { stack.push(new CodecV(prim(name.equals("intRange") ? "INT" : "LONG"))); return; }
+                case "floatRange", "doubleRange" -> { stack.push(new CodecV(prim(name.equals("floatRange") ? "FLOAT" : "DOUBLE"))); return; }
+                case "sizeLimitedString", "string" -> { stack.push(new CodecV(prim("STRING"))); return; }
+                case "unit", "unitCodec", "point" -> { stack.push(new CodecV(node("unit"))); return; }
+                case "lazyInitialized" -> { stack.push(new CodecV(nodeOf(arg(args, 0), depth))); return; }
+                case "recursive" -> { stack.push(new CodecV(opaque("Codec.recursive"))); return; }
+                default -> {
+                    if (isCodec(ret) || ret.contains("App;") || ret.contains("Products$")) { stack.push(new CodecV(opaque("dfu:" + o + "." + name))); return; }
+                    if (!ret.equals("V")) stack.push(new OtherV(o + "." + name));
+                    return;
+                }
+            }
+        }
+
+        // --- Minecraft's codec helpers -------------------------------------------------
+        if (owner.endsWith("util/ExtraCodecs")) {
+            switch (name) {
+                case "catchDecoderException", "nonEmptyList", "optionalEmptyMap", "overrideLifecycle", "orCompressed", "validate",
+                     "nonEmptyHolderSet", "sizeLimitedMap", "lazyInitialized", "nonEmptyMap" -> { stack.push(new CodecV(nodeOf(arg(args, 0), depth))); return; }
+                case "compactListCodec" -> { stack.push(new CodecV(node("list", "elem", nodeOf(arg(args, 0), depth)))); return; }
+                case "converter" -> { stack.push(new CodecV(node("nbt"))); return; }   // an NBT tag in another ops
+                case "intRange" -> { stack.push(new CodecV(prim("INT"))); return; }
+                case "floatRange" -> { stack.push(new CodecV(prim("FLOAT"))); return; }
+                case "idResolverCodec", "stringResolverCodec" -> { stack.push(new CodecV(prim("STRING"))); return; }
+                case "optionalAlwaysPresentFieldOf" -> { stack.push(new CodecV(field(nodeOf(arg(args, 0), depth), strOf(arg(args, 1)), true, arg(args, 2)))); return; }
+                case "xor", "either" -> { stack.push(new CodecV(node("either", "left", nodeOf(arg(args, 0), depth), "right", nodeOf(arg(args, 1), depth)))); return; }
+                case "recursive" -> { stack.push(new CodecV(opaque("ExtraCodecs.recursive"))); return; }
+                default -> { if (isCodec(ret)) { stack.push(new CodecV(opaque("ExtraCodecs." + name))); return; } if (!ret.equals("V")) stack.push(new OtherV(o + "." + name)); return; }
+            }
+        }
+        // registry references (net/minecraft/resources in 26.2, net/minecraft/core/registries/codec since 26.3)
+        if (o.equals("RegistryFileCodec") && name.equals("create")) {
+            stack.push(new CodecV(node("holder", "registry", keyOf(arg(args, 0)), "direct", nodeOf(arg(args, 1), depth)))); return;
+        }
+        if (o.equals("RegistryFixedCodec") && name.equals("create")) { stack.push(new CodecV(node("holder", "registry", keyOf(arg(args, 0))))); return; }
+        if (o.equals("RegistryCodecs") || o.equals("HolderSetCodec")) {
+            switch (name) {
+                case "homogeneousList", "holderSet", "create" -> { stack.push(new CodecV(node("holderset", "registry", keyOf(arg(args, 0))))); return; }
+                case "holder" -> {
+                    if (args.size() >= 2 && !(arg(args, 1) instanceof ConstV)) { stack.push(new CodecV(node("holder", "registry", keyOf(arg(args, 0)), "direct", nodeOf(arg(args, 1), depth)))); return; }
+                    stack.push(new CodecV(node("holder", "registry", keyOf(arg(args, 0))))); return;
+                }
+                default -> { stack.push(new CodecV(opaque("RegistryCodecs." + name))); return; }
+            }
+        }
+        if (owner.endsWith("resources/ResourceKey") && name.equals("codec")) { stack.push(new CodecV(node("resourcekey", "registry", keyOf(arg(args, 0))))); return; }
+        if ((owner.endsWith("core/Registry") || owner.endsWith("core/DefaultedRegistry") || owner.endsWith("core/DefaultedMappedRegistry") || owner.endsWith("core/MappedRegistry"))
+                && (name.equals("byNameCodec") || name.equals("holderByNameCodec"))) {
+            String reg = recv instanceof OtherV ov && ov.what().startsWith("builtin:") ? ov.what().substring(8) : "?";
+            stack.push(new CodecV(node(name.equals("byNameCodec") ? "registry" : "holder", "registry", reg))); return;
+        }
+        if (owner.endsWith("util/StringRepresentable") && (name.equals("fromEnum") || name.equals("fromValues") || name.equals("fromEnumWithMapping"))) {
+            V sup = arg(args, 0);
+            stack.push(new CodecV(sup instanceof LambdaV l ? enumNode(l.owner()) : opaque("StringRepresentable." + name))); return;
+        }
+        if (owner.endsWith("util/StringRepresentable$EnumCodec") || owner.endsWith("util/StringRepresentable")) {
+            if (isCodec(ret)) { stack.push(recv != null ? recv : new CodecV(opaque(o + "." + name))); return; }
+        }
+        if (owner.endsWith("network/chat/ComponentSerialization") && isCodec(ret)) { stack.push(new CodecV(node("text"))); return; }
+        if (owner.endsWith("world/flag/FeatureFlagRegistry") && name.equals("codec")) { stack.push(new CodecV(node("list", "elem", prim("IDENTIFIER")))); return; }
+
+        // --- anything else returning a codec: a static Minecraft factory is interpreted lazily
+        if (isCodec(ret)) {
+            if (isStatic && owner.startsWith("net/minecraft/")) { stack.push(new CallV(owner, name, desc, args)); return; }
+            stack.push(new CodecV(opaque(o + "." + name)));
+            return;
+        }
+        if (!ret.equals("V")) stack.push(new OtherV(o + "." + name));
+    }
+
+    // ---- node builders --------------------------------------------------------------
+
+    /** A keyed field of a record codec (fieldOf / optionalFieldOf). */
+    static Map<String, Object> field(Map<String, Object> type, String key, boolean optional, V dflt) {
+        Map<String, Object> f = new LinkedHashMap<>();
+        f.put("k", "field");
+        f.put("name", key == null ? null : camel(key));
+        f.put("key", key);
+        if (optional) f.put("optional", true);
+        String d = defaultOf(dflt, type);
+        if (d != null) f.put("default", d);
+        f.put("type", type);
+        return f;
+    }
+
+    /** forGetter(getter): names the field after a method reference; wraps an inline MapCodec (a struct) as an inline field. */
+    static Map<String, Object> named(Map<String, Object> n, V getter) {
+        String getterName = getter instanceof LambdaV l && !l.name().startsWith("lambda$") && !l.ctor() ? l.name() : null;
+        if ("field".equals(n.get("k"))) {
+            Map<String, Object> f = new LinkedHashMap<>(n);
+            if (getterName != null) f.put("name", getterName);
+            return f;
+        }
+        Map<String, Object> f = new LinkedHashMap<>();
+        f.put("k", "field");
+        f.put("name", getterName != null ? getterName : "struct".equals(n.get("k")) ? lowerFirst(shortName(String.valueOf(n.get("name"))).replace("$", "")) : "inline");
+        f.put("inline", true);
+        f.put("type", n);
+        return f;
+    }
+
+    /** Products$Pn.apply(instance, ctor): the struct of a group, named after the constructor reference (or the class being built). */
+    static Map<String, Object> structOf(Map<String, Object> group, V ctor, String self) {
+        String java = self;
+        if (ctor instanceof LambdaV l && l.ctor()) java = l.owner();
+        else if (ctor instanceof LambdaV l && !l.name().startsWith("lambda$") && !l.owner().equals("?")) java = l.owner();
+        List<Object> fields = new ArrayList<>();
+        Object fs = group.get("fields");
+        if (fs instanceof List<?> l) {
+            for (Object f : l) {
+                if (f instanceof Map<?, ?> m && "field".equals(m.get("k"))) {
+                    Object t = m.get("type");
+                    if (t instanceof Map<?, ?> tm && "unit".equals(tm.get("k"))) continue;   // MapCodec.unit(...).forGetter: no key
+                    Map<String, Object> fm = new LinkedHashMap<>(castMap(m));
+                    fm.remove("k");
+                    fields.add(fm);
+                } else if (f instanceof Map<?, ?> m) {
+                    fields.add(named(castMap(m), null));   // a bare MapCodec in group(): inline
+                }
+            }
+        } else {
+            return opaque("apply-without-group");
+        }
+        return node("struct", "name", shortName(java), "java", java, "fields", fields);
+    }
+
+    /** codec.dispatch([key,] toType, codecOf): cases from an enum whose constants carry their MapCodec. */
+    static Map<String, Object> dispatch(Map<String, Object> keyCodec, List<V> args, String self, int depth) {
+        String key = args.size() == 3 ? strOf(arg(args, 0)) : "type";
+        if (key == null) key = "type";
+        Map<String, Object> n = node("dispatch", "name", shortName(self), "java", self, "key", key, "keyType", keyCodec);
+        if ("enum".equals(keyCodec.get("k"))) {
+            List<Object> cases = enumCases(String.valueOf(keyCodec.get("java")), depth);
+            if (cases != null) n.put("cases", cases);
+        }
+        return n;
+    }
+
+    /** The MapCodec each constant of an enum passes to its constructor (ClickEvent.Action, HoverEvent.Action): [{id, name, type}]. */
+    static List<Object> enumCases(String enumClass, int depth) {
+        ClassModel cm = classModel(enumClass);
+        if (cm == null) return null;
+        List<Object> cases = new ArrayList<>();
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("<clinit>")) continue;
+            Deque<V> stack = new ArrayDeque<>();
+            Map<Integer, V> locals = new HashMap<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESPECIAL && ii.name().stringValue().equals("<init>")
+                        && (ii.owner().asInternalName().equals(enumClass) || ii.owner().asInternalName().startsWith(enumClass + "$"))) {
+                    List<V> a = popArgs(stack, GenPacketSchema.arity(ii.typeSymbol().descriptorString()));
+                    if (!stack.isEmpty()) stack.pop();
+                    List<String> strings = new ArrayList<>();
+                    V codec = null;
+                    for (V v : a) {
+                        if (v instanceof ConstV c && c.v() instanceof String s) strings.add(s);
+                        else if (codec == null && (v instanceof RefV || v instanceof CodecV || v instanceof CallV)) codec = v;
+                    }
+                    if (strings.isEmpty()) continue;
+                    String name = strings.get(0);
+                    String id = strings.size() >= 2 ? strings.get(1) : name.toLowerCase(Locale.ROOT);
+                    if (codec != null) cases.add(node("case", "id", id, "name", name, "type", nodeOf(codec, depth + 1)));
+                    continue;
+                }
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC) { stack.clear(); continue; }
+                step(el, stack, locals, enumClass, depth);
+            }
+            break;
+        }
+        return cases.isEmpty() ? null : cases;
+    }
+
+    /** A StringRepresentable enum: constant names and their serialized names. */
+    static Map<String, Object> enumNode(String enumClass) {
+        List<String> values = GenPacketSchema.enumValues(enumClass);
+        if (values == null) return opaque("enum:" + enumClass);
+        List<String> ids = new ArrayList<>();
+        try {
+            Class<?> c = GenPacketSchema.loadClass(enumClass);
+            Class<?> sr = Class.forName("net.minecraft.util.StringRepresentable");
+            var getName = sr.getMethod("getSerializedName");
+            for (Object o : c.getEnumConstants()) ids.add(String.valueOf(getName.invoke(o)));
+        } catch (Throwable t) {
+            ids.clear();
+        }
+        if (ids.size() != values.size()) {
+            ids.clear();
+            Map<String, String> fromInit = enumIdsFromClinit(enumClass);
+            for (String v : values) ids.add(fromInit.getOrDefault(v, v.toLowerCase(Locale.ROOT)));
+        }
+        return node("enum", "name", shortName(enumClass), "java", enumClass, "values", values, "ids", ids);
+    }
+
+    /** constant name → serialized name, from the second string each constant's constructor receives. */
+    static Map<String, String> enumIdsFromClinit(String enumClass) {
+        Map<String, String> out = new HashMap<>();
+        ClassModel cm = classModel(enumClass);
+        if (cm == null) return out;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("<clinit>")) continue;
+            List<String> strings = new ArrayList<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof ConstantInstruction ci && ci.constantValue() instanceof String s) strings.add(s);
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC) {
+                    if (strings.size() >= 2 && strings.get(0).equals(fi.name().stringValue())) out.put(strings.get(0), strings.get(1));
+                    strings.clear();
+                }
+            }
+            break;
+        }
+        return out;
+    }
+
+    static String defaultOf(V v, Map<String, Object> type) {
+        if (v == null) return null;
+        if (v instanceof ConstV c) {
+            if (c.v() == null) return null;
+            if (c.v() instanceof Integer i && "prim".equals(type.get("k")) && "BOOL".equals(type.get("t"))) return i != 0 ? "true" : "false";
+            return String.valueOf(c.v());
+        }
+        if (v instanceof OtherV o) {
+            String w = o.what();
+            int dot = w.lastIndexOf('.');
+            return dot >= 0 ? w.substring(dot + 1) : w;   // Skybox.OVERWORLD → OVERWORLD
+        }
+        return null;
+    }
+
+    static String summary(Map<String, Object> n) {
+        String k = String.valueOf(n.get("k"));
+        return switch (k) {
+            case "prim" -> String.valueOf(n.get("t"));
+            case "struct", "enum", "dispatch" -> k + ":" + n.get("name");
+            case "opaque" -> "opaque:" + n.get("java");
+            default -> k;
+        };
+    }
+
+    static String camel(String key) {
+        StringBuilder sb = new StringBuilder();
+        boolean up = false;
+        for (char c : key.toCharArray()) {
+            if (c == '_' || c == '-' || c == '/' || c == ':' || c == '.') { up = true; continue; }
+            sb.append(up ? Character.toUpperCase(c) : c);
+            up = false;
+        }
+        return sb.toString();
+    }
+    static String lowerFirst(String s) { return s.isEmpty() ? s : Character.toLowerCase(s.charAt(0)) + s.substring(1); }
+
+    @SuppressWarnings("unchecked") static Map<String, Object> castMap(Map<?, ?> m) { return (Map<String, Object>) m; }
+    @SuppressWarnings("unchecked") static List<Object> castList(List<?> l) { return (List<Object>) l; }
+
+    /** Registries.X → its id ("minecraft:worldgen/biome"), by reflection on the ResourceKey. */
+    static String registryId(String field) {
+        return registryIds.computeIfAbsent("Registries." + field, k -> {
+            try {
+                Object key = Class.forName("net.minecraft.core.registries.Registries").getField(field).get(null);
+                return String.valueOf(identifierOf(key));
+            } catch (Throwable t) {
+                return "minecraft:" + field.toLowerCase(Locale.ROOT);
+            }
+        });
+    }
+    /** BuiltInRegistries.X → the registry's id. */
+    static String builtinRegistryId(String field) {
+        return registryIds.computeIfAbsent("BuiltInRegistries." + field, k -> {
+            try {
+                Object reg = Class.forName("net.minecraft.core.registries.BuiltInRegistries").getField(field).get(null);
+                Object key = reg.getClass().getMethod("key").invoke(reg);
+                return String.valueOf(identifierOf(key));
+            } catch (Throwable t) {
+                return "minecraft:" + field.toLowerCase(Locale.ROOT);
+            }
+        });
+    }
+    static Object identifierOf(Object resourceKey) throws Exception {
+        for (String m : new String[]{"identifier", "location"}) {
+            try { return resourceKey.getClass().getMethod(m).invoke(resourceKey); } catch (NoSuchMethodException ignored) { }
+        }
+        return resourceKey;
+    }
+
+    // ---- coverage -------------------------------------------------------------------
+
+    @SuppressWarnings("unchecked")
+    static boolean hasHole(Map<String, Object> n) {
+        String k = String.valueOf(n.get("k"));
+        if (k.equals("opaque") || k.equals("either")) return true;
+        if (k.equals("dispatch") && n.get("cases") == null) return true;
+        for (Object v : n.values()) {
+            if (v instanceof Map<?, ?> m && m.containsKey("k") && hasHole((Map<String, Object>) m)) return true;
+            if (v instanceof List<?> l) for (Object o : l) {
+                if (o instanceof Map<?, ?> m) {
+                    Map<String, Object> mm = (Map<String, Object>) m;
+                    Object t = mm.get("type");
+                    if (t instanceof Map<?, ?> tm && hasHole((Map<String, Object>) tm)) return true;
+                    if (mm.containsKey("k") && hasHole(mm)) return true;
+                }
+            }
+        }
+        return false;
+    }
+}

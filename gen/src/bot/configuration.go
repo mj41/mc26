@@ -83,7 +83,7 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 			}
 
 		case packetid.ClientboundConfigCustomPayload:
-			var payload configuration.CustomPayload
+			var payload configuration.ClientboundCustomPayload
 			if err := p.Scan(&payload); err != nil {
 				return ConfigErr{"custom payload", err}
 			}

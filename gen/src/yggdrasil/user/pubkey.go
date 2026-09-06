@@ -43,19 +43,22 @@ func (p *PublicKey) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	}
-	p.ExpiresAt = time.UnixMilli(int64(ExpiresAt))
-	pubKey, err := x509.ParsePKIXPublicKey(PubKey)
-	if err != nil {
-		return n, err
-	}
-	if key, ok := pubKey.(*rsa.PublicKey); !ok {
-		return n, errors.New("expect RSA public key")
-	} else {
-		p.PubKey = key
-	}
+	*p, err = ParsePublicKey(int64(ExpiresAt), PubKey, Signature)
+	return n, err
+}
 
-	p.Signature = Signature
-	return n, nil
+// ParsePublicKey builds a PublicKey from its wire parts: the expiry in
+// milliseconds, the PKIX-encoded RSA key and Mojang's signature over it.
+func ParsePublicKey(expiresAtMillis int64, keyDER, signature []byte) (PublicKey, error) {
+	pubKey, err := x509.ParsePKIXPublicKey(keyDER)
+	if err != nil {
+		return PublicKey{}, err
+	}
+	key, ok := pubKey.(*rsa.PublicKey)
+	if !ok {
+		return PublicKey{}, errors.New("expect RSA public key")
+	}
+	return PublicKey{ExpiresAt: time.UnixMilli(expiresAtMillis), PubKey: key, Signature: signature}, nil
 }
 
 func (p *PublicKey) Verify() bool {

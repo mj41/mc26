@@ -36,8 +36,8 @@ func genComponent(jsonDir, goMCRoot string) error {
 		return fmt.Errorf("genComponent: %w", err)
 	}
 
-	// Generate individual type files first (so discoverImplementedTypes finds them).
-	if err := genComponentTypes(jsonDir, goMCRoot); err != nil {
+	// Generate the component types first (so discoverImplementedTypes finds them).
+	if err := genComponents(jsonDir, goMCRoot); err != nil {
 		return err
 	}
 

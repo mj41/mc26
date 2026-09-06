@@ -1,103 +1,55 @@
-# Hand-Crafted Generator Inputs
+# Hand-crafted generator inputs
 
-This directory contains manually maintained data files that serve as inputs
-to the Go code generators in `tools/`. These files describe information that
-cannot be derived from Minecraft's built-in data generator output.
-
-## Why Hand-Crafted?
-
-Mojang's data generator (`--all`) produces structured JSON for registries,
-blocks, packets, etc. — our generators consume those directly from
-`temp/jsons/<version>/`. However, some data has no machine-readable source:
-
-- **Component wire formats** — field types, serialization order, and NBT
-  wrapping are not in any Mojang output
-- **Go naming overrides** — abbreviation choices (`MapID` not `MapId`)
-  are language-specific conventions
-- **Protocol phase naming** — Go name abbreviations (`Config` not
-  `Configuration`) are style choices
-
-These files bridge the gap between Mojang data and Go code generation.
-
----
-
-## Files
-
-### component_schema.json
-
-Wire format schema for all data component types. Each entry describes how
-a component is serialized on the wire, using one of these patterns:
-
-| Pattern | Description | Generated Code |
-|---------|-------------|----------------|
-| `embed` | Struct embeds a single type | `type X struct { T }` — inherits R/W |
-| `embed_nbt` | Embeds `dynbt.Value`, R/W via `pk.NBT` | Explicit R/W with `pk.NBT(&x.Value)` |
-| `empty` | Unit type, no wire data | `struct{}`, no-op R/W |
-| `delegate` | Single named field, R/W delegates | Field + forwarding R/W methods |
-| `named_int` | Named `int32` type | Cast-based R/W via `(*pk.VarInt)` |
-| `array` | Single array field | `[]T`, R/W via `pk.Array` |
-| `tuple` | Multiple fields | `pk.Tuple{&f1, &f2, ...}` |
-| `custom` | Complex, skip generation | Keep hand-written file |
-
-**Delegate `serMethod` values:**
-- `direct` — delegates to field's own `ReadFrom`/`WriteTo`
-- `nbt` — wraps with `pk.NBT(&field)`
-- `nbtfield` — wraps with `pk.NBTField{V: &field, AllowUnknownFields: true}`
-
-**Tuple field type wrappers:**
-- `pk.Array[T]` — field is `[]T`, tuple arg is `pk.Array(&field)`
-- `pk.Option[T]` — field is `pk.Option[T, *T]`, tuple arg is `&field`
-- `pk.NBTField[T]` — field is `T`, tuple arg is `pk.NBTField{V: &field, AllowUnknownFields: true}`
+Files in this directory are maintained by hand and read by the generators. Each one covers
+something no Mojang output provides: a Go naming choice, or a decision about what stays
+hand-written. They are small on purpose; whenever a jar-derived source of truth appears, the
+entry moves out of here.
 
 ### naming_overrides.json
 
-Go naming convention overrides that cannot be derived from MC data:
-
-- **`component_names`** — maps snake_case component names (without `minecraft:`
-  prefix) to Go type names when `snakeToCamel()` produces the wrong result.
-  Example: `map_id` → `MapID` (Go treats "ID" as an initialism).
-- **`block_trim_prefix_types`** — block property enum types whose Go constants
-  omit the type-name prefix. Example: `Direction` → `Down`, `Up` (not
-  `DirectionDown`, `DirectionUp`). Style preference only.
-
-Used by: `gen_component.go`, `gen_component_types.go`, `gen_blocks.go`
+- `component_names`: Go type names for data components whose derived name would be wrong
+  (`map_id` → `MapID`, not `MapId`; `tnt` → `Tnt`).
+- `block_trim_prefix_types`: block-state property enums whose Go constants drop the type-name
+  prefix (`Direction` → `Down`, `Up`).
+- `field_names`: the field names of a packet or shared structure whose reader gives the walker
+  nothing to name the values by (`ClientboundCustomQueryPacket` reads three values into a
+  two-argument constructor; `BlockHitResult` folds three floats into a vector before its
+  constructor sees them), keyed by the Java short class name, in wire order; applied only when
+  the count matches.
+- `type_names`: Go type names for packet-side structures named after the class whose codec
+  built them rather than after what they carry (`ParticleTypes` → `ParticleOptions`).
+- `nbt_type_names`: Go type names for the NBT-shaped structures of `nbt_schema.json` whose Java
+  short name would read badly (`Style$Serializer` → `Style`, `ChatTypeDecoration` →
+  `Decoration`); every other name is derived from the Java class.
 
 ### packet_phases.json
 
-Protocol phase definitions in generation order. Each entry has:
-
-- `name` — MC JSON key (e.g. `"configuration"`)
-- `go_prefix` — Go constant name prefix (e.g. `"Config"`, or `""` for play)
-- `comment` — Human-readable name for section comments
-
-Used by: `gen_packetid.go`
-
----
-
-## Maintenance
-
-When adding support for a new Minecraft version:
-
-1. **New components**: Add entries to `component_schema.json`. Run
-   `go run ./tools/` — it will report any components in `components.json`
-   that lack a schema entry.
-2. **Naming issues**: If `snakeToCamel()` produces wrong Go names,
-   add overrides to `naming_overrides.json`.
-3. **New protocol phases**: Add entries to `packet_phases.json` (extremely
-   rare — hasn't changed since configuration phase was added in 1.20.2).
-
-## Data Source Reference
-
-| File | Source | Maintained by |
-|------|--------|---------------|
-| `component_schema.json` | MC wiki / decompiled source | Hand-written |
-| `naming_overrides.json` | Go style preferences | Hand-written |
-| `packet_phases.json` | Protocol structure | Hand-written |
+The protocol states in generation order with the prefix their packet-id constants get
+(`Config` for `configuration`, none for `play`, …) and a comment for the generated file.
 
 ### hand_packets.json
 
-The packets implemented by hand in `src/protocol/<state>/hand.go`, keyed
-`<state>/<flow>/<packet name>` with the reason. The packets generator skips them
-regardless of the schema's coverage; when a new Minecraft version's schema types one of
-them fully, the generator says so, and the hand-written version can be retired on purpose
-(remove it from `hand.go` and from this file) rather than colliding with a generated one.
+Packets implemented by hand in `src/protocol/<state>/hand.go`, keyed
+`<state>/<flow>/<packet name>` with the reason. Empty today: the last hand-written packets
+(custom payloads and queries, the chunk, the signed chat message, the player info update) are
+generated since the walker learned rest-of-packet payloads, length-prefixed buffers, entries
+guarded by an action bit set and leaf types kept by hand elsewhere (`externalHandTypes` in
+`gen_packets.go`: the signed-chat structures of `chat/sign`, the block entity of `level`). The
+generator still honours entries here — a packet listed is skipped regardless of the schema's
+coverage, and reported when the schema types it fully — so a packet whose shape changes faster
+than the walker can be parked here with a hand-written struct.
+
+### hand_components.json
+
+The data components implemented by hand in `src/level/component` (today: codecs the schema
+cannot type — a dispatch on an enum or a recursive codec), keyed by registry name with the
+reason. The components generator skips them regardless of coverage and says so when a newer
+schema types one fully. Every other component is generated from the `components` section of
+`packet_schema.json` (the stream codec of its `DataComponents` registration).
+
+## Adding or retiring an entry
+
+A new hand-written packet or component: implement it in `hand.go` or a file of
+`level/component`, add the key here with the reason, build. Retiring one: delete both. What
+is currently skipped and why is listed in the generated files themselves (`skipped_gen.go`
+for components, the header comment of each `*_gen.go` packet file).

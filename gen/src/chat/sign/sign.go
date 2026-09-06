@@ -23,7 +23,7 @@ type PackedMessageBody struct {
 	LastSeen  []PackedSignature
 }
 
-func (m *PackedMessageBody) WriteTo(w io.Writer) (n int64, err error) {
+func (m PackedMessageBody) WriteTo(w io.Writer) (n int64, err error) {
 	return pk.Tuple{
 		pk.String(m.PlainMsg),
 		pk.Long(m.Timestamp.UnixMilli()),
@@ -154,7 +154,7 @@ type FilterMask struct {
 	Mask pk.BitSet
 }
 
-func (f *FilterMask) WriteTo(w io.Writer) (n int64, err error) {
+func (f FilterMask) WriteTo(w io.Writer) (n int64, err error) {
 	n, err = pk.VarInt(f.Type).WriteTo(w)
 	if err != nil {
 		return

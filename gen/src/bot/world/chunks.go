@@ -61,17 +61,34 @@ func (w *World) onPlayerSpawn(pk.Packet) error {
 }
 
 func (w *World) handleLevelChunkWithLightPacket(packet pk.Packet) error {
-	currentDimType := w.c.Registries.DimensionType.GetByID(w.p.DimensionType)
+	currentDimType := w.c.Registries.DimensionType.GetByID(int32(w.p.Spawn.DimensionType))
 	if currentDimType == nil {
-		return fmt.Errorf("dimension type %d not found", w.p.DimensionType)
+		return fmt.Errorf("dimension type %d not found", w.p.Spawn.DimensionType)
 	}
-	chunk := play.NewLevelChunkWithLight(int(currentDimType.Height) / 16)
-	if err := packet.Scan(chunk); err != nil {
+	var p play.LevelChunkWithLight
+	if err := packet.Scan(&p); err != nil {
 		return err
 	}
-	w.Columns[chunk.Pos] = chunk.Chunk
+	// The section bytes are decoded with the dimension's height; the light
+	// arrays are not kept.
+	chunk := level.EmptyChunk(int(currentDimType.Height) / 16)
+	heightmaps := make(map[int32][]uint64, len(p.ChunkData.Heightmaps))
+	for _, e := range p.ChunkData.Heightmaps {
+		longs := make([]uint64, len(e.Val))
+		for i, v := range e.Val {
+			longs[i] = uint64(v)
+		}
+		heightmaps[int32(e.Key)] = longs
+	}
+	chunk.SetHeightmapData(heightmaps)
+	if err := chunk.PutData(p.ChunkData.Buffer); err != nil {
+		return err
+	}
+	chunk.BlockEntity = []level.BlockEntity(p.ChunkData.BlockEntitiesData)
+	pos := level.ChunkPos{int32(p.X), int32(p.Z)}
+	w.Columns[pos] = chunk
 	if w.events.LoadChunk != nil {
-		if err := w.events.LoadChunk(chunk.Pos); err != nil {
+		if err := w.events.LoadChunk(pos); err != nil {
 			return err
 		}
 	}

@@ -7,26 +7,12 @@ import (
 	pk "github.com/mj41/go-mc26/net/packet"
 )
 
-type Decoration struct {
-	TranslationKey string   `nbt:"translation_key"`
-	Parameters     []string `nbt:"parameters"`
-	Style          struct {
-		Bold          bool   `nbt:"bold,omitempty"`
-		Italic        bool   `nbt:"italic,omitempty"`
-		UnderLined    bool   `nbt:"underlined,omitempty"`
-		StrikeThrough bool   `nbt:"strikethrough,omitempty"`
-		Obfuscated    bool   `nbt:"obfuscated,omitempty"`
-		Color         string `nbt:"color,omitempty"`
-		Insertion     string `nbt:"insertion,omitempty"`
-		Font          string `nbt:"font,omitempty"`
-	} `nbt:"style,omitempty"`
-}
+// Decoration (style_gen.go) is the chat type decoration: a translation key,
+// the parameters it takes and a style. This file is its wire form inside an
+// inline chat type, and Decorate.
 
-// Type is the bound chat type sent with player/disguised chat packets.
-//
-// Wire (ChatType.Bound): chatType:registryEntryHolder, name:Component, targetName:Option<Component>.
-// The holder is VarInt(id+1) for a minecraft:chat_type registry entry, or 0 followed by
-// an inline ChatType (chat + narration decorations).
+// Type is the chat type bound to a player chat message: a registry id, or an
+// inline chat type when the server did not reference the registry.
 type Type struct {
 	ID         int32       // index into the minecraft:chat_type registry; -1 when Inline is set
 	Inline     *InlineType // inline chat type when the server did not reference the registry
@@ -34,31 +20,29 @@ type Type struct {
 	TargetName *Message
 }
 
-// InlineType is an inline ChatType (ChatType.DIRECT_STREAM_CODEC): chat + narration decorations.
 type InlineType struct {
 	Chat      Decoration
 	Narration Decoration
 }
 
-// decorationParameters is the wire enum ChatTypeDecoration.Parameter.
-var decorationParameters = []string{"sender", "target", "content"}
-
 func (d *Decoration) ReadFrom(r io.Reader) (n int64, err error) {
 	var params []pk.VarInt
+	var style Style
 	n, err = pk.Tuple{
 		(*pk.String)(&d.TranslationKey),
 		pk.Array(&params),
-		pk.NBTField{V: &d.Style, AllowUnknownFields: true},
+		pk.NBTField{V: &style, AllowUnknownFields: true},
 	}.ReadFrom(r)
 	if err != nil {
 		return
 	}
-	d.Parameters = make([]string, len(params))
+	d.Style = &style
+	d.Parameters = make([]DecorationParameter, len(params))
 	for i, v := range params {
-		if v < 0 || int(v) >= len(decorationParameters) {
+		if v < 0 || int(v) >= len(DecorationParameterValues) {
 			return n, fmt.Errorf("unknown chat decoration parameter %d", v)
 		}
-		d.Parameters[i] = decorationParameters[v]
+		d.Parameters[i] = DecorationParameterValues[v]
 	}
 	return
 }
@@ -67,7 +51,7 @@ func (d Decoration) WriteTo(w io.Writer) (n int64, err error) {
 	params := make([]pk.VarInt, len(d.Parameters))
 	for i, p := range d.Parameters {
 		idx := -1
-		for j, name := range decorationParameters {
+		for j, name := range DecorationParameterValues {
 			if name == p {
 				idx = j
 			}
@@ -77,10 +61,14 @@ func (d Decoration) WriteTo(w io.Writer) (n int64, err error) {
 		}
 		params[i] = pk.VarInt(idx)
 	}
+	style := d.Style
+	if style == nil {
+		style = &Style{}
+	}
 	return pk.Tuple{
 		pk.String(d.TranslationKey),
 		pk.Array(params),
-		pk.NBTField{V: &d.Style},
+		pk.NBTField{V: style},
 	}.WriteTo(w)
 }
 
@@ -92,37 +80,43 @@ func (i InlineType) WriteTo(w io.Writer) (int64, error) {
 	return pk.Tuple{i.Chat, i.Narration}.WriteTo(w)
 }
 
+// Decorate renders content through the decoration d: the translation with the
+// sender, target and content in the places the parameters name, in d's style.
 func (t *Type) Decorate(content Message, d *Decoration) (msg Message) {
 	with := make([]any, len(d.Parameters))
 	for i, para := range d.Parameters {
 		switch para {
-		case "sender":
+		case DecorationParameterSender:
 			with[i] = t.SenderName
-		case "target":
+		case DecorationParameterTarget:
 			if t.TargetName != nil {
 				with[i] = *t.TargetName
 			} else {
 				with[i] = Text("")
 			}
-		case "content":
+		case DecorationParameterContent:
 			with[i] = content
 		default:
 			with[i] = Text("<nil>")
 		}
 	}
-	return Message{
+	msg = Message{
 		Translate: d.TranslationKey,
 		With:      with,
-
-		Bold:          d.Style.Bold,
-		Italic:        d.Style.Italic,
-		UnderLined:    d.Style.UnderLined,
-		StrikeThrough: d.Style.StrikeThrough,
-		Obfuscated:    d.Style.Obfuscated,
-		Font:          d.Style.Font,
-		Color:         d.Style.Color,
-		Insertion:     d.Style.Insertion,
 	}
+	if s := d.Style; s != nil {
+		msg.Bold = s.Bold
+		msg.Italic = s.Italic
+		msg.UnderLined = s.Underlined
+		msg.StrikeThrough = s.Strikethrough
+		msg.Obfuscated = s.Obfuscated
+		msg.Font = s.Font
+		msg.Color = s.Color
+		msg.Insertion = s.Insertion
+		msg.ClickEvent = s.ClickEvent
+		msg.HoverEvent = s.HoverEvent
+	}
+	return msg
 }
 
 func (t *Type) ReadFrom(r io.Reader) (n int64, err error) {
@@ -164,7 +158,6 @@ func (t *Type) ReadFrom(r io.Reader) (n int64, err error) {
 	return n1 + n2 + n3, nil
 }
 
-// WriteTo encodes the bound chat type. Inline is written when set, otherwise the registry ID.
 func (t Type) WriteTo(w io.Writer) (int64, error) {
 	if t.Inline != nil {
 		return pk.Tuple{

@@ -73,7 +73,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: mc26 <command> [flags]
 
-  extract   --version V [--runtime podman|docker] [--dry-run]
+  extract   --version V [--runtime podman|docker] [--dry-run] [--only GenNbtSchema,…]
   build     --data DIR --out DIR [--version V] [--data-source S] [--no-test]
   smoke     --version V [--lib DIR] [--port N] [--runtime podman|docker|host]
   e2e       --version V [--lib DIR] [--examples DIR] [--port N] [--runtime …]
@@ -109,12 +109,12 @@ func tagBase(version string) (string, error) {
 func isPreRelease(version string) bool { return strings.Contains(version, "-") }
 
 // extractVersion runs the extraction into temp/data/<version> and returns the directory.
-func extractVersion(version, runtime string, dryRun bool) (string, *extract.Meta, error) {
+func extractVersion(version, runtime string, dryRun bool, only ...string) (string, *extract.Meta, error) {
 	root := paths.MustRoot()
 	out := filepath.Join(paths.DataRoot(), version)
 	meta, err := extract.Run(extract.Options{
 		Version: version, OutDir: out, CacheDir: paths.Cache(),
-		JavaDir: filepath.Join(root, "data-gen", "java"), Runtime: runtime, DryRun: dryRun,
+		JavaDir: filepath.Join(root, "data-gen", "java"), Runtime: runtime, DryRun: dryRun, Only: only,
 		ExtractorRepo: repoName, ExtractorCommit: gitx.ShortHead(root), Log: logf,
 	})
 	return out, meta, err
@@ -252,11 +252,16 @@ func cmdExtract(args []string) error {
 	version := fs.String("version", "", "Minecraft version id (26.1 or later)")
 	runtime := fs.String("runtime", "", "podman or docker (detected)")
 	dryRun := fs.Bool("dry-run", false, "print the container command only")
+	only := fs.String("only", "", "run just these extractors (comma-separated, e.g. GenNbtSchema) into the existing temp/data/<version>")
 	fs.Parse(args)
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
-	out, meta, err := extractVersion(*version, *runtime, *dryRun)
+	var onlyList []string
+	if *only != "" {
+		onlyList = strings.Split(*only, ",")
+	}
+	out, meta, err := extractVersion(*version, *runtime, *dryRun, onlyList...)
 	if err != nil {
 		return err
 	}

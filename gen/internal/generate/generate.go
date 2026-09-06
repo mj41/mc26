@@ -54,6 +54,8 @@ var Generators = []Generator{
 	{"biome", genBiome},
 	{"lang", genLang},
 	{"packets", genPackets},
+	{"nbt", genNBT},
+	{"constants", genConstants},
 }
 
 // Run executes every generator.

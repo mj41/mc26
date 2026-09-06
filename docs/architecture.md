@@ -53,8 +53,10 @@ Minecraft versions. The three newest versions receive fixes; older branches are 
 Its history is exactly the sequence of Minecraft versions; an extractor refactor never touches
 it. Anything — a Java or Rust generator, a test suite, a script — can consume it by tag or raw
 URL without Go or Java. A diff between two branches is the change between two Minecraft
-versions, readable without running anything. It also holds the two files nobody else publishes:
-`packet_schema.json` (typed wire layout of every packet) and `component_schema.json`.
+versions, readable without running anything. It also holds the files nobody else publishes:
+`packet_schema.json` (the typed wire layout of every packet, shared structure and data
+component), `nbt_schema.json` (the registry elements and chat structures as NBT) and
+`entity_data.json` (the entity metadata layout).
 
 ## What is hand-written, what is generated
 

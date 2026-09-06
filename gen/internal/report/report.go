@@ -215,24 +215,29 @@ func machinery(genRoot string, r *Result) error {
 func topLevelEntries(data []byte) int {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(data, &obj); err == nil {
-		// naming_overrides.json nests its maps one level down
-		if len(obj) <= 3 {
-			total := 0
-			for _, v := range obj {
-				var inner map[string]json.RawMessage
-				var list []json.RawMessage
-				switch {
-				case json.Unmarshal(v, &inner) == nil:
-					total += len(inner)
-				case json.Unmarshal(v, &list) == nil:
-					total += len(list)
-				default:
-					total++
-				}
+		// keys starting with "_" are comments; a file whose values are all objects or
+		// arrays (naming_overrides.json) counts the entries one level down
+		nested, total, plain := true, 0, 0
+		for k, v := range obj {
+			if strings.HasPrefix(k, "_") {
+				continue
 			}
+			plain++
+			var inner map[string]json.RawMessage
+			var list []json.RawMessage
+			switch {
+			case json.Unmarshal(v, &inner) == nil:
+				total += len(inner)
+			case json.Unmarshal(v, &list) == nil:
+				total += len(list)
+			default:
+				nested = false
+			}
+		}
+		if nested {
 			return total
 		}
-		return len(obj)
+		return plain
 	}
 	var list []json.RawMessage
 	if err := json.Unmarshal(data, &list); err == nil {

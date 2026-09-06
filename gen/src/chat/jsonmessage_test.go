@@ -15,7 +15,7 @@ import (
 var jsons = []string{
 	`{"extra":[{"color":"green","text":"故我依然"},{"color":"white","text":"™ "},{"color":"gray","text":"Kun_QwQ"},{"color":"white","text":": 为什么想要用炼药锅灭火时总是跳不进去"}],"text":""}`,
 
-	`{"translate":"chat.type.text","with":[{"insertion":"Xi_Xi_Mi","clickEvent":{"action":"suggest_command","value":"/tell Xi_Xi_Mi "},"hoverEvent":{"action":"show_entity","value":{"text":"{name:\"{\\\"text\\\":\\\"Xi_Xi_Mi\\\"}\",id:\"c1445a67-7551-4d7e-813d-65ef170ae51f\",type:\"minecraft:player\"}"}},"text":"Xi_Xi_Mi"},"好像是这个id。。"]}`,
+	`{"translate":"chat.type.text","with":[{"insertion":"Xi_Xi_Mi","click_event":{"action":"suggest_command","command":"/tell Xi_Xi_Mi "},"hover_event":{"action":"show_entity","id":"minecraft:player","uuid":"c1445a67-7551-4d7e-813d-65ef170ae51f","name":{"text":"Xi_Xi_Mi"}},"text":"Xi_Xi_Mi"},"好像是这个id。。"]}`,
 	`{"translate":"translation.test.none"}`,
 	`{"translate":"translation.test.escape","with":["str1","str2"]}`,
 	`{"translate":"translation.test.args","with":["str1","str2"]}`,
@@ -152,15 +152,15 @@ func TestMessage_UnmarshalJSON_hoverEvent(t *testing.T) {
 		"text": "Text0",
 		"extra": [
 			{
-				"hoverEvent": {"action": "show_text","value": "la"},
+				"hover_event": {"action": "show_text","value": "la"},
 				"text": "Text1"
 			},
 			{
-				"hoverEvent": {"action": "show_text","value": {"text":"la","color":"red"}},
+				"hover_event": {"action": "show_text","value": {"text":"la","color":"red"}},
 				"text": "Text2"
 			},
 			{
-				"hoverEvent": {"action": "show_text","value": [{"color": "white","text": "Normal"}]},
+				"hover_event": {"action": "show_text","value": [{"color": "white","text": "Normal"}]},
 				"text": "Text3"
 			}
 		]

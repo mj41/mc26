@@ -67,8 +67,8 @@ type Message struct {
 	// When shift is held, clicking the component inserts the given text
 	// into the chat box at the cursor (potentially replacing selected text).
 	Insertion  string      `json:"insertion,omitempty" nbt:"insertion,omitempty"`
-	ClickEvent *ClickEvent `json:"clickEvent,omitempty" nbt:"clickEvent,omitempty"`
-	HoverEvent *HoverEvent `json:"hoverEvent,omitempty" nbt:"hoverEvent,omitempty"`
+	ClickEvent *ClickEvent `json:"click_event,omitempty" nbt:"click_event,omitempty"`
+	HoverEvent *HoverEvent `json:"hover_event,omitempty" nbt:"hover_event,omitempty"`
 
 	Translate string        `json:"translate,omitempty" nbt:"translate,omitempty"`
 	With      TranslateArgs `json:"with,omitempty" nbt:"with,omitempty"`
@@ -91,8 +91,8 @@ type translateMsg struct {
 	Color string `json:"color,omitempty" nbt:"color,omitempty"`
 
 	Insertion  string      `json:"insertion,omitempty" nbt:"insertion,omitempty"`
-	ClickEvent *ClickEvent `json:"clickEvent,omitempty" nbt:"clickEvent,omitempty"`
-	HoverEvent *HoverEvent `json:"hoverEvent,omitempty" nbt:"hoverEvent,omitempty"`
+	ClickEvent *ClickEvent `json:"click_event,omitempty" nbt:"click_event,omitempty"`
+	HoverEvent *HoverEvent `json:"hover_event,omitempty" nbt:"hover_event,omitempty"`
 
 	Translate string        `json:"translate,omitempty" nbt:"translate,omitempty"`
 	With      TranslateArgs `json:"with,omitempty" nbt:"with,omitempty"`

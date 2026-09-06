@@ -134,6 +134,9 @@ func stripMinecraftPrefix(name string) string {
 type namingOverrides struct {
 	ComponentNames       map[string]string `json:"component_names"`
 	BlockTrimPrefixTypes []string          `json:"block_trim_prefix_types"`
+	NBTTypeNames         map[string]string   `json:"nbt_type_names"`
+	FieldNames           map[string][]string `json:"field_names"`
+	TypeNames            map[string]string   `json:"type_names"`
 }
 
 // packetPhase represents one entry in hand-crafted/packet_phases.json.

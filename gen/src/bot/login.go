@@ -109,8 +109,8 @@ func (c *Client) joinLogin(conn *net.Conn) error {
 				if err != nil {
 					return LoginErr{"Login Plugin", err}
 				}
-				answer.Data.Has = true
-				answer.Data.Val = data
+				answer.Payload.Has = true
+				answer.Payload.Val = data
 			}
 			if err := conn.WritePacket(pk.Marshal(answer.PacketID(), answer)); err != nil {
 				return LoginErr{"login Plugin", err}

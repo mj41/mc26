@@ -8,5 +8,17 @@
     "Direction",
     "FrontAndTop",
     "Half"
-  ]
+  ],
+  "field_names": {
+    "ClientboundCustomQueryPacket": ["transactionId", "channel", "data"],
+    "BlockHitResult": ["pos", "direction", "cursorX", "cursorY", "cursorZ", "inside", "worldBorderHit"]
+  },
+  "type_names": {
+    "ParticleTypes": "ParticleOptions"
+  },
+  "nbt_type_names": {
+    "Style$Serializer": "Style",
+    "ChatTypeDecoration": "Decoration",
+    "ChatTypeDecoration$Parameter": "DecorationParameter"
+  }
 }

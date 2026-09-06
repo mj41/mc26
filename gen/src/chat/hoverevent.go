@@ -1,40 +1,19 @@
 package chat
 
-// HoverEvent defines an event that occurs when this component hovered over.
-type HoverEvent struct {
-	Action   string  `json:"action" nbt:"action"`
-	Contents any     `json:"contents" nbt:"contents"` // Didn't handled yet
-	Value    Message `json:"value" nbt:"value"`       // Legacy
-}
+// HoverEvent (style_gen.go) is the tooltip of a text component: its Action
+// selects the case and the case's fields carry the content.
 
-type HoverSub struct {
-	Color string `json:"color"`
-	Text  string `json:"text"`
-}
-
-// ShowText show the text to display.
+// ShowText shows a text component as the tooltip.
 func ShowText(text Message) *HoverEvent {
-	return &HoverEvent{
-		Action: "show_text",
-		Value:  text,
-	}
+	return &HoverEvent{Action: HoverEventActionShowText, Value: &text}
 }
 
-// ShowItem show the item to display.
-// Item is encoded as the S-NBT format, nbt.StringifiedMessage could help.
-// See: https://wiki.vg/Chat#:~:text=show_item,in%20red%20instead.
+// ShowItem shows an item's tooltip (the item id, e.g. "minecraft:diamond").
 func ShowItem(item string) *HoverEvent {
-	return &HoverEvent{
-		Action: "show_item",
-		Value:  Text(item),
-	}
+	return &HoverEvent{Action: HoverEventActionShowItem, ID: item, Count: 1}
 }
 
-// ShowEntity show an entity describing by the S-NBT, nbt.StringifiedMessage could help.
-// See: https://wiki.vg/Chat#:~:text=show_entity,given%20entity%20loaded.
-func ShowEntity(entity string) *HoverEvent {
-	return &HoverEvent{
-		Action: "show_entity",
-		Value:  Text(entity),
-	}
+// ShowEntity shows an entity's tooltip (the entity type id, e.g. "minecraft:player").
+func ShowEntity(entityType string) *HoverEvent {
+	return &HoverEvent{Action: HoverEventActionShowEntity, ID: entityType}
 }

@@ -2,12 +2,9 @@ package screen
 
 import (
 	"errors"
-	"fmt"
-	"io"
 
 	"github.com/mj41/go-mc26/bot"
 	"github.com/mj41/go-mc26/data/packetid"
-	"github.com/mj41/go-mc26/level/component"
 	pk "github.com/mj41/go-mc26/net/packet"
 	"github.com/mj41/go-mc26/protocol/play"
 	"github.com/mj41/go-mc26/protocol/types"
@@ -72,7 +69,7 @@ func hashedStackOf(s *Slot) hashedStack {
 	if s == nil || s.Count <= 0 {
 		return hashedStack{}
 	}
-	return hashedStack{Has: true, Val: types.HashedStackActualItem{Item: s.ID, Count: s.Count}}
+	return hashedStack{Has: true, Val: types.HashedStackActualItem{Item: s.ItemID, Count: s.Count}}
 }
 
 func (m *Manager) onOpenScreen(p pk.Packet) error {
@@ -110,11 +107,8 @@ func (m *Manager) onSetContentPacket(p pk.Packet) error {
 		return Error{err}
 	}
 	ContainerID, StateID := sc.ContainerID, sc.StateID
-	SlotData := make([]Slot, len(sc.Items))
-	for i := range sc.Items {
-		SlotData[i] = slotOf(sc.Items[i])
-	}
-	m.Cursor = slotOf(sc.CarriedItem)
+	SlotData := []Slot(sc.Items)
+	m.Cursor = sc.CarriedItem
 	m.stateID = int32(StateID)
 	// copy the slot data to container
 	container, ok := m.Screens[int(ContainerID)]
@@ -164,7 +158,7 @@ func (m *Manager) onSetSlot(p pk.Packet) (err error) {
 		return Error{err}
 	}
 	ContainerID, StateID, SlotID := ss.ContainerID, ss.StateID, ss.Slot
-	SlotData := slotOf(ss.ItemStack)
+	SlotData := ss.ItemStack
 
 	m.stateID = int32(StateID)
 	if ContainerID == -1 && SlotID == -1 {
@@ -193,7 +187,7 @@ func (m *Manager) onSetPlayerInventory(p pk.Packet) error {
 	if err := p.Scan(&spi); err != nil {
 		return Error{err}
 	}
-	SlotID, SlotData := spi.Slot, slotOf(spi.Contents)
+	SlotID, SlotData := spi.Slot, spi.Contents
 	if err := m.Inventory.onSetSlot(int(SlotID), SlotData); err != nil {
 		return Error{err}
 	}
@@ -205,92 +199,9 @@ func (m *Manager) onSetPlayerInventory(p pk.Packet) error {
 	return nil
 }
 
-type Slot struct {
-	ID               pk.VarInt
-	Count            pk.VarInt
-	ComponentsAdd    int32 // number of component patches to add (informational)
-	ComponentsRemove int32 // number of component patches to remove (informational)
-}
-
-// slotOf converts a wire item stack (protocol/types.ItemStack) into the
-// screen's Slot summary.
-func slotOf(s types.ItemStack) Slot {
-	return Slot{
-		ID:               s.ItemID,
-		Count:            s.Count,
-		ComponentsAdd:    int32(s.AddedCount),
-		ComponentsRemove: int32(s.RemovedCount),
-	}
-}
-
-func (s *Slot) WriteTo(w io.Writer) (n int64, err error) {
-	// Post-1.20.5 format: Count (VarInt, 0=empty) → ItemID → ComponentsAdd → ComponentsRemove → data
-	n, err = s.Count.WriteTo(w)
-	if err != nil || s.Count <= 0 {
-		return
-	}
-	var n2 int64
-	n2, err = pk.Tuple{
-		s.ID,
-		pk.VarInt(s.ComponentsAdd),
-		pk.VarInt(s.ComponentsRemove),
-		// Component data not supported yet — only items with 0 components can be sent
-	}.WriteTo(w)
-	return n + n2, err
-}
-
-func (s *Slot) ReadFrom(r io.Reader) (n int64, err error) {
-	var componentsAdd, componentsRemove pk.VarInt
-	n, err = pk.Tuple{
-		&s.Count, pk.Opt{
-			Has: func() bool { return s.Count > 0 },
-			Field: pk.Tuple{
-				&s.ID,
-				&componentsAdd,
-				&componentsRemove,
-			},
-		},
-	}.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	s.ComponentsAdd = int32(componentsAdd)
-	s.ComponentsRemove = int32(componentsRemove)
-
-	// Read component data for added components
-	for i := int32(0); i < s.ComponentsAdd; i++ {
-		var componentType pk.VarInt
-		var n2 int64
-		n2, err = componentType.ReadFrom(r)
-		n += n2
-		if err != nil {
-			return
-		}
-		comp := component.NewComponent(int32(componentType))
-		if comp == nil {
-			err = fmt.Errorf("unsupported component type %d in slot item %d", componentType, s.ID)
-			return
-		}
-		n2, err = comp.ReadFrom(r)
-		n += n2
-		if err != nil {
-			return
-		}
-	}
-
-	// Read component IDs for removed components (just VarInt type IDs, no data)
-	for i := int32(0); i < s.ComponentsRemove; i++ {
-		var componentType pk.VarInt
-		var n2 int64
-		n2, err = componentType.ReadFrom(r)
-		n += n2
-		if err != nil {
-			return
-		}
-	}
-
-	return
-}
+// Slot is one slot of a container: the item stack the server sent, with its
+// count, item id and component patch (types.ItemStack); count 0 is empty.
+type Slot = types.ItemStack
 
 type Container interface {
 	onSetSlot(i int, s Slot) error

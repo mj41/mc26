@@ -73,7 +73,7 @@ func (m *Manager) handlePlayerChat(packet pk.Packet) error {
 		return err
 	}
 	sender, index, signature, body := pc.Sender, pc.Index, pc.Signature, pc.Body
-	unsignedContent, filter, chatType := pc.UnsignedContent, pc.Filter, pc.ChatType
+	unsignedContent, filter, chatType := pc.UnsignedContent, pc.FilterMask, pc.ChatType
 
 	unpackedMsg, err := body.Unpack(&m.SignatureCache)
 	if err != nil {
@@ -102,7 +102,7 @@ func (m *Manager) handlePlayerChat(packet pk.Packet) error {
 			Session: uuid.Nil,
 		}
 	}
-	message.Signature = signature.Pointer()
+	message.Signature = (*sign.Signature)(signature.Pointer()) // the same 256 bytes as types.MessageSignature
 	message.MessageBody = unpackedMsg
 	message.Unsigned = unsignedContent.Pointer()
 	message.FilterMask = filter
@@ -114,7 +114,7 @@ func (m *Manager) handlePlayerChat(packet pk.Packet) error {
 		}
 		validated = true
 		// store signature into signatureCache
-		m.PopOrInsert(signature.Pointer(), message.LastSeen)
+		m.PopOrInsert(message.Signature, message.LastSeen)
 	}
 
 	var content chat.Message

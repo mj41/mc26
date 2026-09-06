@@ -5,10 +5,10 @@
 // The [Player] is attached to a [Client] by calling [NewPlayer] before the client joins a server.
 //
 // There is 4 kinds of clientbound packet is handled by this package.
-//   - LoginPacket, for cache player info. The player info will be stored in [Player.PlayerInfo].
+//   - LoginPacket, kept as [Player.Login]; its spawn info as [Player.Spawn].
 //   - KeepAlivePacket, for avoid the client to be kicked by the server.
 //   - PlayerPosition, is only received when server teleporting the player.
-//   - Respawn, for updating player info, which may change when player respawned.
+//   - Respawn, which replaces [Player.Spawn].
 //
 // # [EventsListener]
 //
@@ -31,8 +31,14 @@ type Player struct {
 	c        *bot.Client
 	Settings Settings
 
-	PlayerInfo
-	WorldInfo
+	// Login is the last play.Login the server sent: the entity id, the level
+	// names, the view and simulation distances, the game rules the client is
+	// told about (hardcore, reduced debug info, the death screen, …).
+	Login play.Login
+	// Spawn is the spawn info of the dimension the player is in, from Login and
+	// then from every Respawn: the dimension type and name, the game mode, the
+	// last death location, the sea level.
+	Spawn types.CommonPlayerSpawnInfo
 }
 
 // NewPlayer create a new Player manager.
