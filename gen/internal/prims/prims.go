@@ -77,6 +77,12 @@ func Used(schemaPath string) (map[string]int, error) {
 				out[t]++
 			}
 		}
+		// a packed integer names the primitive it is read as, not a prim node
+		if n["k"] == "bits" {
+			if t, ok := n["of"].(string); ok {
+				out[t]++
+			}
+		}
 	})
 	return out, nil
 }

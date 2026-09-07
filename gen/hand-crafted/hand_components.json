@@ -1,11 +1,3 @@
 {
-  "_comment": "Data components implemented by hand in src/level/component (a codec the schema cannot type yet: a dispatch, a recursive codec). The components generator skips them even when the schema types them fully, and says so. Key: the registry name.",
-  "minecraft:attribute_modifiers": "entry display type is a dispatch",
-  "minecraft:can_break": "block predicates dispatch on the property matcher",
-  "minecraft:can_place_on": "block predicates dispatch on the property matcher",
-  "minecraft:consumable": "consume effects are a recursive dispatch",
-  "minecraft:death_protection": "consume effects are a recursive dispatch",
-  "minecraft:potion_contents": "custom effects list carries a dispatch",
-  "minecraft:profile": "static/partial profile is a dispatch",
-  "minecraft:tooltip_display": "hidden components are a set of registry ids with a custom codec"
+  "_comment": "Data components implemented by hand in src/level/component (a codec the schema cannot type yet). The components generator skips them even when the schema types them fully, and says so. Key: the registry name. Empty since 26.3-pre-2: every component the extractor meets is described."
 }

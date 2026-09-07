@@ -27,6 +27,8 @@ type (
 	EnumSet[E wire.EnumType]                                                     = wire.EnumSet[E]
 	Box[T pk.FieldEncoder, P wire.Ptr[T]]                                        = wire.Box[T, P]
 	Either[L pk.FieldEncoder, PL wire.Ptr[L], R pk.FieldEncoder, PR wire.Ptr[R]] = wire.Either[L, PL, R, PR]
+	LenPrefixed[T pk.FieldEncoder, PT wire.Ptr[T]]                               = wire.LenPrefixed[T, PT]
+	Counted[T pk.FieldEncoder, PT wire.Ptr[T]]                                   = wire.Counted[T, PT]
 	IDSet                                                                        = wire.IDSet
 	NBT                                                                          = wire.NBT
 	OptionalNBT                                                                  = wire.OptionalNBT
@@ -37,6 +39,7 @@ type (
 	RestBytes                                                                    = wire.RestBytes
 	OptionalVarInt                                                               = wire.OptionalVarInt
 	Instant                                                                      = wire.Instant
+	ByteBitSet                                                                   = wire.ByteBitSet
 	Empty                                                                        = wire.Empty
 )
 
@@ -131,4 +134,9 @@ func (d EntityData) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	m, err := pk.UnsignedByte(0xff).WriteTo(w)
 	return n + m, err
+}
+
+// CountedOf pairs a Counted with the count another field holds; see wire.CountedOf.
+func CountedOf[T pk.FieldEncoder, PT wire.Ptr[T]](s *Counted[T, PT], count int) pk.Field {
+	return wire.CountedOf[T, PT](s, count)
 }

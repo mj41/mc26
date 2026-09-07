@@ -201,6 +201,14 @@ type Options struct {
 	Runtime string // see Server.Runtime
 	Timeout time.Duration
 	Log     func(format string, args ...any)
+	// TestRun selects which tests run (the -run pattern); empty means TestSmoke.
+	TestRun string
+	// Env is added to the test's environment, for a test that needs more than
+	// the server's address (the capture file, say).
+	Env []string
+	// ClientAddr is what the test connects to when that is not the server
+	// itself: a recording proxy in front of it.
+	ClientAddr string
 }
 
 // Run starts the server, runs the library's smoke test, stops the server.
@@ -219,14 +227,23 @@ func Run(o Options) error {
 	if err := srv.WaitReady(o.Timeout); err != nil {
 		return err
 	}
-	o.Log("smoke: server ready, running go test ./bot -run TestSmoke")
-	test := exec.Command("go", "test", "./bot", "-run", "TestSmoke", "-count=1", "-v")
+	run := o.TestRun
+	if run == "" {
+		run = "TestSmoke"
+	}
+	o.Log("smoke: server ready, running go test ./bot -run %s", run)
+	test := exec.Command("go", "test", "./bot", "-run", run, "-count=1", "-v")
 	test.Dir = o.LibDir
+	addr := srv.Addr()
+	if o.ClientAddr != "" {
+		addr = o.ClientAddr
+	}
 	test.Env = append(os.Environ(),
-		"MC26_SMOKE_ADDR="+srv.Addr(),
+		"MC26_SMOKE_ADDR="+addr,
 		"MC26_SMOKE_RCON="+srv.RCONAddr(),
 		"MC26_SMOKE_RCON_PASSWORD="+srv.RCONPassword,
 	)
+	test.Env = append(test.Env, o.Env...)
 	out, err := test.CombinedOutput()
 	o.Log("%s", strings.TrimSpace(string(out)))
 	if err != nil {

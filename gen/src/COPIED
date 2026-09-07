@@ -11,6 +11,7 @@ bot/basic/keepalive.go	modified
 bot/basic/ping.go	modified
 bot/basic/settings.go	modified
 bot/basic/tags.go	modified
+bot/capture_check_test.go	new
 bot/client.go	upstream
 bot/commands_smoke_test.go	new
 bot/configuration.go	modified
@@ -57,9 +58,7 @@ level/block/utilfuncs.go	upstream
 level/chunk.go	modified
 level/chunkpos_test.go	new
 level/chunkstatus.go	upstream
-level/component/attributemodifiers.go	modified
 level/component/delimited_test.go	new
-level/component/profile.go	new
 level/component/types.go	new
 level/palette.go	modified
 level/palette_test.go	upstream
@@ -101,7 +100,7 @@ net/conn.go	upstream
 net/interface.go	upstream
 net/packet/builder.go	upstream
 net/packet/joingame_test.bin	upstream
-net/packet/packet.go	upstream
+net/packet/packet.go	modified
 net/packet/packet_test.go	upstream
 net/packet/types.go	upstream
 net/packet/types_test.go	upstream
@@ -190,10 +189,5 @@ yggdrasil/validate.go	upstream
 yggdrasil/yggdrasil.go	upstream
 yggdrasil/yggdrasil_test.go	upstream
 bot/smoke_test.go	new
-level/component/canbreak.go	new
-level/component/canplaceon.go	new
-level/component/consumable.go	new
-level/component/deathprotection.go	new
-level/component/potioncontents.go	new
-level/component/tooltipdisplay.go	new
+bot/traffic_smoke_test.go	new
 wire/wire.go	new

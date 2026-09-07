@@ -40,6 +40,13 @@ func genComponents(jsonDir, outRoot string) error {
 	delete(hand, "_comment")
 
 	gs := newComponentGenState()
+	// A component whose value is a union keyed by a registry needs the numeric ids of
+	// that registry's entries, the same as a packet does.
+	var regs registriesJSON
+	if err := readJSON(filepath.Join(jsonDir, "registries.json"), &regs); err != nil {
+		return fmt.Errorf("genComponents: %w", err)
+	}
+	gs.registryIDs = regs
 	// Component type names win over record and enum names.
 	gs.reserved = map[string]bool{}
 	for name := range schema.Components {
@@ -119,9 +126,13 @@ func (gs *genState) componentDef(name string, e schemaEntry) (componentDef, erro
 		if len(vals) == 0 {
 			return def, fmt.Errorf("enum %v without values", n["name"])
 		}
+		ids, err := enumIDs(n)
+		if err != nil {
+			return def, err
+		}
 		def.Java = str(n["name"])
 		// The component type is the enum itself, under the component's name.
-		enumName := gs.enumNamed(def.GoName, def.Java, vals)
+		enumName := gs.enumNamed(def.GoName, def.Java, vals, ids)
 		if enumName != def.GoName {
 			def.Kind = "value"
 			def.Value = enumName
@@ -142,7 +153,7 @@ func (gs *genState) componentDef(name string, e schemaEntry) (componentDef, erro
 
 // enumNamed registers an enum under a chosen Go name (the component's), or
 // returns the name it already has.
-func (gs *genState) enumNamed(goName, java string, vals []any) string {
+func (gs *genState) enumNamed(goName, java string, vals []any, ids []int) string {
 	var values []string
 	for _, v := range vals {
 		values = append(values, v.(string))
@@ -153,9 +164,9 @@ func (gs *genState) enumNamed(goName, java string, vals []any) string {
 		}
 	}
 	if e, ok := gs.enums[goName]; ok && e.Java != java {
-		return gs.enum(java, vals)
+		return gs.enum(java, vals, ids)
 	}
-	gs.enums[goName] = &pktEnumDef{GoName: goName, Java: java, Values: values}
+	gs.enums[goName] = &pktEnumDef{GoName: goName, Java: java, Values: values, IDs: ids}
 	return goName
 }
 

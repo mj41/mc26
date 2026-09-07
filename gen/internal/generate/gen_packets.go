@@ -38,11 +38,13 @@ type packetsReport map[string]map[string]map[string]struct {
 // one target package (protocol/types for the packets, level/component for the
 // data components).
 type genState struct {
-	enums      map[string]*pktEnumDef // Go name -> def
-	structs    map[string]*structDef  // Go name -> def
-	unions     map[string]*unionDef   // Go name -> def
+	enums      map[string]*pktEnumDef   // Go name -> def
+	structs    map[string]*structDef    // Go name -> def
+	unions     map[string]*unionDef     // Go name -> def
 	whiles     map[string]*whileListDef // Go name -> def
 	whileOrder []string
+	bits       map[string]*bitsDef // Go name -> def
+	bitsOrder  []string
 	order      []string // struct emission order (dependencies first)
 	unionOrder []string
 	fixedBits  map[int]bool // sizes of fixed bit sets seen (readFixedBitSet(n))
@@ -77,7 +79,7 @@ func newPacketGenState() *genState {
 		reserved[name] = true
 	}
 	return &genState{
-		enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, unions: map[string]*unionDef{}, whiles: map[string]*whileListDef{},
+		enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, unions: map[string]*unionDef{}, whiles: map[string]*whileListDef{}, bits: map[string]*bitsDef{},
 		fixedBits: map[int]bool{}, fixedBytes: map[int]bool{},
 		pkg: "types", q: "types.", wire: "types.", prims: primTypes, hand: hand, reserved: reserved,
 	}
@@ -107,7 +109,7 @@ func newComponentGenState() *genState {
 		"ComponentPatch": "Patch", "TypedDataComponent": "Typed",
 	}
 	return &genState{
-		enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, unions: map[string]*unionDef{}, whiles: map[string]*whileListDef{},
+		enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, unions: map[string]*unionDef{}, whiles: map[string]*whileListDef{}, bits: map[string]*bitsDef{},
 		fixedBits: map[int]bool{}, fixedBytes: map[int]bool{},
 		pkg: "component", q: "", wire: "wire.", prims: prims, hand: hand,
 	}
@@ -120,6 +122,9 @@ type pktEnumDef struct {
 	// Names is set for an enum that travels as its serialized name instead of
 	// its ordinal (StringRepresentable): one name per constant.
 	Names []string
+	// IDs is set when the number on the wire is not the ordinal: an enum whose
+	// stream codec is an id mapper sends an id the constant carries instead.
+	IDs []int
 }
 
 type structDef struct {
@@ -137,6 +142,27 @@ type unionDef struct {
 	ByEnum   bool   // the key is an enum ordinal, not a registry id
 	Cases    []unionCase
 	Fields   []goField // the union of every case's fields
+}
+
+// bitsDef is one integer read as several named values packed into its bits
+// (ClientboundMoveEntityPacket$Pos$Packed: onGround in bit 0, the step count in
+// the rest). The wire value is the integer; the fields are an interpretation.
+type bitsDef struct {
+	GoName string
+	Java   string
+	Of     string // the Go type of the integer read (pk.VarInt, pk.UnsignedByte)
+	Bits   int    // its width
+	Rest   uint64 // the bits no field names, kept so the value writes back unchanged
+	Fields []bitsField
+}
+
+// bitsField is one run of bits of a bitsDef, offset counted from the low bit.
+type bitsField struct {
+	Name   string
+	GoType string
+	Offset int
+	Width  int
+	Signed bool
 }
 
 // whileListDef is a list whose length is a bit of every entry: EquipmentEntryList.
@@ -159,6 +185,7 @@ type goField struct {
 	Name, Type, Comment string
 	When                string // guarded entry field: the enum constant whose bit selects it
 	Guard               string // packet field read only when this holds ("$." stands for the receiver)
+	Ref                 string // what stands for the field in a pk.Tuple when &recv.Name will not do
 }
 
 // guardedDef is a packet whose list entries carry only the parts selected by
@@ -201,7 +228,7 @@ func wireState() *genState {
 			prims[k] = strings.ReplaceAll(v, "types.", "")
 		}
 		wireGS = &genState{
-			enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, unions: map[string]*unionDef{}, whiles: map[string]*whileListDef{},
+			enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, unions: map[string]*unionDef{}, whiles: map[string]*whileListDef{}, bits: map[string]*bitsDef{},
 			fixedBits: map[int]bool{}, fixedBytes: map[int]bool{},
 			pkg: "wire", q: "", wire: "", prims: prims, hand: map[string]string{},
 		}
@@ -240,7 +267,7 @@ var primTypes = map[string]string{
 	"UNSIGNED_SHORT": "pk.UnsignedShort", "INT": "pk.Int", "UNSIGNED_INT": "pk.Int", "LONG": "pk.Long",
 	"FLOAT": "pk.Float", "DOUBLE": "pk.Double", "VAR_INT": "pk.VarInt", "VAR_LONG": "pk.VarLong",
 	"STRING": "pk.String", "UUID": "pk.UUID", "IDENTIFIER": "pk.Identifier", "RESOURCE_KEY": "pk.Identifier",
-	"REGISTRY_KEY": "pk.Identifier", "BYTE_ARRAY": "pk.ByteArray", "BIT_SET": "pk.BitSet",
+	"REGISTRY_KEY": "pk.Identifier", "BYTE_ARRAY": "pk.ByteArray", "BIT_SET": "pk.BitSet", "BYTE_BIT_SET": "types.ByteBitSet",
 	"INSTANT": "types.Instant", "BLOCK_POS": "pk.Position", "CHUNK_POS": "types.ChunkPos",
 	"SECTION_POS": "types.SectionPos", "GLOBAL_POS": "types.GlobalPos", "VEC3": "types.Vec3",
 	"LP_VEC3": "types.LpVec3", "VECTOR3F": "types.Vector3f", "QUATERNIONF": "types.Quaternionf",
@@ -585,11 +612,19 @@ func (gs *genState) fieldsOf(n schemaNode, owner string) ([]goField, error) {
 		if err != nil {
 			return nil, err
 		}
-		guard, err := guardExpr(fm["when"], byName)
+		guard, err := gs.guardExpr(fm["when"], byName)
 		if err != nil {
 			return nil, err
 		}
 		g := goField{Name: name, Type: typ, Comment: comment, When: when, Guard: guard}
+		if ft["k"] == "counted" {
+			c, err := gs.fieldRef(byName, str(ft["count"]))
+			if err != nil {
+				return nil, fmt.Errorf("%s is counted by %q: %w", name, ft["count"], err)
+			}
+			g.Ref = fmt.Sprintf("%sCountedOf(&$.%s, int($.%s))", gs.wire, name, c.Name)
+			g.Comment = "as many entries as " + c.Name + " says"
+		}
 		byName[schemaName] = g
 		out = append(out, g)
 	}
@@ -598,7 +633,25 @@ func (gs *genState) fieldsOf(n schemaNode, owner string) ([]goField, error) {
 
 // guardExpr renders a field's "when" (alternatives of tests on earlier fields,
 // named as the schema names them) as a Go condition over the receiver "$.".
-func guardExpr(when any, earlier map[string]goField) (string, error) {
+// fieldRef resolves the name a guard or a count uses to a Go reference: a field
+// of the struct, or one named run of bits of a packed field ("flags.stepCount").
+func (gs *genState) fieldRef(earlier map[string]goField, name string) (goField, error) {
+	base, sub, dotted := strings.Cut(name, ".")
+	f, ok := earlier[base]
+	if !ok {
+		return goField{}, fmt.Errorf("%q is not a field read before it", name)
+	}
+	if !dotted {
+		return f, nil
+	}
+	bf, ok := gs.bitsField(f.Type, sub)
+	if !ok {
+		return goField{}, fmt.Errorf("%s has no bit field %q", f.Type, sub)
+	}
+	return goField{Name: f.Name + "." + bf.Name, Type: bf.GoType}, nil
+}
+
+func (gs *genState) guardExpr(when any, earlier map[string]goField) (string, error) {
 	alts, _ := when.([]any)
 	if len(alts) == 0 {
 		return "", nil
@@ -609,13 +662,22 @@ func guardExpr(when any, earlier map[string]goField) (string, error) {
 		tests, _ := a.([]any)
 		for _, ta := range tests {
 			t, _ := ta.(map[string]any)
-			f, ok := earlier[str(t["field"])]
-			if !ok {
-				return "", fmt.Errorf("guard on unknown field %v", t["field"])
+			f, err := gs.fieldRef(earlier, str(t["field"]))
+			if err != nil {
+				return "", fmt.Errorf("guard on %v: %w", t["field"], err)
 			}
 			not := t["not"] == true
 			ref := "$." + f.Name
 			var e string
+			// One bit of a packed integer is already a bool: `x != 0` is the bit itself.
+			if f.Type == "bool" && str(t["test"]) == "eq" && t["value"] == float64(0) {
+				if not {
+					ors = append(ors, ref)
+				} else {
+					ors = append(ors, "!"+ref)
+				}
+				continue
+			}
 			switch str(t["test"]) {
 			case "bit":
 				if not {
@@ -881,6 +943,22 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 			return "", "", err
 		}
 		return fmt.Sprintf("%sList[%s, *%s]", gs.wire, et, et), "", nil
+	case "bits":
+		// one integer whose bits are several named values: the wire value is the
+		// integer, so it stays one field, read and written as a whole
+		t, err := gs.bitsType(n)
+		if err != nil {
+			return "", "", err
+		}
+		return gs.q + t, "", nil
+	case "counted":
+		// a repetition whose count is a field of its own, somewhere earlier: the count is
+		// handed over where the field is read, so the type itself is only the elements
+		et, _, err := gs.goType(schemaNode(n["elem"].(map[string]any)), owner)
+		if err != nil {
+			return "", "", err
+		}
+		return fmt.Sprintf("%sCounted[%s, *%s]", gs.wire, et, et), "", nil
 	case "whilelist":
 		// a list with no count: every entry but the last has a bit set that says another
 		// follows, so it is read until that bit is clear
@@ -903,11 +981,17 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 		}
 		return gs.q + gs.whileList(et, field, int(mask), w["not"] == true), "", nil
 	case "ref":
-		// the union being defined, inside itself (a slot display with a remainder): boxed
-		if n["of"] != "dispatch" {
+		// what is being defined, inside itself — the union of a slot display with a
+		// remainder, or the hidden effect of a mob effect — which has to be boxed
+		var t string
+		switch n["of"] {
+		case "dispatch":
+			t = gs.q + gs.unionName(str(n["name"]))
+		case "struct":
+			t = gs.q + goTypeName(str(n["name"]))
+		default:
 			return "", "", fmt.Errorf("recursive %v %v", n["of"], n["name"])
 		}
-		t := gs.q + gs.unionName(str(n["name"]))
 		return fmt.Sprintf("%sBox[%s, *%s]", gs.wire, t, t), "", nil
 	case "optional":
 		et, _, err := gs.goType(schemaNode(n["elem"].(map[string]any)), owner)
@@ -915,6 +999,13 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 			return "", "", err
 		}
 		return fmt.Sprintf("pk.Option[%s, *%s]", et, et), "", nil
+	case "lenprefixed":
+		// a var int of bytes, then the value inside exactly those bytes
+		et, comment, err := gs.goType(schemaNode(n["elem"].(map[string]any)), owner)
+		if err != nil {
+			return "", "", err
+		}
+		return fmt.Sprintf("%sLenPrefixed[%s, *%s]", gs.wire, et, et), comment, nil
 	case "map":
 		kt, _, err := gs.goType(schemaNode(n["key"].(map[string]any)), owner)
 		if err != nil {
@@ -940,8 +1031,11 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 		if len(vals) == 0 {
 			return "", "", fmt.Errorf("enum %v without values", n["name"])
 		}
-		name := gs.enum(str(n["name"]), vals)
-		return gs.q + name, "", nil
+		ids, err := enumIDs(n)
+		if err != nil {
+			return "", "", err
+		}
+		return gs.q + gs.enum(str(n["name"]), vals, ids), "", nil
 	case "stringenum":
 		vals, _ := n["values"].([]any)
 		names, _ := n["names"].([]any)
@@ -954,8 +1048,12 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 		if len(vals) == 0 {
 			return "", "", fmt.Errorf("enumset %v without values", n["name"])
 		}
-		name := gs.enum(str(n["name"]), vals)
-		return gs.wire + "EnumSet[" + gs.q + name + "]", "", nil
+		// A set of them is a bit per ordinal, so a constant that travels as
+		// something else has no place in one.
+		if n["ids"] != nil || n["idsUnknown"] == true {
+			return "", "", fmt.Errorf("enumset %v of an enum that does not travel as its ordinal", n["name"])
+		}
+		return gs.wire + "EnumSet[" + gs.q + gs.enum(str(n["name"]), vals, nil) + "]", "", nil
 	case "dispatch":
 		if goType, ok := gs.hand[goTypeName(str(n["name"]))]; ok {
 			return goType, "", nil // a type-keyed union kept by hand
@@ -996,7 +1094,7 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 	}
 }
 
-func (gs *genState) enum(java string, vals []any) string {
+func (gs *genState) enum(java string, vals []any, ids []int) string {
 	goName := goTypeName(java)
 	if gs.reserved[goName] {
 		if e, ok := gs.enums[goName]; !ok || e.Java != java {
@@ -1020,8 +1118,29 @@ func (gs *genState) enum(java string, vals []any) string {
 		}
 		break
 	}
-	gs.enums[goName] = &pktEnumDef{GoName: goName, Java: java, Values: values}
+	gs.enums[goName] = &pktEnumDef{GoName: goName, Java: java, Values: values, IDs: ids}
 	return goName
+}
+
+// enumIDs is the number each constant travels as, when the schema says that is
+// not the ordinal.
+func enumIDs(n schemaNode) ([]int, error) {
+	if n["idsUnknown"] == true {
+		return nil, fmt.Errorf("enum %v travels as an id this generator could not read, so its constants cannot be numbered", n["name"])
+	}
+	raw, ok := n["ids"].([]any)
+	if !ok {
+		return nil, nil
+	}
+	out := make([]int, len(raw))
+	for i, v := range raw {
+		f, ok := v.(float64)
+		if !ok {
+			return nil, fmt.Errorf("enum %v has a non-numeric id", n["name"])
+		}
+		out[i] = int(f)
+	}
+	return out, nil
 }
 
 // stringEnum registers an enum that travels as its serialized name. It shares
@@ -1069,6 +1188,126 @@ func (gs *genState) entryField(elem schemaNode, goType, name string) (string, er
 		return def.Fields[i].Name, nil
 	}
 	return "", fmt.Errorf("%s has no field %q to read the list's length from", goType, name)
+}
+
+// bitsType registers an integer read as named bit fields, named after the Java
+// class the packing was read in, so two packets that pack the same way share it.
+func (gs *genState) bitsType(n schemaNode) (string, error) {
+	of := str(n["of"])
+	goOf, ok := gs.prims[of]
+	if !ok {
+		return "", fmt.Errorf("a packed %s, which is not a primitive this generator knows", of)
+	}
+	width, _ := n["bits"].(float64)
+	def := &bitsDef{GoName: goTypeName(str(n["name"])), Java: str(n["name"]), Of: goOf, Bits: int(width)}
+	for _, f := range n["fields"].([]any) {
+		fm := f.(map[string]any)
+		off, _ := fm["offset"].(float64)
+		w, _ := fm["width"].(float64)
+		bf := bitsField{Name: goFieldName(str(fm["name"])), Offset: int(off), Width: int(w), Signed: fm["signed"] == true}
+		switch {
+		case bf.Width == 1 && !bf.Signed:
+			bf.GoType = "bool"
+		case def.Bits > 32 || bf.Width > 31:
+			bf.GoType = "int64"
+		default:
+			bf.GoType = "int32"
+		}
+		def.Fields = append(def.Fields, bf)
+	}
+	// Writing packs the fields back into the integer, so bits no field accounts for
+	// are kept as they were read: a reserved bit a server sets is not ours to drop.
+	def.Rest = uint64(1)<<uint(def.Bits) - 1
+	for _, f := range def.Fields {
+		def.Rest &^= (uint64(1)<<uint(f.Width) - 1) << uint(f.Offset)
+	}
+	for {
+		b, ok := gs.bits[def.GoName]
+		if !ok {
+			break
+		}
+		if b.Java == def.Java && fmt.Sprint(b.Fields) == fmt.Sprint(def.Fields) {
+			return def.GoName, nil
+		}
+		def.GoName += "_"
+	}
+	gs.bits[def.GoName] = def
+	gs.bitsOrder = append(gs.bitsOrder, def.GoName)
+	return def.GoName, nil
+}
+
+// bitsField finds one named run of bits of a registered packed integer, for a
+// guard or a count that names it.
+func (gs *genState) bitsField(goType, name string) (bitsField, bool) {
+	b, ok := gs.bits[strings.TrimPrefix(goType, gs.q)]
+	if !ok {
+		return bitsField{}, false
+	}
+	for _, f := range b.Fields {
+		if f.Name == goFieldName(name) {
+			return f, true
+		}
+	}
+	return bitsField{}, false
+}
+
+// renderBits writes the packed integer types: one wire value, read by cutting
+// the named runs of bits out of it and written by packing them back. Bits no
+// run names are carried along unchanged, so the value writes back as it came.
+func (gs *genState) renderBits(sb *strings.Builder) {
+	for _, name := range gs.bitsOrder {
+		b := gs.bits[name]
+		u := "uint32"
+		if b.Bits > 32 {
+			u = "uint64"
+		}
+		full := fmt.Sprintf("%#x", uint64(1)<<uint(b.Bits)-1)
+		fmt.Fprintf(sb, "// %s is Java %s: one %s whose bits are separate values.\ntype %s struct {\n", name, b.Java, b.Of, name)
+		for _, f := range b.Fields {
+			where := fmt.Sprintf("bit %d", f.Offset)
+			if f.Width > 1 {
+				where = fmt.Sprintf("bits %d-%d", f.Offset, f.Offset+f.Width-1)
+			}
+			fmt.Fprintf(sb, "\t%s %s // %s\n", f.Name, f.GoType, where)
+		}
+		if b.Rest != 0 {
+			fmt.Fprintf(sb, "\trest %s // the bits no name accounts for, kept so the value writes back as it was read\n", u)
+		}
+		sb.WriteString("}\n\n")
+
+		fmt.Fprintf(sb, "func (v *%s) ReadFrom(r io.Reader) (int64, error) {\n\tvar raw %s\n\tn, err := raw.ReadFrom(r)\n"+
+			"\tif err != nil {\n\t\treturn n, err\n\t}\n\tu := %s(raw) & %s\n", name, b.Of, u, full)
+		for _, f := range b.Fields {
+			mask := fmt.Sprintf("%#x", uint64(1)<<uint(f.Width)-1)
+			switch {
+			case f.GoType == "bool":
+				fmt.Fprintf(sb, "\tv.%s = (u>>%d)&1 != 0\n", f.Name, f.Offset)
+			case f.Signed:
+				// a two's complement run: shift it to the top of the word and back down
+				fmt.Fprintf(sb, "\tv.%s = %s(int%d(u<<%d) >> %d)\n", f.Name, f.GoType, b.Bits, b.Bits-f.Offset-f.Width, b.Bits-f.Width)
+			default:
+				fmt.Fprintf(sb, "\tv.%s = %s((u >> %d) & %s)\n", f.Name, f.GoType, f.Offset, mask)
+			}
+		}
+		if b.Rest != 0 {
+			fmt.Fprintf(sb, "\tv.rest = u & %#x\n", b.Rest)
+		}
+		sb.WriteString("\treturn n, nil\n}\n\n")
+
+		fmt.Fprintf(sb, "func (v %s) WriteTo(w io.Writer) (int64, error) {\n\tvar u %s\n", name, u)
+		for _, f := range b.Fields {
+			mask := fmt.Sprintf("%#x", uint64(1)<<uint(f.Width)-1)
+			if f.GoType == "bool" {
+				fmt.Fprintf(sb, "\tif v.%s {\n\t\tu |= 1 << %d\n\t}\n", f.Name, f.Offset)
+				continue
+			}
+			fmt.Fprintf(sb, "\tu |= (%s(v.%s) & %s) << %d\n", u, f.Name, mask, f.Offset)
+		}
+		if b.Rest != 0 {
+			fmt.Fprintf(sb, "\tu |= v.rest\n")
+		}
+		fmt.Fprintf(sb, "\treturn %s(u).WriteTo(w)\n}\n\n", b.Of)
+	}
 }
 
 // whileList registers a list read until a bit of every entry is clear. It is
@@ -1196,8 +1435,12 @@ func (gs *genState) unionType(n schemaNode, owner string) (string, error) {
 		if len(vals) == 0 {
 			return "", fmt.Errorf("union %s: the enum it dispatches on has no values", java)
 		}
+		if key["ids"] != nil || key["idsUnknown"] == true {
+			// the cases are numbered by ordinal below, which would then be the wrong number
+			return "", fmt.Errorf("union %s dispatches on an enum that does not travel as its ordinal", java)
+		}
 		registry = str(key["name"])
-		keyType = gs.q + gs.enum(registry, vals)
+		keyType = gs.q + gs.enum(registry, vals, nil)
 		keyDoc = "which case is on the wire"
 	} else {
 		if gs.registryIDs == nil {
@@ -1441,8 +1684,11 @@ func holeSummary(n schemaNode) string {
 		switch n["k"] {
 		case "opaque":
 			holes = append(holes, "opaque:"+str(n["java"]))
-		case "dispatch", "either":
-			holes = append(holes, str(n["k"]))
+		case "dispatch":
+			// a dispatch with cases is described; one without them is not
+			if n["cases"] == nil {
+				holes = append(holes, "dispatch without cases")
+			}
 		}
 		if b, _ := n["conditional"].(bool); b {
 			holes = append(holes, "conditional reader")
@@ -1497,6 +1743,11 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // ---- rendering ---------------------------------------------------------------
 
+// flowName is Clientbound or Serverbound, for a generated identifier.
+func flowName(flow string) string {
+	return strings.ToUpper(flow[:1]) + flow[1:]
+}
+
 func renderPacketFile(state, flow string, pkts []packetDef, skipped []string) string {
 	var sb strings.Builder
 	if len(skipped) > 0 {
@@ -1506,6 +1757,16 @@ func renderPacketFile(state, flow string, pkts []packetDef, skipped []string) st
 		}
 		sb.WriteString("\n")
 	}
+	// A packet by its id, for anything that has to read what it is told rather
+	// than what it asked for: a proxy, a dump, or a test that checks every packet
+	// a server sends against the schema it was generated from.
+	fmt.Fprintf(&sb, "// New%s returns an empty %s %s packet of the given id, or nil when this\n"+
+		"// version has no such packet or it is not generated.\nfunc New%s(id packetid.%sPacketID) pk.Field {\n\tswitch id {\n",
+		flowName(flow), state, flow, flowName(flow), flowName(flow))
+	for _, p := range pkts {
+		fmt.Fprintf(&sb, "\tcase %s:\n\t\treturn new(%s)\n", p.IDConst, p.GoName)
+	}
+	sb.WriteString("\t}\n\treturn nil\n}\n\n")
 	for _, p := range pkts {
 		fmt.Fprintf(&sb, "// %s is %s/%s (0x%02X), Java %s.\n", p.GoName, flow, p.MCName, p.ID, p.Java[strings.LastIndex(p.Java, ".")+1:])
 		if len(p.Fields) == 0 {
@@ -1686,8 +1947,13 @@ func renderGuarded(sb *strings.Builder, p packetDef) {
 }
 
 func fieldRefs(fs []goField, prefix string) string {
+	recv := strings.TrimPrefix(prefix, "&")
 	parts := make([]string, len(fs))
 	for i, f := range fs {
+		if f.Ref != "" {
+			parts[i] = strings.ReplaceAll(f.Ref, "$.", recv)
+			continue
+		}
 		parts[i] = prefix + f.Name
 	}
 	return strings.Join(parts, ", ")
@@ -1790,11 +2056,18 @@ func (gs *genState) renderEnums() string {
 			renderStringEnum(&sb, e)
 			continue
 		}
-		fmt.Fprintf(&sb, "// %s is Java %s, sent as a VarInt ordinal.\ntype %s pk.VarInt\n\nconst (\n", name, e.Java, name)
+		how := "a VarInt ordinal"
+		if e.IDs != nil {
+			how = "a VarInt id of its own, which is not its ordinal"
+		}
+		fmt.Fprintf(&sb, "// %s is Java %s, sent as %s.\ntype %s pk.VarInt\n\nconst (\n", name, e.Java, how, name)
 		for i, v := range e.Values {
-			if i == 0 {
+			switch {
+			case e.IDs != nil:
+				fmt.Fprintf(&sb, "\t%s%s %s = %d\n", name, goEnumConst(v), name, e.IDs[i])
+			case i == 0:
 				fmt.Fprintf(&sb, "\t%s%s %s = iota\n", name, goEnumConst(v), name)
-			} else {
+			default:
 				fmt.Fprintf(&sb, "\t%s%s\n", name, goEnumConst(v))
 			}
 		}
@@ -1859,6 +2132,7 @@ func goEnumConst(v string) string {
 func (gs *genState) renderStructs() string {
 	var sb strings.Builder
 	gs.renderUnions(&sb)
+	gs.renderBits(&sb)
 	gs.renderWhileLists(&sb)
 	for _, name := range gs.order {
 		s := gs.structs[name]

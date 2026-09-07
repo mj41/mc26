@@ -87,6 +87,14 @@
    "java": "net/minecraft/network/FriendlyByteBuf.readByteArray(ByteBuf,int)",
    "note": "A var-int count then exactly that many raw bytes; a node's `max` only caps the count and is not on the wire - note Mojang checks only count > max, not count < 0, so a generated reader must reject a negative count itself."
   },
+  "BYTE_BIT_SET": {
+   "def": {
+    "k": "prim",
+    "t": "BYTE_ARRAY"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs.BIT_SET",
+   "note": "Byte-for-byte a BYTE_ARRAY (var-int byte count, then that many bytes), interpreted as java.util.BitSet.valueOf(byte[]): bit i is bit (i mod 8) of byte i/8 counting from the least significant bit, and the writer trims the count to the last byte that has a bit set. Not the same wire form as BIT_SET, which is a long array; 26.3 moved the chunk light masks from one to the other, so a version may use either or both."
+  },
   "CHUNK_POS": {
    "def": {
     "k": "bits",
@@ -200,17 +208,9 @@
           }
          },
          {
-          "name": "length",
-          "type": {
-           "k": "prim",
-           "t": "VAR_INT"
-          }
-         },
-         {
           "name": "value",
           "type": {
            "k": "lenprefixed",
-           "length": "length",
            "elem": {
             "k": "dispatch",
             "name": "DataComponent",
@@ -446,10 +446,64 @@
    "def": {
     "k": "native",
     "of": "nbt",
-    "note": "one tag in network form: a 1-byte tag id, then that tag's payload with no name; id 0 (TAG_End) is the whole value and carries no payload"
+    "note": "one tag in network form: a 1-byte tag id, then that tag's payload with no name; id 0 (TAG_End) is the whole value and carries no payload",
+    "tags": {
+     "0": {
+      "name": "TAG_End (EndTag)",
+      "payload": "NO PAYLOAD \u2014 zero bytes follow the id byte. EndTag$1.load reads nothing from the DataInput: it charges accounter.accountBytes(8L) (an in-memory size charge, Tag.OBJECT_HEADER = 8, not a read) and returns EndTag.INSTANCE. Both skip overloads are a bare `return`, and EndTag.write(DataOutput) is a bare `return`, so nothing is consumed and nothing is produced. Id 0 occurs only as (a) the terminator of a compound, (b) the element type of an empty list, and (c) the 'absent NBT' marker at the top level of a nullable packet field."
+     },
+     "1": {
+      "name": "TAG_Byte (ByteTag)",
+      "payload": "Exactly 1 byte: a signed two's-complement 8-bit integer, range -128..127. Read with DataInput.readByte(). No prefix, nothing else."
+     },
+     "2": {
+      "name": "TAG_Short (ShortTag)",
+      "payload": "Exactly 2 bytes: a signed two's-complement 16-bit integer, BIG-ENDIAN (most significant byte first), range -32768..32767. Read with DataInput.readShort(): value = (b0 << 8) | b1, b0 read first."
+     },
+     "3": {
+      "name": "TAG_Int (IntTag)",
+      "payload": "Exactly 4 bytes: a signed two's-complement 32-bit integer, BIG-ENDIAN. Read with DataInput.readInt(). NOT a varint \u2014 fixed width, even though the surrounding packet format uses varints elsewhere."
+     },
+     "4": {
+      "name": "TAG_Long (LongTag)",
+      "payload": "Exactly 8 bytes: a signed two's-complement 64-bit integer, BIG-ENDIAN. Read with DataInput.readLong(). Fixed-width, not a varint."
+     },
+     "5": {
+      "name": "TAG_Float (FloatTag)",
+      "payload": "Exactly 4 bytes: an IEEE-754 single-precision (binary32) value, BIG-ENDIAN. Read with DataInput.readFloat() = Float.intBitsToFloat(readInt()) \u2014 read 4 bytes big-endian as a 32-bit pattern and reinterpret. NaN bit patterns pass through unchanged; do not normalise them."
+     },
+     "6": {
+      "name": "TAG_Double (DoubleTag)",
+      "payload": "Exactly 8 bytes: an IEEE-754 double-precision (binary64) value, BIG-ENDIAN. Read with DataInput.readDouble() = Double.longBitsToDouble(readLong()) \u2014 8 bytes big-endian as a 64-bit pattern, reinterpreted."
+     },
+     "7": {
+      "name": "TAG_Byte_Array (ByteArrayTag)",
+      "payload": "A 4-byte BIG-ENDIAN signed 32-bit ELEMENT COUNT (DataInput.readInt), then exactly that many bytes \u2014 one signed 8-bit byte per element, read as a single block with DataInput.readFully(byte[]). Element width is 1, so the count is also the byte count; total payload = 4 + count. Count 0 = empty array, nothing follows. Negative count: there is NO explicit `count < 0` check (unlike TAG_List). A negative count flows into NbtAccounter.accountBytes(1L, count), which multiplies (1 * count, still negative) and calls accountBytes(long), whose first act is `if (n < 0) throw new IllegalArgumentException(...)`. So a negative count is rejected, but as an accounting error (an unchecked IllegalArgumentException), not a format check. A from-scratch decoder should simply treat count < 0 as malformed."
+     },
+     "8": {
+      "name": "TAG_String (StringTag)",
+      "payload": "A 2-byte UNSIGNED BIG-ENDIAN 16-bit length (0..65535) giving the number of BYTES that follow \u2014 not the number of characters \u2014 then exactly that many bytes of Java 'modified UTF-8' (CESU-8 with a two-byte NUL). Read with DataInput.readUTF(). Precisely: U+0001..U+007F occupy one byte; U+0000 and U+0080..U+07FF occupy two bytes (0xC0|c>>6, 0x80|c&0x3F) \u2014 an embedded NUL is 0xC0 0x80 and never 0x00; U+0800..U+FFFF occupy three bytes; a character above the BMP is encoded as its UTF-16 surrogate pair, each surrogate as its own three-byte sequence (6 bytes total), never as a 4-byte UTF-8 sequence. A plain UTF-8 decoder gets NUL and astral characters wrong. Maximum payload is 2 + 65535 bytes."
+     },
+     "9": {
+      "name": "TAG_List (ListTag)",
+      "payload": "Header then homogeneous elements: (1) ONE byte, signed, = the element tag id (DataInput.readByte); (2) FOUR bytes, BIG-ENDIAN signed 32-bit, = the element COUNT, not a byte length (DataInput.readInt); (3) exactly `count` elements, each the BARE PAYLOAD of the header's tag id \u2014 no per-element id byte, no per-element name. VALIDATION IN THE BYTECODE: count < 0 throws NbtFormatException (readListCount, `iflt`); element type 0 with count > 0 throws NbtFormatException('Missing type on ListTag'). EMPTY LIST: element type 0 with count 0 is legal and is exactly what the writer emits (ListTag.identifyRawElementType starts at 0 and returns 0 for an empty list), so a decoder must accept element type 0 whenever count is 0 and must not look up type 0 as a real element type. A non-zero element type with count 0 is also accepted. Nesting counts against the 512-level depth limit (load brackets loadList with pushDepth/popDepth)."
+     },
+     "10": {
+      "name": "TAG_Compound (CompoundTag)",
+      "payload": "A sequence of named entries terminated by a zero byte. Loop: (1) read ONE byte, signed, with DataInput.readByte() \u2014 this is both the entry's tag id and the terminator; (2) if it is 0 (TAG_End) the compound ENDS IMMEDIATELY \u2014 the terminator is consumed and no name and no payload follow it; (3) otherwise read the entry NAME as a TAG_String payload, i.e. DataInput.readUTF(): a 2-byte unsigned big-endian BYTE length then that many bytes of modified UTF-8, exactly as for tag id 8. The name sits BETWEEN the id byte and the value and is present for every entry; (4) then read the entry VALUE as the bare payload of that tag id \u2014 no repeated id, no second name; (5) repeat from (1). Entries go into a java.util.HashMap, so ORDER IS NOT PRESERVED and a decoder must not rely on it; duplicate names are accepted on the wire and last-one-wins (Map.put). There is no entry count and no byte-length prefix \u2014 the terminator is the only end marker, so a compound cannot be skipped without walking it. Nesting counts against the 512-level depth limit."
+     },
+     "11": {
+      "name": "TAG_Int_Array (IntArrayTag)",
+      "payload": "A 4-byte BIG-ENDIAN signed 32-bit ELEMENT COUNT (DataInput.readInt), then exactly that many elements, each 4 bytes BIG-ENDIAN signed 32-bit (one DataInput.readInt per element). Total payload = 4 + 4*count. Count 0 = empty array. Negative count: no explicit check; it reaches NbtAccounter.accountBytes(4L, count), which yields a negative product and throws IllegalArgumentException. Treat count < 0 as malformed."
+     },
+     "12": {
+      "name": "TAG_Long_Array (LongArrayTag)",
+      "payload": "A 4-byte BIG-ENDIAN signed 32-bit ELEMENT COUNT (DataInput.readInt), then exactly that many elements, each 8 bytes BIG-ENDIAN signed 64-bit (one DataInput.readLong per element). Total payload = 4 + 8*count. The asymmetry is real and worth spelling out: the LENGTH is 32-bit while the ELEMENTS are 64-bit. Count 0 = empty array. Negative count: no explicit check; it reaches NbtAccounter.accountBytes(8L, count) and throws IllegalArgumentException. Treat count < 0 as malformed."
+     }
+    }
    },
-   "java": "net/minecraft/nbt/NbtIo.readAnyTag / writeAnyTag (reached from net/minecraft/network/FriendlyByteBuf.readNbt and net/minecraft/network/codec/ByteBufCodecs$16 = ByteBufCodecs.TAG/TRUSTED_TAG/COMPOUND_TAG)",
-   "note": "One NBT tag in network form: a 1-byte tag id followed by that tag's payload with NO root name; id 0 (TAG_End) is the entire value, and whether that means \"absent\" or is a decode error depends on the reader (FriendlyByteBuf.readNbt returns null; ByteBufCodecs.TAG/COMPOUND_TAG throw)."
+   "java": "net/minecraft/nbt/NbtIo.readAnyTag / writeAnyTag (reached from net/minecraft/network/FriendlyByteBuf.readNbt and net/minecraft/network/codec/ByteBufCodecs$16 = ByteBufCodecs.TAG/TRUSTED_TAG/COMPOUND_TAG); the payloads from each tag type's load(DataInput, NbtAccounter)",
+   "note": "One NBT tag in network form: a 1-byte tag id followed by that tag's payload with NO root name; id 0 (TAG_End) is the entire value, and whether that means \"absent\" or is a decode error depends on the reader (FriendlyByteBuf.readNbt returns null; ByteBufCodecs.TAG/COMPOUND_TAG throw). The payload of every tag id is in the tags table of the definition, so a reader needs nothing else: the format is self-describing and recursive, which is why it stays native."
   },
   "OPTIONAL_ITEM_STACK": {
    "def": {

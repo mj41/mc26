@@ -19,7 +19,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -28,6 +30,7 @@ import (
 	"time"
 
 	"github.com/mj41/mc26/gen/internal/build"
+	"github.com/mj41/mc26/gen/internal/capture"
 	"github.com/mj41/mc26/gen/internal/e2e"
 	"github.com/mj41/mc26/gen/internal/extract"
 	"github.com/mj41/mc26/gen/internal/gitx"
@@ -58,6 +61,7 @@ func main() {
 		"extract": cmdExtract, "build": cmdBuild, "commit": cmdCommit, "smoke": cmdSmoke, "e2e": cmdE2E,
 		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag, "report": cmdReport,
 		"import-src": cmdImportSrc, "import-examples": cmdImportExamples,
+		"crosscheck": cmdCrossCheck,
 	}
 	fn, ok := commands[cmd]
 	if !ok {
@@ -314,6 +318,111 @@ func cmdSmoke(args []string) error {
 		*lib = filepath.Join(paths.Temp(), "lib", *version)
 	}
 	return runSmoke(*version, *lib, *port, *runtime)
+}
+
+// cmdCrossCheck records a real session with a vanilla server and reads it back
+// twice: once with this library's generated types, and once with a decoder that
+// has only the extracted JSON. It is the test of whether that JSON describes
+// the protocol, rather than describing it to a reader who already has this
+// library.
+//
+// The recording is made by a proxy between the bot and the server, so it covers
+// every state and both directions — what a bot sends is described by the same
+// JSON as what it receives, and until this went through the proxy only the play
+// packets a bot happened to receive were ever checked.
+func cmdCrossCheck(args []string) error {
+	fs := flag.NewFlagSet("crosscheck", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version of the server jar")
+	data := fs.String("data", "", "data directory (default temp/data/<version>)")
+	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
+	capturePath := fs.String("capture", "", "capture file (default temp/capture/<version>.jsonl)")
+	keep := fs.Bool("keep", false, "decode the capture that is already there, without starting a server")
+	port := fs.Int("port", smokePort, "server port")
+	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
+	fs.Parse(args)
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	root := paths.MustRoot()
+	if *lib == "" {
+		*lib = filepath.Join(paths.Temp(), "lib", *version)
+	}
+	if *data == "" {
+		*data = paths.Data(*version)
+	}
+	if *capturePath == "" {
+		*capturePath = filepath.Join(paths.Temp(), "capture", *version+".jsonl")
+	}
+	if !*keep {
+		jar, err := extract.ServerJar(paths.Cache(), *version, logf)
+		if err != nil {
+			return err
+		}
+		ids, err := capture.LoadIDs(filepath.Join(*data, "packets.json"))
+		if err != nil {
+			return err
+		}
+		proxy := &capture.Proxy{Target: fmt.Sprintf("127.0.0.1:%d", *port), IDs: ids, PerID: 4, Log: logf}
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		go proxy.Serve(l)
+		logf("crosscheck: recording through %s to the server on %d", l.Addr(), *port)
+		err = smoke.Run(smoke.Options{
+			Version: *version, LibDir: *lib, JarPath: jar,
+			WorkDir: filepath.Join(paths.Temp(), "smoke", *version),
+			Port:    *port, Runtime: *runtime, Log: logf,
+			TestRun:    "TestSmokeTraffic",
+			ClientAddr: l.Addr().String(),
+		})
+		l.Close()
+		if err != nil {
+			return err
+		}
+		if err := proxy.Err(); err != nil {
+			return fmt.Errorf("recording the session: %w", err)
+		}
+		ps := proxy.Packets()
+		if len(ps) == 0 {
+			return fmt.Errorf("nothing went through the proxy: the bot did not connect to it")
+		}
+		if err := os.MkdirAll(filepath.Dir(*capturePath), 0o755); err != nil {
+			return err
+		}
+		if err := capture.Write(*capturePath, ps); err != nil {
+			return err
+		}
+		logf("crosscheck: %d packets of %d state/flow/id triples recorded to %s %v",
+			len(ps), len(capture.Distinct(ps)), *capturePath, proxy.Counts())
+
+		// The same packets through this library's generated types, which is a
+		// different question from whether the JSON describes them: a type short of
+		// a field reads without complaint, so this checks each is read to its end.
+		check := exec.Command("go", "test", "./bot", "-run", "TestCaptureCheck", "-v", "-count=1")
+		check.Dir = *lib
+		check.Env = append(os.Environ(), "MC26_CHECK_CAPTURE="+*capturePath)
+		out, err := check.CombinedOutput()
+		logf("%s", strings.TrimSpace(string(out)))
+		if err != nil {
+			return fmt.Errorf("this library did not read every packet of the session: %w", err)
+		}
+	}
+	decoder := filepath.Join(root, "gen", "crosslang", "decode.py")
+	if _, err := os.Stat(decoder); err != nil {
+		return fmt.Errorf("%s not found: the cross-language decoder is what this command runs", decoder)
+	}
+	logf("crosscheck: decoding %s with %s", *capturePath, decoder)
+	cmd := exec.Command("python3", decoder,
+		"--data", *data,
+		"--prims", filepath.Join(root, "gen", "hand-crafted", "prims.json"),
+		"--nodes", filepath.Join(root, "gen", "hand-crafted", "nodes.json"),
+		"--capture", *capturePath)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("the JSON-only decoder did not read what this library reads: %w", err)
+	}
+	return nil
 }
 
 func cmdE2E(args []string) error {

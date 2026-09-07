@@ -37,6 +37,23 @@ func (p Packet) Scan(fields ...FieldDecoder) error {
 	return nil
 }
 
+// ScanAll is Scan, and also fails when the packet has bytes the fields did not
+// read. A decoder that is short of a field consumes less than the server sent
+// and otherwise says nothing at all, so anything checking a decoder against
+// real traffic wants this rather than Scan.
+func (p Packet) ScanAll(fields ...FieldDecoder) error {
+	r := bytes.NewReader(p.Data)
+	for i, v := range fields {
+		if _, err := v.ReadFrom(r); err != nil {
+			return fmt.Errorf("scanning packet field[%d] error: %w", i, err)
+		}
+	}
+	if n := r.Len(); n > 0 {
+		return fmt.Errorf("%d of the packet's %d bytes were not read", n, len(p.Data))
+	}
+	return nil
+}
+
 var (
 	bufPool  = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 	zlibPool = sync.Pool{New: func() any { return zlib.NewWriter(io.Discard) }}

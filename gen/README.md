@@ -170,6 +170,21 @@ type it becomes. It also carries the frame a packet travels in, which the schema
 and without which a primitive that reads to the end of the packet has no meaning. The build fails
 on a node kind nobody has defined, as it does on a primitive.
 
+`crosscheck <version>` is the test of whether all that is true. It starts a vanilla server,
+records the packets it sends, and hands the bytes to a decoder in another language that has only
+the JSON: `gen/crosslang/decode.py` reads the schema, the primitives and the node kinds, decodes
+each captured packet and encodes it again. It passes only when every packet comes back byte for
+byte. A description that is complete to a reader who already has this library, and no one else,
+fails there. The recording half checks the same packets in Go as it goes: every one must decode
+into its generated type and consume the body exactly, which is what `Packet.ScanAll` is for and
+what `New<Flow>(id)` in each protocol package makes possible. A packet whose schema is short of a
+field decodes without complaint, so reading it is not the test; reading all of it is. Byte-for-byte
+equality is left to the other language, because this library writes a chat component back as the
+compound that means the same rather than the bare string it arrived as. It passes on 26.1 and 26.2 — every packet a vanilla server sends, decoded and
+encoded again by a reader that has never seen Go. It does not pass on 26.3-pre-2, which has two
+shapes the extractor still reads wrongly: the movement packets, whose step count chooses between
+two branches, and the chunk packet, which changed.
+
 The header of every generated file lists the packets that were skipped and
 why (`opaque`, `dispatch`, a branch-guarded reader); as of 26.1, 26.2 and 26.3-pre-2 there are
 none — every packet of the protocol is generated — and none is hand-written

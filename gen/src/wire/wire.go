@@ -8,12 +8,55 @@ package wire
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"math"
 
 	"github.com/mj41/go-mc26/nbt"
 	pk "github.com/mj41/go-mc26/net/packet"
 )
+
+// LenPrefixed is ByteBufCodecs.lengthPrefixed: a var int giving the number of
+// bytes that follow, then the value inside exactly those bytes. The length is
+// what lets a reader step over a value it cannot decode, so reading the value
+// must not run past it and must not leave any of it behind.
+type LenPrefixed[T pk.FieldEncoder, PT Ptr[T]] struct{ V T }
+
+func (l *LenPrefixed[T, PT]) ReadFrom(r io.Reader) (n int64, err error) {
+	var size pk.VarInt
+	if n, err = size.ReadFrom(r); err != nil {
+		return n, err
+	}
+	if size < 0 {
+		return n, fmt.Errorf("length-prefixed value of %d bytes", size)
+	}
+	body := make([]byte, int(size))
+	m, err := io.ReadFull(r, body)
+	n += int64(m)
+	if err != nil {
+		return n, err
+	}
+	rest := bytes.NewReader(body)
+	if _, err := PT(&l.V).ReadFrom(rest); err != nil {
+		return n, err
+	}
+	if rest.Len() != 0 {
+		return n, fmt.Errorf("length-prefixed value left %d of its %d bytes unread", rest.Len(), size)
+	}
+	return n, nil
+}
+
+func (l LenPrefixed[T, PT]) WriteTo(w io.Writer) (n int64, err error) {
+	var buf bytes.Buffer
+	if _, err = l.V.WriteTo(&buf); err != nil {
+		return 0, err
+	}
+	if n, err = pk.VarInt(buf.Len()).WriteTo(w); err != nil {
+		return n, err
+	}
+	m, err := w.Write(buf.Bytes())
+	return n + int64(m), err
+}
 
 // Ptr is the pointer-receiver decoder constraint used by the generic containers.
 type Ptr[T any] interface {
@@ -51,6 +94,56 @@ func (l List[T, P]) WriteTo(w io.Writer) (n int64, err error) {
 	for i := range l {
 		var m int64
 		m, err = l[i].WriteTo(w)
+		n += m
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+// Counted is a repetition with no count in front of it: how many entries there
+// are is the value of another field of the same structure, so the count is not
+// adjacent to what it counts and the reader has to be handed it.
+type Counted[T pk.FieldEncoder, P Ptr[T]] []T
+
+// CountedOf pairs a Counted with the count another field holds, giving a value
+// that reads and writes like any other field. Written into a pk.Tuple, the
+// count is read by then, because the field holding it comes first on the wire.
+func CountedOf[T pk.FieldEncoder, P Ptr[T]](s *Counted[T, P], count int) *countedOf[T, P] {
+	return &countedOf[T, P]{s, count}
+}
+
+type countedOf[T pk.FieldEncoder, P Ptr[T]] struct {
+	s     *Counted[T, P]
+	count int
+}
+
+func (c *countedOf[T, P]) ReadFrom(r io.Reader) (n int64, err error) {
+	if c.count < 0 {
+		return 0, fmt.Errorf("a count of %d entries", c.count)
+	}
+	*c.s = make(Counted[T, P], c.count)
+	for i := range *c.s {
+		var m int64
+		m, err = P(&(*c.s)[i]).ReadFrom(r)
+		n += m
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (c *countedOf[T, P]) WriteTo(w io.Writer) (n int64, err error) {
+	// The count is a field of its own, written already: a value whose length
+	// disagrees with it would produce a packet nothing can read back.
+	if len(*c.s) != c.count {
+		return 0, fmt.Errorf("%d entries where the count field says %d", len(*c.s), c.count)
+	}
+	for i := range *c.s {
+		var m int64
+		m, err = (*c.s)[i].WriteTo(w)
 		n += m
 		if err != nil {
 			return
@@ -364,6 +457,32 @@ func (s *MessageSignature) ReadFrom(r io.Reader) (int64, error) {
 func (s MessageSignature) WriteTo(w io.Writer) (int64, error) {
 	n, err := w.Write(s[:])
 	return int64(n), err
+}
+
+// ByteBitSet is ByteBufCodecs.BIT_SET: a var-int-prefixed byte array read as
+// java.util.BitSet.valueOf(byte[]), so bit i is bit (i mod 8) of byte i/8. It is
+// a different wire form from pk.BitSet, which FriendlyByteBuf.readBitSet reads
+// as a long array; 26.3 moved the chunk light masks from one to the other.
+type ByteBitSet []byte
+
+func (s *ByteBitSet) ReadFrom(r io.Reader) (int64, error) { return (*pk.ByteArray)(s).ReadFrom(r) }
+func (s ByteBitSet) WriteTo(w io.Writer) (int64, error)   { return pk.ByteArray(s).WriteTo(w) }
+
+// Has reports whether bit i is set. Bits past the end are unset: the writer
+// trims trailing zero bytes, so a short set is not a truncated one.
+func (s ByteBitSet) Has(i int) bool {
+	return i >= 0 && i/8 < len(s) && s[i/8]&(1<<(i%8)) != 0
+}
+
+// Set adds bit i, growing the set to reach it.
+func (s *ByteBitSet) Set(i int) {
+	if i < 0 {
+		return
+	}
+	for len(*s) <= i/8 {
+		*s = append(*s, 0)
+	}
+	(*s)[i/8] |= 1 << (i % 8)
 }
 
 // PublicKey is an encoded public key (ByteBufCodecs.PUBLIC_KEY): a byte array.
