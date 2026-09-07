@@ -246,7 +246,7 @@ var primTypes = map[string]string{
 	"LP_VEC3": "types.LpVec3", "VECTOR3F": "types.Vector3f", "QUATERNIONF": "types.Quaternionf",
 	"NBT": "types.NBT", "OPTIONAL_NBT": "types.OptionalNBT", "TEXT": "types.Text",
 	"OPTIONAL_TEXT": "pk.Option[types.Text, *types.Text]", "ITEM_STACK": "types.ItemStack",
-	"OPTIONAL_ITEM_STACK": "types.ItemStack", "OPTIONAL_ITEM_STACK_LIST": "types.List[types.ItemStack, *types.ItemStack]",
+	"OPTIONAL_ITEM_STACK": "types.ItemStack", "UNTRUSTED_ITEM_STACK": "types.UntrustedItemStack", "OPTIONAL_ITEM_STACK_LIST": "types.List[types.ItemStack, *types.ItemStack]",
 	"COMPONENT_PATCH": "types.ComponentPatch", "GAME_PROFILE": "types.GameProfile", "PUBLIC_KEY": "types.PublicKey",
 	"MESSAGE_SIGNATURE": "types.MessageSignature", "JSON_TEXT": "pk.String", "JSON": "pk.String",
 	"RAW_BYTES": "types.RestBytes", "REST_BYTES": "types.RestBytes", "CONTAINER_ID": "pk.VarInt",

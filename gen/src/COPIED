@@ -58,6 +58,7 @@ level/chunk.go	modified
 level/chunkpos_test.go	new
 level/chunkstatus.go	upstream
 level/component/attributemodifiers.go	modified
+level/component/delimited_test.go	new
 level/component/profile.go	new
 level/component/types.go	new
 level/palette.go	modified

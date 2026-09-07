@@ -9,6 +9,7 @@
 //	go run ./gen/cmd/javap -l 26.2 Waypoint             # just the matching class names
 //	go run ./gen/cmd/javap -s 26.2 SetJigsawBlock       # signatures only, no code
 //	go run ./gen/cmd/javap -client 26.2 ClientPacketListener   # the client jar instead
+//	go run ./gen/cmd/javap -v 26.2 ByteBufCodecs               # with BootstrapMethods, to resolve a lambda
 //
 // The client jar is downloaded on first use and is there for reading only: it
 // says what the other end of the wire does with a packet, which is how a rule
@@ -35,9 +36,10 @@ func main() {
 	sigs := flag.Bool("s", false, "signatures only: no -c disassembly")
 	force := flag.Bool("f", false, "disassemble again even if it is cached")
 	client := flag.Bool("client", false, "read the client jar instead of the server's")
+	verbose := flag.Bool("v", false, "also the constant pool and BootstrapMethods, which name what an invokedynamic calls")
 	flag.Parse()
 	if flag.NArg() < 2 {
-		fmt.Fprintln(os.Stderr, "usage: javap [-m member] [-l] [-s] [-f] [-client] <version> <class-suffix>...")
+		fmt.Fprintln(os.Stderr, "usage: javap [-m member] [-l] [-s] [-v] [-f] [-client] <version> <class-suffix>...")
 		os.Exit(2)
 	}
 	version := flag.Arg(0)
@@ -71,7 +73,7 @@ func main() {
 		if len(found) > 1 {
 			fail("%q matches %d classes; name one of them:\n  %s", want, len(found), strings.Join(found, "\n  "))
 		}
-		out, err := disassemble(version, jar, found[0], *sigs, *force)
+		out, err := disassemble(version, jar, found[0], *sigs, *verbose, *force)
 		if err != nil {
 			fail("%v", err)
 		}
@@ -130,7 +132,7 @@ func match(classes []string, want string, all bool) []string {
 }
 
 // disassemble runs javap in the JDK container and caches what it printed.
-func disassemble(version, jar, class string, sigs, force bool) (string, error) {
+func disassemble(version, jar, class string, sigs, verbose, force bool) (string, error) {
 	dir := filepath.Join(paths.Temp(), "javap", version)
 	if strings.HasSuffix(jar, "-client.jar") {
 		dir = filepath.Join(dir, "client")
@@ -138,6 +140,9 @@ func disassemble(version, jar, class string, sigs, force bool) (string, error) {
 	name := class
 	if sigs {
 		name += ".sigs"
+	}
+	if verbose {
+		name += ".v"
 	}
 	cached := filepath.Join(dir, name+".txt")
 	if !force {
@@ -158,6 +163,11 @@ func disassemble(version, jar, class string, sigs, force bool) (string, error) {
 	}
 	if !sigs {
 		args = append(args, "-c")
+	}
+	// A lambda shows up only as `InvokeDynamic #n`; -v prints the BootstrapMethods
+	// table that says which method it really calls.
+	if verbose {
+		args = append(args, "-v")
 	}
 	args = append(args, "-cp", "/cache/"+filepath.Base(jar), class)
 	cmd := exec.Command(runtime, args...)

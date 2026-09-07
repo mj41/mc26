@@ -16,6 +16,7 @@ import (
 
 	"github.com/mj41/mc26/gen/internal/generate"
 	"github.com/mj41/mc26/gen/internal/gitx"
+	"github.com/mj41/mc26/gen/internal/prims"
 )
 
 // Options configures one build.
@@ -106,6 +107,34 @@ func Run(o Options) (*Info, error) {
 		}
 		o.Log("build %s: overlay %s applied", v.ID, overlay)
 	}
+
+	// Every primitive the schema leaves as a name has to have a definition, or
+	// the JSON describes the protocol only to a reader that already owns a Go
+	// library. A version that introduces one nobody has defined stops here.
+	primsFile := filepath.Join(o.GenRoot, "hand-crafted", "prims.json")
+	defs, err := prims.Load(primsFile)
+	if err != nil {
+		return nil, err
+	}
+	used, err := prims.Used(filepath.Join(o.DataDir, "packet_schema.json"))
+	if err != nil {
+		return nil, err
+	}
+	if r := prims.Check(defs, used); !r.OK() {
+		return nil, fmt.Errorf("primitives: %w", r.Err())
+	}
+	nodes, err := prims.LoadNodes(filepath.Join(o.GenRoot, "hand-crafted", "nodes.json"))
+	if err != nil {
+		return nil, err
+	}
+	kinds, err := prims.Kinds(filepath.Join(o.DataDir, "packet_schema.json"))
+	if err != nil {
+		return nil, err
+	}
+	if missing := prims.CheckKinds(nodes, kinds); len(missing) > 0 {
+		return nil, fmt.Errorf("node kinds used but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
+	}
+	o.Log("build %s: %d primitives and %d node kinds, all defined", v.ID, len(used), len(kinds))
 
 	o.Log("build %s: generate", v.ID)
 	generate.Build = generate.BuildInfo{DataSource: o.DataSource, Generator: o.Generator}

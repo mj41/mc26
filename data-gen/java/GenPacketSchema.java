@@ -137,7 +137,8 @@ public class GenPacketSchema {
         Map.entry("COMPOUND_TAG", "NBT"), Map.entry("TRUSTED_COMPOUND_TAG", "NBT"),
         Map.entry("OPTIONAL_COMPOUND_TAG", "OPTIONAL_NBT"), Map.entry("CONTAINER_ID", "CONTAINER_ID"),
         Map.entry("ROTATION_BYTE", "ROTATION_BYTE"), Map.entry("VAR_INT_UNSIGNED", "VAR_INT"),
-        Map.entry("RGB_COLOR", "INT"), Map.entry("ARGB_COLOR", "INT"),
+        // RGB_COLOR is not an int: it reads three bytes and packs them, see rgbColorNode
+        Map.entry("ARGB_COLOR", "INT"),
         Map.entry("PLAYER_NAME", "STRING"), Map.entry("GAME_PROFILE_PROPERTIES", "GAME_PROFILE_PROPERTIES")
     );
     /** Well-known codec constants on other classes that are wire primitives for our purposes. */
@@ -156,6 +157,7 @@ public class GenPacketSchema {
         Map.entry("net/minecraft/core/component/TypedDataComponent.STREAM_CODEC", "TYPED_DATA_COMPONENT"),
         Map.entry("net/minecraft/world/item/ItemStack.OPTIONAL_STREAM_CODEC", "OPTIONAL_ITEM_STACK"),
         Map.entry("net/minecraft/world/item/ItemStack.OPTIONAL_LIST_STREAM_CODEC", "OPTIONAL_ITEM_STACK_LIST"),
+        Map.entry("net/minecraft/world/item/ItemStack.OPTIONAL_UNTRUSTED_STREAM_CODEC", "UNTRUSTED_ITEM_STACK"),
         Map.entry("net/minecraft/core/component/DataComponentPatch.STREAM_CODEC", "COMPONENT_PATCH"),
         Map.entry("net/minecraft/network/chat/MessageSignature.STREAM_CODEC", "MESSAGE_SIGNATURE"),
         Map.entry("net/minecraft/nbt/CompoundTag.STREAM_CODEC", "NBT")
@@ -441,6 +443,13 @@ public class GenPacketSchema {
             ClassModel cm0 = classModel(owner);
             if (cm0 != null && cm0.fields().isEmpty()) return node("unit");   // e.g. bundle delimiter: no payload
         }
+        // ByteBufCodecs.RGB_COLOR reads three bytes and packs them with ARGB.color, so it is
+        // three unsigned bytes on the wire and not the int the packed value looks like.
+        if (owner.endsWith("ByteBufCodecs") && field.equals("RGB_COLOR")) {
+            List<Map<String, Object>> fs = new ArrayList<>();
+            for (String c : List.of("red", "green", "blue")) fs.add(field(c, prim("UNSIGNED_BYTE")));
+            return node("struct", "name", "RGBColor", "fields", fs);
+        }
         if (owner.endsWith("ByteBufCodecs") && BYTEBUF_CODECS.containsKey(field)) return prim(BYTEBUF_CODECS.get(field));
         String key = owner + "." + field;
         if (codecFieldCache.containsKey(key)) return codecFieldCache.get(key);
@@ -675,7 +684,13 @@ public class GenPacketSchema {
             }
         }
         if (owner.endsWith("resources/ResourceKey") && name.equals("streamCodec")) { stack.push(new CodecV(node("resourcekey", "registry", keyOf(arg(args, 0))))); return; }
-        if (owner.endsWith("world/item/ItemStack") && name.equals("validatedStreamCodec")) { stack.push(new CodecV(prim("ITEM_STACK"))); return; }
+        // validatedStreamCodec(x) only refuses an empty stack; it reads whatever x reads, and
+        // x is not always the trusted codec: the creative mode slot packet passes the
+        // untrusted one, whose components each carry their length.
+        if (owner.endsWith("world/item/ItemStack") && name.equals("validatedStreamCodec")) {
+            stack.push(arg(args, 0) instanceof CodecV c ? c : new CodecV(prim("ITEM_STACK")));
+            return;
+        }
         if (owner.endsWith("resources/ResourceKey") && name.equals("createRegistryKey")) { stack.push(new KeyV("dynamic")); return; }
         if (name.equals("enumStreamCodec") || (name.equals("streamCodec") && ret.contains("StreamCodec"))) {
             // an enum's codec, or a static factory (Filterable.streamCodec(c), TypedEntityData.streamCodec(c), …)
@@ -1209,6 +1224,11 @@ public class GenPacketSchema {
             if (desc.isEmpty() || m.methodType().stringValue().equals(desc)) { target = m; break; }
         }
         if (target == null) return opaque("no-method:" + shortName(owner) + "." + name);
+        // An abstract or interface method has no code, which is not the same as code that
+        // reads nothing: Palette.read reads a whole palette, and treating it as empty made
+        // the chunk section's description claim to be complete while the palette was missing
+        // from it.
+        if (target.code().isEmpty()) return opaque("no-body:" + shortName(owner) + "." + name);
         boolean isCtor = name.equals("<init>");
         List<Map<String, Object>> fields = new ArrayList<>();   // for constructors: PUTFIELD order
         List<Map<String, Object>> values = new ArrayList<>();   // for static readers: values produced in order
@@ -1997,6 +2017,11 @@ public class GenPacketSchema {
                 case "readJsonWithCodec", "readWithCodec" -> produced = nbtOrText(args.isEmpty() ? null : arg(args, 0));
                 case "readEnumSet" -> produced = arg(args, 0) instanceof ClassV cv ? node("enumset", "name", shortName(cv.internal()), "values", enumValues(cv.internal())) : opaque("readEnumSet");
                 case "readFixedBitSet" -> produced = node("prim", "t", "FIXED_BIT_SET", "bits", constOf(arg(args, 0)));
+                // readFixedSizeLongArray(array) fills an array whose length came from
+                // somewhere else entirely — the bits per entry of a chunk section — so the
+                // count is not on the wire and this is not a list of any length the schema
+                // can state.
+                case "readFixedSizeLongArray" -> produced = opaque("length-not-on-the-wire:readFixedSizeLongArray");
                 case "readBytes" -> {
                     if (constOf(arg(args, 0)) != null) produced = node("prim", "t", "FIXED_BYTES", "len", constOf(arg(args, 0)));   // readBytes(256): a fixed-size block
                     else if (unwrap(arg(args, 0)) instanceof CodecV len && "prim".equals(len.n().get("k")) && "VAR_INT".equals(len.n().get("t"))) {

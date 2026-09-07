@@ -153,6 +153,23 @@ and what it read becomes part of the value; a helper that reads nothing is a wri
 bookkeeping and is ignored. Dropping one that does read would produce a struct short of fields
 while the packet still counted as fully typed.
 
+The schema's leaves are named primitives — `VAR_INT`, `ITEM_STACK`, `COMPONENT_PATCH` — and the
+names are all this generator needs, because the library has a Go type for each. A generator for
+another language has nothing, so `hand-crafted/prims.json` says what each name is on the wire: a
+node tree in the schema's own vocabulary where one describes it, a bit layout where the value is
+fields inside an integer, and `native` for the few a language implements in its runtime (the
+var-int framing, the binary NBT format, the integers themselves). Each definition records the
+Java member it was read from. `mc26 build` checks that every primitive a version uses is defined
+and that the definitions resolve, so a version that introduces a new one stops the build instead
+of producing a binding with a hole in it; `prims <version>` prints the same report.
+
+`hand-crafted/nodes.json` does the same for the vocabulary the trees are built from. A node kind
+such as `list` or `holder` meant something exact, but that meaning lived only in this extractor
+and this generator; it now says what the bytes are, what the node's own keys mean, and which Go
+type it becomes. It also carries the frame a packet travels in, which the schema never mentions
+and without which a primitive that reads to the end of the packet has no meaning. The build fails
+on a node kind nobody has defined, as it does on a primitive.
+
 The header of every generated file lists the packets that were skipped and
 why (`opaque`, `dispatch`, a branch-guarded reader); as of 26.1, 26.2 and 26.3-pre-2 there are
 none — every packet of the protocol is generated — and none is hand-written

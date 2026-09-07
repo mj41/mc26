@@ -1,0 +1,752 @@
+{
+ "_": [
+  "What the schema's named primitives are on the wire.",
+  "",
+  "packet_schema.json describes every packet as a tree whose leaves are named:",
+  "VAR_INT, ITEM_STACK, COMPONENT_PATCH. Those names are all a Go generator needs,",
+  "because the Go library has a type for each. A generator for another language has",
+  "nothing, so this file says what each name means, and gen/cmd/prims checks that",
+  "every primitive a version uses is defined here.",
+  "",
+  "A definition is one of three shapes:",
+  "  a node tree, in the same vocabulary the schema itself uses;",
+  "  {k: bits}, when the value is bit fields inside one integer, offset counted from",
+  "    the least significant bit;",
+  "  {k: native}, when no composition describes it and every language implements it",
+  "    in its runtime.",
+  "A definition may name another primitive; a reader resolves that recursively.",
+  "",
+  "Each entry records the Java member it was read from. They were derived from the",
+  "bytecode of the 26.2 server jar and checked a second time against it; javap them",
+  "with `go run ./gen/cmd/javap` before changing anything here."
+ ],
+ "prims": {
+  "BIT_SET": {
+   "def": {
+    "k": "prim",
+    "t": "LONG_ARRAY"
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readBitSet / writeBitSet",
+   "note": "Byte-for-byte a LONG_ARRAY (var-int word count, then that many big-endian longs), interpreted as java.util.BitSet.valueOf(long[]): bit i is bit (i mod 64) of word i/64 counting from the least significant bit, and the writer trims the word count to the last word that has a bit set."
+  },
+  "BLOCK_POS": {
+   "def": {
+    "k": "bits",
+    "bits": 64,
+    "of": "LONG",
+    "fields": [
+     {
+      "name": "x",
+      "offset": 38,
+      "width": 26,
+      "signed": true
+     },
+     {
+      "name": "z",
+      "offset": 12,
+      "width": 26,
+      "signed": true
+     },
+     {
+      "name": "y",
+      "offset": 0,
+      "width": 12,
+      "signed": true
+     }
+    ]
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readBlockPos(ByteBuf) -> net/minecraft/core/BlockPos.of(J); layout from BlockPos.<clinit> + getX/getY/getZ(J) + asLong(III)",
+   "note": "One big-endian signed 64-bit long packing three two's-complement fields: x in bits 38-63, z in bits 12-37, y in bits 0-11."
+  },
+  "BOOL": {
+   "def": {
+    "k": "native",
+    "of": "bool",
+    "note": "one byte; 0 is false, any non-zero byte is true; the writer emits 1 for true"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$1.decode (the object put into ByteBufCodecs.BOOL) and net/minecraft/network/FriendlyByteBuf.readBoolean, both io/netty/buffer/AbstractByteBuf.readBoolean",
+   "note": "A single byte: 0 means false and any non-zero byte means true, and true is written as 1."
+  },
+  "BYTE": {
+   "def": {
+    "k": "native",
+    "of": "i8",
+    "note": "one byte, signed two's complement, -128..127"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$2.decode (ByteBufCodecs.BYTE) and net/minecraft/network/FriendlyByteBuf.readByte, both io/netty/buffer/AbstractByteBuf.readByte",
+   "note": "One byte read as a signed two's-complement value in -128..127."
+  },
+  "BYTE_ARRAY": {
+   "def": {
+    "k": "list",
+    "elem": {
+     "k": "prim",
+     "t": "BYTE"
+    }
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readByteArray(ByteBuf,int)",
+   "note": "A var-int count then exactly that many raw bytes; a node's `max` only caps the count and is not on the wire - note Mojang checks only count > max, not count < 0, so a generated reader must reject a negative count itself."
+  },
+  "CHUNK_POS": {
+   "def": {
+    "k": "bits",
+    "bits": 64,
+    "of": "LONG",
+    "fields": [
+     {
+      "name": "x",
+      "offset": 0,
+      "width": 32,
+      "signed": true
+     },
+     {
+      "name": "z",
+      "offset": 32,
+      "width": 32,
+      "signed": true
+     }
+    ]
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readChunkPos -> net/minecraft/world/level/ChunkPos.unpack(J); ChunkPos.pack(II) and the ChunkPos(int,int) record constructor",
+   "note": "One big-endian signed 64-bit long with x in the low 32 bits and z in the high 32 bits - so on the wire the four bytes of z arrive FIRST, then the four bytes of x."
+  },
+  "COMPONENT_PATCH": {
+   "def": {
+    "k": "struct",
+    "name": "DataComponentPatch",
+    "fields": [
+     {
+      "name": "addedCount",
+      "type": {
+       "k": "prim",
+       "t": "VAR_INT"
+      }
+     },
+     {
+      "name": "removedCount",
+      "type": {
+       "k": "prim",
+       "t": "VAR_INT"
+      }
+     },
+     {
+      "name": "added",
+      "type": {
+       "k": "counted",
+       "count": "addedCount",
+       "elem": {
+        "k": "prim",
+        "t": "TYPED_DATA_COMPONENT"
+       }
+      }
+     },
+     {
+      "name": "removed",
+      "type": {
+       "k": "counted",
+       "count": "removedCount",
+       "elem": {
+        "k": "registry",
+        "registry": "data_component_type"
+       }
+      }
+     }
+    ]
+   },
+   "java": "net/minecraft/core/component/DataComponentPatch.STREAM_CODEC = createStreamCodec(new DataComponentPatch$1) -> net/minecraft/core/component/DataComponentPatch$3.decode",
+   "note": "Two var-int counts first, then addedCount components (each a TYPED_DATA_COMPONENT) and then removedCount component-type ids \u2014 it is NOT two `list`s, because both counts precede both runs."
+  },
+  "CONTAINER_ID": {
+   "def": {
+    "k": "prim",
+    "t": "VAR_INT"
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readContainerId(ByteBuf) / writeContainerId(ByteBuf,int); net/minecraft/network/codec/ByteBufCodecs$22",
+   "note": "A plain var-int with no bias or offset - the token only records that the number identifies an open container."
+  },
+  "DELIMITED_COMPONENT_PATCH": {
+   "def": {
+    "k": "struct",
+    "name": "DelimitedDataComponentPatch",
+    "fields": [
+     {
+      "name": "addedCount",
+      "type": {
+       "k": "prim",
+       "t": "VAR_INT"
+      }
+     },
+     {
+      "name": "removedCount",
+      "type": {
+       "k": "prim",
+       "t": "VAR_INT"
+      }
+     },
+     {
+      "name": "added",
+      "type": {
+       "k": "counted",
+       "count": "addedCount",
+       "elem": {
+        "k": "struct",
+        "name": "DelimitedTypedDataComponent",
+        "fields": [
+         {
+          "name": "type",
+          "type": {
+           "k": "registry",
+           "registry": "data_component_type"
+          }
+         },
+         {
+          "name": "length",
+          "type": {
+           "k": "prim",
+           "t": "VAR_INT"
+          }
+         },
+         {
+          "name": "value",
+          "type": {
+           "k": "lenprefixed",
+           "length": "length",
+           "elem": {
+            "k": "dispatch",
+            "name": "DataComponent",
+            "key": {
+             "field": "type"
+            },
+            "casesFrom": "packet_schema.json#components",
+            "recursive": true
+           }
+          }
+         }
+        ]
+       }
+      }
+     },
+     {
+      "name": "removed",
+      "type": {
+       "k": "counted",
+       "count": "removedCount",
+       "elem": {
+        "k": "registry",
+        "registry": "data_component_type"
+       }
+      }
+     }
+    ]
+   },
+   "java": "net/minecraft/core/component/DataComponentPatch.DELIMITED_STREAM_CODEC (DataComponentPatch$2 wraps each value in ByteBufCodecs.registryFriendlyLengthPrefixed)",
+   "note": "COMPONENT_PATCH with every added value preceded by its length in bytes, so a reader can step over a component it does not know."
+  },
+  "DOUBLE": {
+   "def": {
+    "k": "native",
+    "of": "f64be",
+    "note": "eight bytes, big-endian, IEEE-754 binary64"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$10.decode (ByteBufCodecs.DOUBLE) and net/minecraft/network/FriendlyByteBuf.readDouble, both io/netty/buffer/AbstractByteBuf.readDouble",
+   "note": "Eight big-endian bytes reinterpreted as an IEEE-754 double-precision float."
+  },
+  "ENTITY_DATA": {
+   "def": {
+    "k": "whilelist",
+    "elem": {
+     "k": "struct",
+     "name": "EntityDataValue",
+     "fields": [
+      {
+       "name": "index",
+       "type": {
+        "k": "prim",
+        "t": "UNSIGNED_BYTE"
+       }
+      },
+      {
+       "name": "value",
+       "type": {
+        "k": "dispatch",
+        "name": "EntityDataSerializer",
+        "key": {
+         "k": "prim",
+         "t": "VAR_INT"
+        },
+        "casesFrom": "entity_data.json#serializers"
+       },
+       "when": [
+        [
+         {
+          "field": "index",
+          "test": "cmp",
+          "value": 255,
+          "op": "<"
+         }
+        ]
+       ]
+      }
+     ]
+    },
+    "while": {
+     "field": "index",
+     "test": "eq",
+     "value": 255
+    }
+   },
+   "java": "net/minecraft/network/protocol/game/ClientboundSetEntityDataPacket.unpack, with net/minecraft/network/syncher/SynchedEntityData$DataValue.read",
+   "note": "Entries of { unsigned-byte field index, var-int serializer id, value in that serializer's codec } repeated UNTIL an index byte of 0xff, which is the terminator and carries nothing after it; the `while` clause is the schema's end-of-list condition, not a continue condition. The serializer ids and their value types are the serializers list of entity_data.json."
+  },
+  "FIXED_BIT_SET": {
+   "def": {
+    "k": "native",
+    "of": "fixed_bit_set",
+    "note": "No length prefix at all: read exactly ceil(bits/8) raw bytes, where `bits` is the node's own parameter (the schema emits it as a sibling of `t`). Bit i is bit (i mod 8) of byte i/8, counting from the least significant bit of each byte. In 26.2 the only size used is bits=20, i.e. exactly 3 bytes."
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readFixedBitSet(int) with net/minecraft/util/Mth.positiveCeilDiv(int,int); writeFixedBitSet(BitSet,int)",
+   "note": "A bit set whose size the packet already knows: ceil(bits/8) bare bytes with no count, LSB-first within each byte."
+  },
+  "FIXED_BYTES": {
+   "def": {
+    "k": "native",
+    "of": "fixed_bytes",
+    "note": "exactly `len` raw bytes, no count on the wire; `len` is the constant on the node"
+   },
+   "java": "net/minecraft/network/chat/MessageSignature.read",
+   "note": "A block of exactly `len` bytes with no length prefix; all six occurrences in the 26.2 schema are len 256, the chat message-signature block, and several are conditional fields (present only when the preceding packed id says so)."
+  },
+  "FLOAT": {
+   "def": {
+    "k": "native",
+    "of": "f32be",
+    "note": "four bytes, big-endian, IEEE-754 binary32"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$9.decode (ByteBufCodecs.FLOAT) and net/minecraft/network/FriendlyByteBuf.readFloat, both io/netty/buffer/AbstractByteBuf.readFloat",
+   "note": "Four big-endian bytes reinterpreted as an IEEE-754 single-precision float."
+  },
+  "GAME_PROFILE_PROPERTIES": {
+   "def": {
+    "k": "list",
+    "max": 16,
+    "elem": {
+     "k": "struct",
+     "name": "Property",
+     "fields": [
+      {
+       "name": "name",
+       "type": {
+        "k": "string",
+        "max": 64
+       }
+      },
+      {
+       "name": "value",
+       "type": {
+        "k": "string",
+        "max": 32767
+       }
+      },
+      {
+       "name": "signature",
+       "type": {
+        "k": "optional",
+        "elem": {
+         "k": "string",
+         "max": 1024
+        }
+       }
+      }
+     ]
+    }
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$32.decode/encode (the class ByteBufCodecs.<clinit> pc 255 stores in GAME_PROFILE_PROPERTIES)",
+   "note": "A var-int count of at most 16 properties, each a name string (max 64 chars), a value string (max 32767 chars) and a boolean-prefixed optional signature string (max 1024 chars); every string is a var-int BYTE length then UTF-8, and each max is a character cap."
+  },
+  "IDENTIFIER": {
+   "def": {
+    "k": "prim",
+    "t": "STRING"
+   },
+   "java": "net/minecraft/resources/Identifier.STREAM_CODEC (and net/minecraft/network/FriendlyByteBuf.readIdentifier)",
+   "note": "Exactly a STRING (var-int byte length + UTF-8), cap 32767 characters, whose text is a namespaced id \"namespace:path\"; a string with no ':' (or a leading ':') takes the default \"minecraft\" namespace."
+  },
+  "INSTANT": {
+   "def": {
+    "k": "prim",
+    "t": "LONG"
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readInstant / writeInstant",
+   "note": "An ordinary big-endian signed 64-bit long holding milliseconds since the Unix epoch (Instant.ofEpochMilli)."
+  },
+  "INT": {
+   "def": {
+    "k": "native",
+    "of": "i32be",
+    "note": "four bytes, big-endian, signed two's complement"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$5.decode (ByteBufCodecs.INT) and net/minecraft/network/FriendlyByteBuf.readInt, both io/netty/buffer/AbstractByteBuf.readInt",
+   "note": "Four bytes, most significant first, read as a signed two's-complement 32-bit value."
+  },
+  "ITEM_STACK": {
+   "def": {
+    "k": "prim",
+    "t": "OPTIONAL_ITEM_STACK"
+   },
+   "java": "net/minecraft/world/item/ItemStack.STREAM_CODEC (the anonymous net/minecraft/world/item/ItemStack$2.decode)",
+   "note": "Byte-for-byte OPTIONAL_ITEM_STACK with the empty encoding forbidden: the count is always at least one, so the item id and the component patch always follow. The creative mode slot packet sends UNTRUSTED_ITEM_STACK instead, which delimits its components."
+  },
+  "JSON_TEXT": {
+   "def": {
+    "k": "prim",
+    "t": "STRING"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$34.decode (the codec from ByteBufCodecs.lenientJson)",
+   "note": "A label on an ordinary STRING read - var-int byte length + UTF-8 bytes - whose text is then parsed as JSON; `max` on the node is the character cap given to lenientJson (262144 for login disconnect, 32767 for the status response)."
+  },
+  "LONG": {
+   "def": {
+    "k": "native",
+    "of": "i64be",
+    "note": "eight bytes, big-endian, signed two's complement"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$7.decode (ByteBufCodecs.LONG) and net/minecraft/network/FriendlyByteBuf.readLong, both io/netty/buffer/AbstractByteBuf.readLong",
+   "note": "Eight bytes, most significant first, read as a signed two's-complement 64-bit value."
+  },
+  "LONG_ARRAY": {
+   "def": {
+    "k": "list",
+    "elem": {
+     "k": "prim",
+     "t": "LONG"
+    }
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readLongArray(ByteBuf) + readFixedSizeLongArray(ByteBuf,long[]); net/minecraft/network/codec/ByteBufCodecs$13",
+   "note": "A var-int count followed by that many big-endian signed 64-bit longs; the decoder rejects a count larger than readableBytes()/8."
+  },
+  "LP_VEC3": {
+   "def": {
+    "k": "native",
+    "of": "lp_vec3",
+    "note": "Read one unsigned byte b0. If b0 == 0 the value is (0,0,0) and NOTHING further is read. Otherwise read one unsigned byte b1 and a big-endian unsigned 32-bit integer u, and form the 48-bit value v = (u << 16) | (b1 << 8) | b0 (note this is mixed-endian on the wire: wire bytes are v[7:0], v[15:8], then u big-endian, i.e. v[47:40], v[39:32], v[31:24], v[23:16]). scale = b0 & 3; if (b0 & 4) != 0 then read a VarInt h and set scale |= ((h as unsigned 32-bit) << 2). Then x = q(v >> 3) * scale, y = q(v >> 18) * scale, z = q(v >> 33) * scale, where q(w) = min(w & 0x7FFF, 32766) * 2 / 32766 - 1. The components therefore occupy bits 3-17, 18-32 and 33-47 of v."
+   },
+   "java": "net/minecraft/network/LpVec3.read(ByteBuf) and LpVec3.unpack(J); reached from net/minecraft/world/phys/Vec3.LP_STREAM_CODEC = StreamCodec.of(LpVec3::write, LpVec3::read)",
+   "note": "Minecraft's low-precision packed vector: a 1-byte zero marker, else 6 mixed-endian bytes holding three 15-bit quantised components plus 3 scale/flag bits, optionally followed by a VarInt carrying the rest of the scale."
+  },
+  "MESSAGE_SIGNATURE": {
+   "def": {
+    "k": "prim",
+    "t": "FIXED_BYTES",
+    "len": 256
+   },
+   "java": "net/minecraft/network/chat/MessageSignature.read",
+   "note": "A 256-byte signature block with no length prefix; the 26.2 extractor never emits this token - the codec field it is keyed on does not exist, and signatures reach the schema as FIXED_BYTES len 256 through the inlined reader."
+  },
+  "NBT": {
+   "def": {
+    "k": "native",
+    "of": "nbt",
+    "note": "one tag in network form: a 1-byte tag id, then that tag's payload with no name; id 0 (TAG_End) is the whole value and carries no payload"
+   },
+   "java": "net/minecraft/nbt/NbtIo.readAnyTag / writeAnyTag (reached from net/minecraft/network/FriendlyByteBuf.readNbt and net/minecraft/network/codec/ByteBufCodecs$16 = ByteBufCodecs.TAG/TRUSTED_TAG/COMPOUND_TAG)",
+   "note": "One NBT tag in network form: a 1-byte tag id followed by that tag's payload with NO root name; id 0 (TAG_End) is the entire value, and whether that means \"absent\" or is a decode error depends on the reader (FriendlyByteBuf.readNbt returns null; ByteBufCodecs.TAG/COMPOUND_TAG throw)."
+  },
+  "OPTIONAL_ITEM_STACK": {
+   "def": {
+    "k": "struct",
+    "name": "ItemStack",
+    "fields": [
+     {
+      "name": "count",
+      "type": {
+       "k": "prim",
+       "t": "VAR_INT"
+      }
+     },
+     {
+      "name": "item",
+      "type": {
+       "k": "holder",
+       "registry": "item"
+      },
+      "when": [
+       [
+        {
+         "field": "count",
+         "test": "cmp",
+         "value": 0,
+         "op": ">"
+        }
+       ]
+      ]
+     },
+     {
+      "name": "components",
+      "type": {
+       "k": "prim",
+       "t": "COMPONENT_PATCH"
+      },
+      "when": [
+       [
+        {
+         "field": "count",
+         "test": "cmp",
+         "value": 0,
+         "op": ">"
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   "java": "net/minecraft/world/item/ItemStack.OPTIONAL_STREAM_CODEC = ItemStack.createOptionalStreamCodec(DataComponentPatch.STREAM_CODEC) -> net/minecraft/world/item/ItemStack$1.decode",
+   "note": "A var-int count; when it is <= 0 the stack is empty and nothing else is read, otherwise a var-int item registry id and a COMPONENT_PATCH follow."
+  },
+  "OPTIONAL_ITEM_STACK_LIST": {
+   "def": {
+    "k": "list",
+    "elem": {
+     "k": "prim",
+     "t": "OPTIONAL_ITEM_STACK"
+    }
+   },
+   "java": "net/minecraft/world/item/ItemStack.OPTIONAL_LIST_STREAM_CODEC = OPTIONAL_STREAM_CODEC.apply(ByteBufCodecs.collection(IntFunction)) -> net/minecraft/network/codec/ByteBufCodecs$24.decode",
+   "note": "An ordinary var-int-counted list whose elements are OPTIONAL_ITEM_STACK, so empty stacks may appear inside it; no wire-relevant maximum."
+  },
+  "OPTIONAL_NBT": {
+   "def": {
+    "k": "prim",
+    "t": "NBT"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$19.decode/encode (the class ByteBufCodecs.<clinit> pc 215 stores in OPTIONAL_COMPOUND_TAG)",
+   "note": "Byte-for-byte an NBT and NOT boolean-prefixed: absence is the single TAG_End byte 0x00 that NBT already allows, and when a tag is present it must be a TAG_Compound (anything else is a decode error)."
+  },
+  "OPTIONAL_TEXT": {
+   "def": {
+    "k": "optional",
+    "elem": {
+     "k": "prim",
+     "t": "TEXT"
+    }
+   },
+   "java": "net/minecraft/network/chat/ComponentSerialization.OPTIONAL_STREAM_CODEC = ByteBufCodecs.optional(STREAM_CODEC) -> net/minecraft/network/codec/ByteBufCodecs$23.decode/encode",
+   "note": "A boolean; when true one TEXT (a network NBT tag) follows, when false nothing follows \u2014 genuinely boolean-prefixed, unlike OPTIONAL_NBT."
+  },
+  "OPTIONAL_VAR_INT": {
+   "def": {
+    "k": "native",
+    "of": "optional_var_int",
+    "note": "One var-int: 0 means absent; any other value n means present with the value n - 1. The writer emits (value + 1) when present and 0 when absent. This is NOT the schema's `optional` node, which is a boolean followed by the value."
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs.OPTIONAL_VAR_INT = VAR_INT.map(lambda$static$0, lambda$static$1); ByteBufCodecs$6; net/minecraft/network/syncher/EntityDataSerializers$3.decode",
+   "note": "A single var-int where 0 encodes absence and n > 0 encodes the value n - 1. WARNING: the extractor also attaches this token to EntityDataSerializers$2, where it is wrong - see evidence."
+  },
+  "PUBLIC_KEY": {
+   "def": {
+    "k": "prim",
+    "t": "BYTE_ARRAY",
+    "max": 512
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readPublicKey",
+   "note": "A var-int length (the reader rejects above 512) then that many bytes, holding the DER X.509 SubjectPublicKeyInfo encoding of an RSA public key; the writer imposes no cap of its own."
+  },
+  "REGISTRY_KEY": {
+   "def": {
+    "k": "prim",
+    "t": "IDENTIFIER"
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readRegistryKey",
+   "note": "One IDENTIFIER naming the registry itself (e.g. \"minecraft:block\"); the ResourceKey's root-registry parent is a static field in Java and never travels."
+  },
+  "REST_BYTES": {
+   "def": {
+    "k": "native",
+    "of": "rest_bytes",
+    "note": "every byte remaining in the packet frame; no count precedes it, the length comes from the frame"
+   },
+   "java": "net/minecraft/network/protocol/common/custom/DiscardedPayload.lambda$codec$1 (and net/minecraft/network/protocol/login/ClientboundCustomQueryPacket.readUnknownPayload)",
+   "note": "The raw remainder of the buffer after the fields before it, with no length prefix; it is opaque bytes - when a channel is one the server knows (minecraft:brand carries a STRING) that structure is inside the blob, not described by this token."
+  },
+  "ROTATION_BYTE": {
+   "def": {
+    "k": "prim",
+    "t": "BYTE"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs.ROTATION_BYTE = BYTE.map(Mth::unpackDegrees, Mth::packDegrees); ByteBufCodecs$2",
+   "note": "One signed byte covering a whole turn in 256 steps: the angle in degrees is b * 360 / 256 (b is signed, so -128..127 covers -180..+179.3)."
+  },
+  "SHORT": {
+   "def": {
+    "k": "native",
+    "of": "i16be",
+    "note": "two bytes, big-endian, signed two's complement, -32768..32767"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$3.decode (ByteBufCodecs.SHORT) and net/minecraft/network/FriendlyByteBuf.readShort, both io/netty/buffer/AbstractByteBuf.readShort",
+   "note": "Two bytes, most significant first, read as a signed two's-complement 16-bit value."
+  },
+  "STRING": {
+   "def": {
+    "k": "native",
+    "of": "string",
+    "note": "a var-int byte count, then exactly that many UTF-8 bytes"
+   },
+   "java": "net/minecraft/network/Utf8String.read",
+   "note": "Var-int BYTE count followed by that many UTF-8 bytes; where a cap applies it is a CHARACTER count (the byte length is rejected above 3x the cap before reading, the decoded String.length() above the cap after), and in the 26.2 schema no prim STRING node carries a cap at all - the separate `string` node kind is what carries `max`."
+  },
+  "TEXT": {
+   "def": {
+    "k": "prim",
+    "t": "NBT"
+   },
+   "java": "net/minecraft/network/chat/ComponentSerialization.STREAM_CODEC -> ByteBufCodecs.fromCodecWithRegistries -> net/minecraft/network/codec/ByteBufCodecs$18.decode over ByteBufCodecs$16 (tagCodec)",
+   "note": "A chat component carried as exactly one network NBT tag (parsed with NbtOps): a TAG_String for a plain literal, a non-empty TAG_List of components, or a TAG_Compound \u2014 TAG_End is rejected, and there is no length prefix on the codec field itself."
+  },
+  "TYPED_DATA_COMPONENT": {
+   "def": {
+    "k": "dispatch",
+    "name": "DataComponent",
+    "key": {
+     "k": "registry",
+     "registry": "data_component_type"
+    },
+    "casesFrom": "packet_schema.json#components",
+    "recursive": true
+   },
+   "java": "net/minecraft/core/component/TypedDataComponent.STREAM_CODEC -> net/minecraft/core/component/TypedDataComponent$1.decode",
+   "note": "A var-int data_component_type registry id, then the value in that component type's own stream codec, with no length prefix. The cases are the components section of packet_schema.json, keyed by the same registry name, which casesFrom points at. It is marked recursive because several components (container, bundle_contents, charged_projectiles, use_remainder, sulfur_cube_content) hold item stacks, which hold a component patch again: the format recurses, so a reader has to stop inlining here and recurse at run time instead."
+  },
+  "UNSIGNED_BYTE": {
+   "def": {
+    "k": "native",
+    "of": "u8",
+    "note": "one byte, unsigned, 0..255 (the same byte as BYTE, interpreted without sign)"
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readUnsignedByte -> io/netty/buffer/AbstractByteBuf.readUnsignedByte",
+   "note": "The same single byte as BYTE, but interpreted as unsigned 0..255."
+  },
+  "UNSIGNED_SHORT": {
+   "def": {
+    "k": "native",
+    "of": "u16be",
+    "note": "two bytes, big-endian, unsigned, 0..65535"
+   },
+   "java": "net/minecraft/network/codec/ByteBufCodecs$4.decode (ByteBufCodecs.UNSIGNED_SHORT) and net/minecraft/network/FriendlyByteBuf.readUnsignedShort, both io/netty/buffer/AbstractByteBuf.readUnsignedShort",
+   "note": "The same two big-endian bytes as SHORT, interpreted as unsigned 0..65535; the writer truncates the int to 16 bits."
+  },
+  "UNTRUSTED_ITEM_STACK": {
+   "def": {
+    "k": "struct",
+    "name": "UntrustedItemStack",
+    "fields": [
+     {
+      "name": "count",
+      "type": {
+       "k": "prim",
+       "t": "VAR_INT"
+      }
+     },
+     {
+      "name": "itemId",
+      "type": {
+       "k": "prim",
+       "t": "VAR_INT"
+      },
+      "when": [
+       [
+        {
+         "field": "count",
+         "test": "cmp",
+         "op": ">",
+         "value": 0
+        }
+       ]
+      ]
+     },
+     {
+      "name": "components",
+      "type": {
+       "k": "prim",
+       "t": "DELIMITED_COMPONENT_PATCH"
+      },
+      "when": [
+       [
+        {
+         "field": "count",
+         "test": "cmp",
+         "op": ">",
+         "value": 0
+        }
+       ]
+      ]
+     }
+    ]
+   },
+   "java": "net/minecraft/world/item/ItemStack.OPTIONAL_UNTRUSTED_STREAM_CODEC",
+   "note": "OPTIONAL_ITEM_STACK with the delimited component patch: a count of at most zero is an empty stack and nothing follows it."
+  },
+  "UUID": {
+   "def": {
+    "k": "struct",
+    "name": "UUID",
+    "fields": [
+     {
+      "name": "mostSigBits",
+      "type": {
+       "k": "prim",
+       "t": "LONG"
+      }
+     },
+     {
+      "name": "leastSigBits",
+      "type": {
+       "k": "prim",
+       "t": "LONG"
+      }
+     }
+    ]
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readUUID(ByteBuf)",
+   "note": "Sixteen bytes: the high 64 bits then the low 64 bits, each a big-endian signed long - the same as writing the 128-bit value big-endian."
+  },
+  "VAR_INT": {
+   "def": {
+    "k": "native",
+    "of": "varint",
+    "note": "unsigned LEB128 of the 32-bit two's-complement pattern: seven data bits per byte, least significant group first, high bit set means another byte follows; at most 5 bytes"
+   },
+   "java": "net/minecraft/network/VarInt.read (reached from net/minecraft/network/codec/ByteBufCodecs$6.decode for ByteBufCodecs.VAR_INT and from net/minecraft/network/FriendlyByteBuf.readVarInt)",
+   "note": "Little-endian base-128: each byte carries seven data bits, the high bit says another byte follows, and a value is at most five bytes; negative numbers are the 32-bit two's-complement pattern, so they always take five bytes."
+  },
+  "VAR_INT_ARRAY": {
+   "def": {
+    "k": "list",
+    "elem": {
+     "k": "prim",
+     "t": "VAR_INT"
+    }
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readVarIntArray() -> readVarIntArray(int)",
+   "note": "A var-int count followed by that many var-ints; the no-arg overload caps the count at readableBytes()."
+  },
+  "VAR_INT_LIST": {
+   "def": {
+    "k": "list",
+    "elem": {
+     "k": "prim",
+     "t": "VAR_INT"
+    }
+   },
+   "java": "net/minecraft/network/FriendlyByteBuf.readIntIdList / writeIntIdList",
+   "note": "Identical on the wire to VAR_INT_ARRAY - a var-int count then that many var-ints - differing only in the Java container (IntList rather than int[])."
+  },
+  "VAR_LONG": {
+   "def": {
+    "k": "native",
+    "of": "varlong",
+    "note": "unsigned LEB128 of the 64-bit two's-complement pattern: seven data bits per byte, least significant group first, high bit set means another byte follows; at most 10 bytes"
+   },
+   "java": "net/minecraft/network/VarLong.read (reached from net/minecraft/network/codec/ByteBufCodecs$8.decode for ByteBufCodecs.VAR_LONG and from net/minecraft/network/FriendlyByteBuf.readVarLong)",
+   "note": "The same base-128 scheme as VAR_INT but over 64 bits and at most ten bytes; negative numbers are the 64-bit two's-complement pattern and always take ten bytes."
+  }
+ }
+}

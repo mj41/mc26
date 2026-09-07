@@ -54,8 +54,20 @@ type ChunkPos = level.ChunkPos
 // count 0 is the empty stack, also used for OPTIONAL_STREAM_CODEC).
 type ItemStack struct{ component.SlotData }
 
+// UntrustedItemStack is an ItemStack whose components each carry their length
+// (ItemStack.OPTIONAL_UNTRUSTED_STREAM_CODEC). A client sends it, in the
+// creative mode slot packet; a server never does.
+type UntrustedItemStack struct{ component.UntrustedSlotData }
+
 func (s *ItemStack) ReadFrom(r io.Reader) (int64, error) { return s.SlotData.ReadFrom(r) }
 func (s ItemStack) WriteTo(w io.Writer) (int64, error)   { return (&s.SlotData).WriteTo(w) }
+
+func (s *UntrustedItemStack) ReadFrom(r io.Reader) (int64, error) {
+	return s.UntrustedSlotData.ReadFrom(r)
+}
+func (s UntrustedItemStack) WriteTo(w io.Writer) (int64, error) {
+	return (&s.UntrustedSlotData).WriteTo(w)
+}
 
 // AddedComponent is one typed data component: the component type id and its
 // value (TypedDataComponent on the wire).
