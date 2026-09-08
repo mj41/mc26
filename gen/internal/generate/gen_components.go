@@ -33,12 +33,6 @@ func genComponents(jsonDir, outRoot string) error {
 	if len(schema.Components) == 0 {
 		return fmt.Errorf("genComponents: packet_schema.json has no components section (re-run extraction)")
 	}
-	var hand map[string]string
-	if err := readHandCrafted(outRoot, "hand_components.json", &hand); err != nil {
-		return fmt.Errorf("genComponents: %w", err)
-	}
-	delete(hand, "_comment")
-
 	gs := newComponentGenState()
 	// A component whose value is a union keyed by a registry needs the numeric ids of
 	// that registry's entries, the same as a packet does.
@@ -65,13 +59,6 @@ func genComponents(jsonDir, outRoot string) error {
 	var skipped []string
 	for _, name := range sortedKeys(schema.Components) {
 		e := schema.Components[name]
-		if reason, ok := hand[name]; ok {
-			skipped = append(skipped, name+" (hand-written: "+reason+")")
-			if e.Coverage == "full" {
-				logf("genComponents: %s is fully typed in the schema now; the hand-written version could be retired", name)
-			}
-			continue
-		}
 		if e.Coverage != "full" {
 			skipped = append(skipped, name+" ("+holeSummary(e.Type)+")")
 			continue
@@ -233,7 +220,7 @@ func renderComponentSkipped(skipped []string) string {
 	var sb strings.Builder
 	sb.WriteString(generatedHeader("gen_components.go", "packet_schema.json"))
 	sb.WriteString("package component\n\n")
-	sb.WriteString("// Components not generated (hand-written in this package, or not fully typed by the schema):\n")
+	sb.WriteString("// Components not generated, because the schema does not type them fully:\n")
 	for _, s := range skipped {
 		fmt.Fprintf(&sb, "//   - %s\n", s)
 	}

@@ -50,7 +50,7 @@ func TestSmokeEquipment(t *testing.T) {
 	})
 
 	c.Events.AddListener(
-		bot.PacketHandler{Priority: 32, ID: packetid.ClientboundSetEquipment, F: func(p pk.Packet) error {
+		bot.PacketHandler{Priority: 32, ID: packetid.ClientboundPlaySetEquipment, F: func(p pk.Packet) error {
 			var eq play.SetEquipment
 			mu.Lock()
 			defer mu.Unlock()
@@ -61,8 +61,8 @@ func TestSmokeEquipment(t *testing.T) {
 			// Every entry but the last carried the continuation bit; the reader
 			// takes it off, so no slot may still have it.
 			for _, s := range eq.Slots {
-				if s.Slot < 0 {
-					problems = append(problems, fmt.Sprintf("slot %d still carries the continuation bit", s.Slot))
+				if s.SlotID < 0 {
+					problems = append(problems, fmt.Sprintf("slot %d still carries the continuation bit", s.SlotID))
 				}
 			}
 			if len(eq.Slots) > most {

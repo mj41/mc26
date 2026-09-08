@@ -29,11 +29,11 @@ func New(c *bot.Client) *PlayerList {
 	}
 	c.Events.AddListener(
 		bot.PacketHandler{
-			Priority: 64, ID: packetid.ClientboundPlayerInfoUpdate,
+			Priority: 64, ID: packetid.ClientboundPlayPlayerInfoUpdate,
 			F: pl.handlePlayerInfoUpdatePacket,
 		},
 		bot.PacketHandler{
-			Priority: 64, ID: packetid.ClientboundPlayerInfoRemove,
+			Priority: 64, ID: packetid.ClientboundPlayPlayerInfoRemove,
 			F: pl.handlePlayerInfoRemovePacket,
 		},
 	)

@@ -1,11 +1,13 @@
 // Package smoke runs a vanilla Minecraft server of one version — in a JDK 25
 // container by default, on the host's Java with Runtime "host" — and the
 // library's smoke test against it: `go test ./bot -run TestSmoke` with
-// MC26_SMOKE_ADDR, MC26_SMOKE_RCON and MC26_SMOKE_RCON_PASSWORD set. Package e2e reuses the server for the example bots.
+// MC26_SMOKE_ADDR, MC26_SMOKE_RCON, MC26_SMOKE_RCON_PASSWORD, MC26_SMOKE_MGMT and
+// MC26_SMOKE_MGMT_SECRET set. Package e2e reuses the server for the example bots.
 package smoke
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,8 +28,12 @@ type Server struct {
 	Port         int
 	RCONPort     int
 	RCONPassword string
-	Runtime      string // "podman" or "docker" (detected when empty), or "host" for the host's java
-	Log          func(format string, args ...any)
+	// MgmtPort and MgmtSecret are the management protocol's (JSON-RPC over a
+	// WebSocket, plain text here); the secret is generated when empty.
+	MgmtPort   int
+	MgmtSecret string
+	Runtime    string // "podman" or "docker" (detected when empty), or "host" for the host's java
+	Log        func(format string, args ...any)
 
 	cmd       *exec.Cmd
 	container string
@@ -43,6 +49,9 @@ func (s *Server) Addr() string { return fmt.Sprintf("127.0.0.1:%d", s.Port) }
 // RCONAddr is the RCON address.
 func (s *Server) RCONAddr() string { return fmt.Sprintf("127.0.0.1:%d", s.RCONPort) }
 
+// MgmtAddr is where the management protocol answers.
+func (s *Server) MgmtAddr() string { return fmt.Sprintf("127.0.0.1:%d", s.MgmtPort) }
+
 // Start writes the configuration and launches the server; WaitReady blocks
 // until it accepts players.
 func (s *Server) Start() error {
@@ -54,6 +63,18 @@ func (s *Server) Start() error {
 	}
 	if s.RCONPort == 0 {
 		s.RCONPort = s.Port + 1
+	}
+	if s.MgmtPort == 0 {
+		s.MgmtPort = s.Port + 2
+	}
+	if s.MgmtSecret == "" {
+		// the server insists on exactly 40 alphanumeric characters
+		const alnum = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+		b := make([]byte, 40)
+		for i := range b {
+			b[i] = alnum[rand.Intn(len(alnum))]
+		}
+		s.MgmtSecret = string(b)
 	}
 	if s.RCONPassword == "" {
 		s.RCONPassword = "mc26"
@@ -72,9 +93,9 @@ func (s *Server) Start() error {
 	}
 	// Inside a container the server listens on the image's default ports and
 	// the host ports are published onto them.
-	port, rcon := s.Port, s.RCONPort
+	port, rcon, mgmt, mgmtHost := s.Port, s.RCONPort, s.MgmtPort, "127.0.0.1"
 	if s.Runtime != "host" {
-		port, rcon = 25565, 25575
+		port, rcon, mgmt, mgmtHost = 25565, 25575, 25585, "0.0.0.0"
 	}
 	props := fmt.Sprintf(`online-mode=false
 white-list=false
@@ -83,6 +104,11 @@ server-port=%d
 enable-rcon=true
 rcon.port=%d
 rcon.password=%s
+management-server-enabled=true
+management-server-host=%s
+management-server-port=%d
+management-server-secret=%s
+management-server-tls-enabled=false
 level-type=minecraft\:flat
 level-name=world
 spawn-protection=0
@@ -94,7 +120,7 @@ difficulty=peaceful
 enforce-secure-profile=false
 network-compression-threshold=256
 sync-chunk-writes=false
-`, port, rcon, s.RCONPassword)
+`, port, rcon, s.RCONPassword, mgmtHost, mgmt, s.MgmtSecret)
 	if err := os.WriteFile(filepath.Join(s.WorkDir, "server.properties"), []byte(props), 0o644); err != nil {
 		return err
 	}
@@ -127,6 +153,7 @@ sync-chunk-writes=false
 			"--security-opt", "label=disable",
 			"-p", fmt.Sprintf("127.0.0.1:%d:25565", s.Port),
 			"-p", fmt.Sprintf("127.0.0.1:%d:25575", s.RCONPort),
+			"-p", fmt.Sprintf("127.0.0.1:%d:25585", s.MgmtPort),
 			"-v", work + ":/data", "-w", "/data",
 		}
 		if s.Runtime != "podman" {
@@ -146,7 +173,7 @@ sync-chunk-writes=false
 	if s.container != "" {
 		where = s.Runtime + " " + s.container
 	}
-	s.Log("server %s: %s, :%d (rcon :%d), log %s", s.Version, where, s.Port, s.RCONPort, s.LogPath())
+	s.Log("server %s: %s, :%d (rcon :%d, management :%d), log %s", s.Version, where, s.Port, s.RCONPort, s.MgmtPort, s.LogPath())
 	return nil
 }
 
@@ -231,8 +258,8 @@ func Run(o Options) error {
 	if run == "" {
 		run = "TestSmoke"
 	}
-	o.Log("smoke: server ready, running go test ./bot -run %s", run)
-	test := exec.Command("go", "test", "./bot", "-run", run, "-count=1", "-v")
+	o.Log("smoke: server ready, running go test ./bot ./management -run %s", run)
+	test := exec.Command("go", "test", "./bot", "./management", "-run", run, "-count=1", "-v")
 	test.Dir = o.LibDir
 	addr := srv.Addr()
 	if o.ClientAddr != "" {
@@ -242,6 +269,8 @@ func Run(o Options) error {
 		"MC26_SMOKE_ADDR="+addr,
 		"MC26_SMOKE_RCON="+srv.RCONAddr(),
 		"MC26_SMOKE_RCON_PASSWORD="+srv.RCONPassword,
+		"MC26_SMOKE_MGMT="+srv.MgmtAddr(),
+		"MC26_SMOKE_MGMT_SECRET="+srv.MgmtSecret,
 	)
 	test.Env = append(test.Env, o.Env...)
 	out, err := test.CombinedOutput()

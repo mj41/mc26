@@ -406,6 +406,14 @@ class Schema:
         self.packets = j(os.path.join(data_dir, "packets.json"))
         self.registries = j(os.path.join(data_dir, "registries.json"))
         self.entity_data = j(os.path.join(data_dir, "entity_data.json"))
+        # nodes.json `packed`: a global palette's width is ceillog2 of an id
+        # space's size, which is not on the wire - block states from blocks.json,
+        # biomes from the registry the server synchronised (biomes.json for vanilla)
+        blocks = j(os.path.join(data_dir, "blocks.json"))
+        self.id_space_sizes = {
+            "block_state": sum(len(b.get("states", [])) for b in blocks.values()),
+            "worldgen/biome": len(j(os.path.join(data_dir, "biomes.json"))),
+        }
         self.prims = j(prims_path)["prims"]
         # The NBT definition carries the payload of every tag id; without it an
         # NBT value cannot be read past its first byte.
@@ -629,9 +637,7 @@ class Codec:
     def decode(self, node, r, params=None):
         params = params or {}
         k = node.get("k")
-        if k is None and {"id", "num", "type"} <= set(node):
-            k = "case"
-        if k not in self.s.documented_kinds and k not in ("case",):
+        if k not in self.s.documented_kinds:
             raise Hole("node kind %r is not described in nodes.json" % k)
         fn = getattr(self, "d_" + k, None)
         if fn is None:
@@ -709,12 +715,59 @@ class Codec:
         return ("counted", out)
 
     def d_lenprefixed(self, node, r, params):
-        snode, values = self.ctx.siblings[-1]
-        n, _ = _field_value(snode, values, len(values), node["length"])
+        # nodes.json `lenprefixed`: the byte count is a var int right here unless
+        # `length` names an earlier sibling that already carried it
+        if "length" in node:
+            snode, values = self.ctx.siblings[-1]
+            n, _ = _field_value(snode, values, len(values), node["length"])
+        else:
+            n = _dec_varint(r, None)
         r.push_limit(n)
         v = self.decode(node["elem"], r)
         r.pop_limit()
         return ("lenprefixed", v)
+
+    def d_rest(self, node, r, params):
+        # nodes.json `rest`: `elem` until the enclosing window has no bytes left
+        out = []
+        while r.pos < r.limit:
+            self.ctx.path.append("[%d]" % len(out))
+            out.append(self.decode(node["elem"], r))
+            self.ctx.path.pop()
+        return ("rest", out)
+
+    def _packed_width(self, node, values_node, values):
+        bits, _ = _field_value(values_node, values, len(values), node["bits"])
+        w = node["width"].get(str(bits), node["width"].get("*"))
+        if w is None:
+            raise Hole("packed: no width for a %s of %d" % (node["bits"], bits))
+        if isinstance(w, dict):
+            n = self.s.id_space_sizes.get(w["registryBits"])
+            if n is None:
+                raise Hole("packed: no size known for id space %r" % w["registryBits"])
+            w = (n - 1).bit_length() if n > 1 else 0   # ceillog2
+        return w
+
+    def d_packed(self, node, r, params):
+        # nodes.json `packed`: entries of `width` bits in big-endian longs,
+        # floor(64/width) per long, ceil(entries/that) longs, no count
+        snode, values = self.ctx.siblings[-1]
+        width = self._packed_width(node, snode, values)
+        entries = node["entries"]
+        if width == 0:
+            return ("packed", width, [])
+        vpl = 64 // width
+        longs = (entries + vpl - 1) // vpl
+        raw = r.take(8 * longs)
+        vals = []
+        mask = (1 << width) - 1
+        for i in range(longs):
+            word = int.from_bytes(raw[8 * i:8 * i + 8], "big")
+            for j in range(vpl):
+                if len(vals) == entries:
+                    break
+                vals.append((word >> (j * width)) & mask)
+        return ("packed", width, vals)
 
     def d_map(self, node, r, params):
         n = _dec_varint(r, None)
@@ -931,8 +984,6 @@ class Codec:
     def encode(self, node, v, w, params=None):
         params = params or {}
         k = node.get("k")
-        if k is None and {"id", "num", "type"} <= set(node):
-            k = "case"
         fn = getattr(self, "e_" + k, None)
         if fn is None:
             raise Hole("node kind %r has no writer" % k)
@@ -990,14 +1041,47 @@ class Codec:
             self.encode(node["elem"], it, w)
 
     def e_lenprefixed(self, node, v, w, params):
+        if "length" in node:
+            snode, values = self.ctx.siblings[-1]
+            n, _ = _field_value(snode, values, len(values), node["length"])
+            m = w.mark()
+            self.encode(node["elem"], v[1], w)
+            got = len(w.since(m))
+            if got != n:
+                raise WireError("lenprefixed: re-encoded to %d bytes, the length "
+                                "field says %d" % (got, n))
+            return
+        inner = Writer()
+        self.encode(node["elem"], v[1], inner)
+        body = inner.bytes()
+        _enc_varint(w, len(body), None)
+        w.raw(body)
+
+    def e_rest(self, node, v, w, params):
+        for it in v[1]:
+            self.encode(node["elem"], it, w)
+
+    def e_packed(self, node, v, w, params):
         snode, values = self.ctx.siblings[-1]
-        n, _ = _field_value(snode, values, len(values), node["length"])
-        m = w.mark()
-        self.encode(node["elem"], v[1], w)
-        got = len(w.since(m))
-        if got != n:
-            raise WireError("lenprefixed: re-encoded to %d bytes, the length "
-                            "field says %d" % (got, n))
+        width = self._packed_width(node, snode, values)
+        if width != v[1]:
+            raise WireError("packed: re-encoding at %d bits, decoded at %d" % (width, v[1]))
+        if width == 0:
+            return
+        vpl = 64 // width
+        entries = node["entries"]
+        longs = (entries + vpl - 1) // vpl
+        vals = v[2]
+        out = bytearray()
+        for i in range(longs):
+            word = 0
+            for j in range(vpl):
+                idx = i * vpl + j
+                if idx >= entries:
+                    break
+                word |= (vals[idx] & ((1 << width) - 1)) << (j * width)
+            out += word.to_bytes(8, "big")
+        w.raw(out)
 
     def e_map(self, node, v, w, params):
         _enc_varint(w, len(v[1]), None)

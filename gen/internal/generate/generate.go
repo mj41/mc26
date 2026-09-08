@@ -56,6 +56,7 @@ var Generators = []Generator{
 	{"packets", genPackets},
 	{"nbt", genNBT},
 	{"constants", genConstants},
+	{"rpc", genRPC},
 }
 
 // Run executes every generator.

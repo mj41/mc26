@@ -134,6 +134,9 @@ func Run(o Options) (*Info, error) {
 	if missing := prims.CheckKinds(nodes, kinds); len(missing) > 0 {
 		return nil, fmt.Errorf("node kinds used but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
 	}
+	if missing := prims.CheckKinds(nodes, prims.DefKinds(defs)); len(missing) > 0 {
+		return nil, fmt.Errorf("node kinds used by prims.json but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
+	}
 	o.Log("build %s: %d primitives and %d node kinds, all defined", v.ID, len(used), len(kinds))
 
 	o.Log("build %s: generate", v.ID)

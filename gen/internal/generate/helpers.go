@@ -130,22 +130,6 @@ func stripMinecraftPrefix(name string) string {
 // Hand-crafted JSON helpers
 // ---------------------------------------------------------------------------
 
-// namingOverrides represents the structure of hand-crafted/naming_overrides.json.
-type namingOverrides struct {
-	ComponentNames       map[string]string   `json:"component_names"`
-	BlockTrimPrefixTypes []string            `json:"block_trim_prefix_types"`
-	NBTTypeNames         map[string]string   `json:"nbt_type_names"`
-	FieldNames           map[string][]string `json:"field_names"`
-	TypeNames            map[string]string   `json:"type_names"`
-}
-
-// packetPhase represents one entry in hand-crafted/packet_phases.json.
-type packetPhase struct {
-	Name     string `json:"name"`
-	GoPrefix string `json:"go_prefix"`
-	Comment  string `json:"comment"`
-}
-
 // readHandCrafted reads a JSON file from the assets' hand-crafted/ directory.
 func readHandCrafted(_ string, filename string, v any) error {
 	return readJSON(filepath.Join(assetsDir, "hand-crafted", filename), v)

@@ -58,8 +58,6 @@ type genState struct {
 	reserved map[string]bool   // Go names taken by the package's own types (components); records get a suffix
 
 	guardHook   func(elem schemaNode) (string, error) // set while typing a packet: the Go type of a guarded entry list
-	fieldNames  map[string][]string                   // naming_overrides.json field_names: Java short class → field names
-	typeNames   map[string]string                     // naming_overrides.json type_names: Java short class → Go name
 	registryIDs registriesJSON                        // registries.json, for the numeric ids of a union's cases
 }
 
@@ -277,6 +275,7 @@ var primTypes = map[string]string{
 	"COMPONENT_PATCH": "types.ComponentPatch", "GAME_PROFILE": "types.GameProfile", "PUBLIC_KEY": "types.PublicKey",
 	"MESSAGE_SIGNATURE": "types.MessageSignature", "JSON_TEXT": "pk.String", "JSON": "pk.String",
 	"RAW_BYTES": "types.RestBytes", "REST_BYTES": "types.RestBytes", "CONTAINER_ID": "pk.VarInt",
+	"CHUNK_SECTIONS":   "pk.ByteArray", // level.Chunk.PutData reads the sections out of it with the dimension's height
 	"OPTIONAL_VAR_INT": "types.OptionalVarInt", "VAR_INT_LIST": "types.List[pk.VarInt, *pk.VarInt]",
 	"VAR_INT_ARRAY": "types.List[pk.VarInt, *pk.VarInt]", "LONG_ARRAY": "types.List[pk.Long, *pk.Long]",
 	"ROTATION_BYTE": "pk.Angle", "CHAR": "pk.UnsignedShort", "BLOCK_HIT_RESULT": "types.BlockHitResult",
@@ -296,28 +295,7 @@ func genPackets(jsonDir, goMCRoot string) error {
 	if err := readJSON(filepath.Join(jsonDir, "packets.json"), &ids); err != nil {
 		return fmt.Errorf("genPackets: %w", err)
 	}
-	phases, err := loadPacketPhases(goMCRoot)
-	if err != nil {
-		return fmt.Errorf("genPackets: %w", err)
-	}
-
-	// Packets implemented by hand are skipped whatever the schema says; when
-	// the schema types one of them fully, that is reported so the hand-written
-	// version can be retired.
-	var handPackets map[string]string
-	if err := readHandCrafted(goMCRoot, "hand_packets.json", &handPackets); err != nil {
-		return fmt.Errorf("genPackets: %w", err)
-	}
-	delete(handPackets, "_comment")
-
 	gs := newPacketGenState()
-	var overrides namingOverrides
-	if err := readHandCrafted(goMCRoot, "naming_overrides.json", &overrides); err != nil {
-		return fmt.Errorf("genPackets: %w", err)
-	}
-	gs.fieldNames = overrides.FieldNames
-	gs.typeNames = overrides.TypeNames
-	wireState().fieldNames = overrides.FieldNames
 	var regs registriesJSON
 	if err := readJSON(filepath.Join(jsonDir, "registries.json"), &regs); err != nil {
 		return fmt.Errorf("genPackets: %w", err)
@@ -325,13 +303,7 @@ func genPackets(jsonDir, goMCRoot string) error {
 	gs.registryIDs = regs
 	total, generated := 0, 0
 	for _, state := range sortedKeys(ids) {
-		if state == "handshake" {
-			continue // no packetid constants for the handshake; the framework writes it by hand
-		}
-		abbrev, ok := phases[state]
-		if !ok {
-			continue
-		}
+		abbrev := statePrefix(state)
 		for _, flow := range []string{"clientbound", "serverbound"} {
 			names := ids[state][flow]
 			if len(names) == 0 {
@@ -347,13 +319,6 @@ func genPackets(jsonDir, goMCRoot string) error {
 					continue
 				}
 				holes := gs.untyped(entry.Type)
-				if reason, hand := handPackets[state+"/"+flow+"/"+name]; hand {
-					skipped = append(skipped, name+" (hand-written: "+reason+")")
-					if holes == "" {
-						logf("genPackets: %s/%s/%s is fully typed in the schema now; the hand-written version in hand.go could be retired", state, flow, name)
-					}
-					continue
-				}
 				if holes != "" {
 					skipped = append(skipped, name+" ("+holes+")")
 					continue
@@ -429,21 +394,6 @@ func writeGo(path string, src string) error {
 		formatted = []byte(src)
 	}
 	return writeFile(path, formatted)
-}
-
-func loadPacketPhases(goMCRoot string) (map[string]string, error) {
-	var phases []struct {
-		Name     string `json:"name"`
-		GoPrefix string `json:"go_prefix"`
-	}
-	if err := readJSON(filepath.Join(assetsDir, "hand-crafted", "packet_phases.json"), &phases); err != nil {
-		return nil, err
-	}
-	out := map[string]string{}
-	for _, p := range phases {
-		out[p.Name] = p.GoPrefix
-	}
-	return out, nil
 }
 
 type packetDef struct {
@@ -580,14 +530,7 @@ func (gs *genState) fieldsOf(n schemaNode, owner string) ([]goField, error) {
 	raw, _ := n["fields"].([]any)
 	var out []goField
 	used := map[string]int{}
-	// naming_overrides.json names the fields of a structure whose reader gives
-	// the walker nothing to name them by; applied here so guards that reference
-	// a field see the final name.
-	override := gs.fieldNames[shortJava(owner)]
-	if len(override) != len(raw) {
-		override = nil
-	}
-	// a guard names the field by its name in the schema, which an override renames
+	// a guard names the field by its name in the schema
 	byName := map[string]goField{}
 	for i, f := range raw {
 		fm := f.(map[string]any)
@@ -595,9 +538,7 @@ func (gs *genState) fieldsOf(n schemaNode, owner string) ([]goField, error) {
 		when, _ := fm["when"].(string)
 		jname, _ := fm["name"].(string)
 		schemaName := jname
-		if override != nil {
-			jname = override[i]
-		} else if strings.HasPrefix(jname, "lambda$") || strings.ContainsAny(jname, "$") {
+		if strings.HasPrefix(jname, "lambda$") || strings.ContainsAny(jname, "$") {
 			jname = fmt.Sprintf("v%d", i) // synthetic getter: no field name in the bytecode
 		}
 		name := uniqueField(goFieldName(jname), used)
@@ -1408,9 +1349,6 @@ func (gs *genState) structType(n schemaNode, owner string) (string, error) {
 // the wire). Cases the schema cannot type are kept as ids that fail to decode.
 // unionName is the Go name of the union built from Java class java.
 func (gs *genState) unionName(java string) string {
-	if goName := gs.typeNames[java]; goName != "" {
-		return goName
-	}
 	return goTypeName(java)
 }
 

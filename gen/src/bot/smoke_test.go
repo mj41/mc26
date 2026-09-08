@@ -29,7 +29,7 @@ func inTheWorld(c *bot.Client) <-chan struct{} {
 	ch := make(chan struct{})
 	var once sync.Once
 	c.Events.AddListener(bot.PacketHandler{
-		Priority: 16, ID: packetid.ClientboundLevelChunkWithLight,
+		Priority: 16, ID: packetid.ClientboundPlayLevelChunkWithLight,
 		F: func(pk.Packet) error {
 			once.Do(func() { close(ch) })
 			return nil

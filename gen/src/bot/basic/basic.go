@@ -45,13 +45,13 @@ type Player struct {
 func NewPlayer(c *bot.Client, settings Settings, events EventsListener) *Player {
 	p := &Player{c: c, Settings: settings}
 	c.Events.AddListener(
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundLogin, F: p.handleLoginPacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundKeepAlive, F: p.handleKeepAlivePacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundRespawn, F: p.handleRespawnPacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPing, F: p.handlePingPacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundCookieRequest, F: p.handleCookieRequestPacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundStoreCookie, F: p.handleStoreCookiePacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundUpdateTags, F: p.handleUpdateTags},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayLogin, F: p.handleLoginPacket},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayKeepAlive, F: p.handleKeepAlivePacket},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayRespawn, F: p.handleRespawnPacket},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayPing, F: p.handlePingPacket},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayCookieRequest, F: p.handleCookieRequestPacket},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayStoreCookie, F: p.handleStoreCookiePacket},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayUpdateTags, F: p.handleUpdateTags},
 	)
 	events.attach(p)
 	return p

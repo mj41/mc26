@@ -87,7 +87,7 @@ func TestSmokeEntityData(t *testing.T) {
 	_ = player
 
 	c.Events.AddListener(
-		bot.PacketHandler{Priority: 32, ID: packetid.ClientboundAddEntity, F: func(p pk.Packet) error {
+		bot.PacketHandler{Priority: 32, ID: packetid.ClientboundPlayAddEntity, F: func(p pk.Packet) error {
 			var add play.AddEntity
 			if err := p.Scan(&add); err != nil {
 				return fmt.Errorf("add_entity: %w", err)
@@ -101,7 +101,7 @@ func TestSmokeEntityData(t *testing.T) {
 			mu.Unlock()
 			return nil
 		}},
-		bot.PacketHandler{Priority: 32, ID: packetid.ClientboundSetEntityData, F: func(p pk.Packet) error {
+		bot.PacketHandler{Priority: 32, ID: packetid.ClientboundPlaySetEntityData, F: func(p pk.Packet) error {
 			var data play.SetEntityData
 			// A value the generated types cannot decode stops the whole
 			// packet: that is the failure this test is looking for.

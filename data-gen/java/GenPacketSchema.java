@@ -31,6 +31,7 @@
  * and record components name the fields, nested X.read(buf) / new X(buf) recurse.
  */
 import java.lang.classfile.*;
+import java.lang.classfile.attribute.*;
 import java.lang.classfile.instruction.*;
 import java.lang.constant.*;
 import java.lang.reflect.*;
@@ -88,6 +89,35 @@ public class GenPacketSchema {
      * Readers whose wire form only the writer shows: ServerboundCustomQueryAnswerPacket reads
      * "whatever is left" and discards it, but clients write writeNullable(payload).
      */
+    /**
+     * Fields a constructor reads as raw bytes whose contents prims.json describes: the chunk
+     * data is a byte array to the packet and a run of chunk sections to whoever reads it, and
+     * the section reader's count comes from outside the packet, which the bytecode of the
+     * packet cannot say. The primitive named here is defined from that reader's bytecode.
+     */
+    static final Map<String, String> FIELD_PRIMS = Map.of(
+        "ClientboundLevelChunkPacketData.buffer", "CHUNK_SECTIONS"
+    );
+
+    /** Applies FIELD_PRIMS to every struct of a finished tree, by struct name and field name. */
+    @SuppressWarnings("unchecked")
+    static void pinFields(Object tree) {
+        if (tree instanceof Map<?, ?> m0) {
+            Map<String, Object> m = (Map<String, Object>) m0;
+            if ("struct".equals(m.get("k")) && m.get("fields") instanceof List<?> fs) {
+                for (Object o : fs) {
+                    if (!(o instanceof Map<?, ?> f0)) continue;
+                    Map<String, Object> f = (Map<String, Object>) f0;
+                    String pinned = FIELD_PRIMS.get(m.get("name") + "." + f.get("name"));
+                    if (pinned != null) f.put("type", prim(pinned));
+                }
+            }
+            for (Object v : m.values()) pinFields(v);
+        } else if (tree instanceof List<?> l) {
+            for (Object v : l) pinFields(v);
+        }
+    }
+
     static final Map<String, Map<String, Object>> READER_RULES = Map.ofEntries(
         Map.entry("net/minecraft/network/protocol/login/ServerboundCustomQueryAnswerPacket.readPayload", node("optional", "elem", prim("REST_BYTES"))),
         // entity data: index bytes terminated by 0xff, each with a serializer id and the serializer's value (GenEntityData types them)
@@ -103,7 +133,7 @@ public class GenPacketSchema {
     static Map<String, Object> opaque(String java) { return node("opaque", "java", java); }
 
     /** Values on the simulated operand stack. */
-    sealed interface Value permits CodecV, LambdaV, ConstV, KeyV, FnV, ClassV, ArrayV, EnumFnV, RegistryElemV, MaskedV, PassedV, OffsetV, BitsV, OtherV {}
+    sealed interface Value permits CodecV, LambdaV, ConstV, KeyV, FnV, ClassV, ArrayV, EnumFnV, RegistryElemV, MaskedV, PassedV, OffsetV, BitsV, NewV, OtherV {}
     record CodecV(Map<String, Object> n) implements Value {}
     record LambdaV(String owner, String name, String desc) implements Value {}
     record ConstV(Object v) implements Value {}
@@ -125,6 +155,9 @@ public class GenPacketSchema {
     // A value read plus a constant: `buf.readVarInt() - 1`, which a branch then compares with
     // a number, meaning a comparison of what was read with that number shifted back.
     record OffsetV(Map<String, Object> of, int delta) implements Value {}
+    // An object constructed with no codec of its own, kept with what it was built from: a
+    // getter asked of it later (StatType::streamCodec) answers from those arguments.
+    record NewV(String cls, String desc, List<Value> args) implements Value {}
     record OtherV(String what) implements Value {}
 
     // ---- primitives ---------------------------------------------------------------
@@ -222,6 +255,7 @@ public class GenPacketSchema {
         }
         packets.sort(Comparator.comparing((Entry e) -> e.state).thenComparing(e -> e.key));
         List<Entry> components = componentEntries();
+        for (List<Entry> es : List.of(packets, structs, components)) for (Entry e : es) pinFields(e.type);
 
         StringBuilder sb = new StringBuilder("{\n  \"version\": 2,\n  \"packets\": {\n");
         writeEntries(sb, packets);
@@ -348,6 +382,42 @@ public class GenPacketSchema {
         return "STREAM_CODEC";
     }
     static String shortName(String internalName) { return internalName.substring(internalName.lastIndexOf('/') + 1); }
+
+    /** The local variable live in `slot` from `bci` on: the one a store at bci - 1 assigned. */
+    static String localName(Map<Integer, List<LocalVariableInfo>> table, int slot, int bci) {
+        List<LocalVariableInfo> lvs = table.get(slot);
+        if (lvs == null) return null;
+        for (LocalVariableInfo lv : lvs) if (lv.startPc() == bci) return lv.name().stringValue();
+        for (LocalVariableInfo lv : lvs) if (lv.startPc() <= bci && bci < lv.startPc() + lv.length()) return lv.name().stringValue();
+        return null;
+    }
+
+    /**
+     * What a static codec field carries, from its generic signature: ParticleTypes.STREAM_CODEC
+     * is a StreamCodec<RegistryFriendlyByteBuf, ParticleOptions>, so the last type argument.
+     * Null when the field has no signature or the argument is not a class.
+     */
+    static String codecPayloadClass(ClassModel cm, String field) {
+        for (FieldModel f : cm.fields()) {
+            if (!f.fieldName().stringValue().equals(field)) continue;
+            String sig = f.findAttribute(Attributes.signature()).map(a -> a.signature().stringValue()).orElse(null);
+            if (sig == null || !sig.endsWith(">;")) return null;
+            String args = sig.substring(sig.indexOf('<') + 1, sig.length() - 2);
+            // the last top-level argument, generics of its own included
+            int depth = 0, start = 0;
+            String last = null;
+            for (int i = 0; i < args.length(); i++) {
+                char c = args.charAt(i);
+                if (c == '<') depth++;
+                else if (c == '>') depth--;
+                else if (c == ';' && depth == 0) { last = args.substring(start, i); start = i + 1; }
+            }
+            if (last == null || !last.startsWith("L")) return null;
+            int lt = last.indexOf('<');
+            return lt < 0 ? last.substring(1) : last.substring(1, lt);
+        }
+        return null;
+    }
     static Class<?> loadClass(String internalName) {
         try { return Class.forName(internalName.replace('/', '.'), false, GenPacketSchema.class.getClassLoader()); }
         catch (Throwable t) { return null; }
@@ -485,6 +555,12 @@ public class GenPacketSchema {
                 break;
             }
         }
+        // A dispatch built in a bootstrap class was named after that class, which names the
+        // registry rather than what travels: the field's signature names the payload.
+        if (cm != null && "dispatch".equals(result.get("k")) && shortName(owner).equals(result.get("name"))) {
+            String payload = codecPayloadClass(cm, field);
+            if (payload != null) result.put("name", shortName(payload));
+        }
         if (result.get("name") != null && ("dispatch".equals(result.get("k")) || "struct".equals(result.get("k")))) {
             ref.put("name", result.get("name"));
             ref.put("of", result.get("k"));
@@ -594,6 +670,14 @@ public class GenPacketSchema {
         // Objects.requireNonNull(codec) sits between a field read and its use.
         if (owner.equals("java/util/Objects") && name.equals("requireNonNull") && !args.isEmpty()) { stack.push(args.get(0)); return; }
 
+        // BuiltInRegistries.BLOCK.key(): the resource key of the registry a static field holds,
+        // which names the registry the same way Registries.BLOCK does.
+        if (name.equals("key") && args.isEmpty() && ret.contains("ResourceKey")
+                && recv instanceof OtherV rv && rv.what().startsWith("idmap:BuiltInRegistries.")) {
+            stack.push(new KeyV(registryName(rv.what().substring(rv.what().lastIndexOf('.') + 1))));
+            return;
+        }
+
         // StringRepresentable.fromEnum(JointType::values) is a codec that names an enum
         // constant by its serialized name, so what travels is that name as a string.
         if (owner.endsWith("util/StringRepresentable") && (name.equals("fromEnum") || name.equals("fromEnumWithMapping"))) {
@@ -627,6 +711,21 @@ public class GenPacketSchema {
                                 wrapped.add(w);
                             }
                             cases = wrapped;
+                        }
+                        // dispatch(Stat::getType, StatType::streamCodec) over elements with no
+                        // codec of their own: the getter is asked of each element as its
+                        // bootstrap constructed it. StatType builds its codec from the registry
+                        // it was given, so `mined` reads a block id and `killed` an entity type id.
+                        if (cases != null && f instanceof LambdaV l && arity(l.desc()) == 0 && l.desc().endsWith("StreamCodec;")) {
+                            List<Map<String, Object>> bound = new ArrayList<>();
+                            for (Map<String, Object> c : cases) {
+                                NewV made = caseElemOf.get(c);
+                                Map<String, Object> t = made != null ? getterFieldNode(made.cls(), l.name(), made, depth + 1) : null;
+                                Map<String, Object> w = new LinkedHashMap<>(c);
+                                if (t != null) w.put("type", t);
+                                bound.add(w);
+                            }
+                            cases = bound;
                         }
                         if (cases != null) d.put("cases", cases);
                     }
@@ -773,8 +872,13 @@ public class GenPacketSchema {
                 else if (decodeDesc != null) stack.push(new CodecV(readerNode(cls, "decode", decodeDesc, depth + 1)));
                 else {
                     Map<String, Object> n0 = inlineMethod(cls, codecMethod[0], codecMethod[1], List.of(), depth, false);
-                    stack.push(new CodecV(n0 != null ? n0 : opaque(shortName(cls) + "." + codecMethod[0])));
+                    // a streamCodec() that reads a field the constructor built: kept whole,
+                    // so a dispatch can ask the getter with the constructor's arguments bound
+                    stack.push(n0 != null ? new CodecV(n0) : new NewV(cls, desc, args));
                 }
+            } else if (!stack.isEmpty() && stack.peek() instanceof OtherV top && top.what().equals(ov.what())) {
+                stack.pop();
+                stack.push(new NewV(cls, desc, args));
             }
             return;
         }
@@ -819,7 +923,9 @@ public class GenPacketSchema {
         "debug_subscription", "net/minecraft/util/debug/DebugSubscriptions",
         "command_argument_type", "net/minecraft/commands/synchronization/ArgumentTypeInfos",
         // the bootstrap is sometimes the element type itself rather than a class of its own
-        "consume_effect_type", "net/minecraft/world/item/consume_effects/ConsumeEffect$Type"
+        "consume_effect_type", "net/minecraft/world/item/consume_effects/ConsumeEffect$Type",
+        // elements built by a helper from the registry each one wraps (makeRegistryStatType)
+        "stat_type", "net/minecraft/stats/Stats"
     );
 
     /** The index of the first parameter of a descriptor whose type contains needle, or -1. */
@@ -851,52 +957,96 @@ public class GenPacketSchema {
         for (MethodModel m : cm.methods()) if (m.methodName().stringValue().equals("bootstrap") && (m.flags().flagsMask() & 0x0008) != 0) where.add("bootstrap");
         where.add("<clinit>");
         for (String bootstrapMethod : where) {
-        if (!cases.isEmpty()) break;
-        for (MethodModel m : cm.methods()) {
-            if (!m.methodName().stringValue().equals(bootstrapMethod)) continue;
-            Deque<Value> stack = new ArrayDeque<>();
-            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
-                if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESTATIC && ii.name().stringValue().startsWith("register")) {
-                    List<Value> a = popArgs(stack, arity(ii.typeSymbol().descriptorString()));
-                    String name = null;
-                    int nameAt = -1;
-                    for (int i = 0; i < a.size(); i++) if (a.get(i) instanceof ConstV c && c.v() instanceof String s0) { name = s0; nameAt = i; break; }
-                    if (name == null) { stack.push(new OtherV("register")); continue; }
-                    Map<String, Object> type = null;
-                    // register(name, CODEC, STREAM_CODEC) passes both the data codec and the
-                    // wire one, and a MapCodec looks like a codec to the walker, so take the
-                    // argument the method itself declares as a StreamCodec before guessing.
-                    int wireAt = paramOfType(ii.typeSymbol().descriptorString(), "network/codec/StreamCodec");
-                    if (wireAt > nameAt && arg(a, wireAt) instanceof CodecV wc) type = wc.n();
-                    for (int i = nameAt + 1; i < a.size() && type == null; i++) {
-                        Value v = a.get(i);
-                        if (v instanceof LambdaV l && l.desc().endsWith("StreamCodec;")) {
-                            // register("block", …, BlockParticleOption::streamCodec): the codec with the type bound
-                            Map<String, Object> t = inlineMethod(l.owner(), l.name(), l.desc(), List.of(new OtherV("type")), depth + 1, false);
-                            type = t != null ? t : opaque("registry-case:" + shortName(l.owner()) + "." + l.name());
-                        } else if (v instanceof CodecV c) {
-                            type = c.n();   // new BlockPositionSource$Type(): its streamCodec()
-                        } else if (v instanceof OtherV ov && ov.what().startsWith("static:")) {
-                            // Registry.register(registry, "furnace", FurnaceRecipeDisplay.TYPE): the field's value carries the codec
-                            String ref = ov.what().substring(7);
-                            int dot = ref.lastIndexOf('.');
-                            type = codecFieldNode(ref.substring(0, dot), ref.substring(dot + 1), depth + 1);
-                        }
-                    }
-                    if (type == null) type = a.size() - nameAt <= 2 ? node("unit") : opaque("registry-case:" + name);
-                    cases.add(node("case", "id", name.contains(":") ? name : "minecraft:" + name, "type", type));
-                    stack.push(new OtherV("register:" + name));
-                    continue;
-                }
-                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC) { stack.clear(); continue; }
-                step(el, stack, cls, depth);
+            if (!cases.isEmpty()) break;
+            for (MethodModel m : cm.methods()) {
+                if (!m.methodName().stringValue().equals(bootstrapMethod)) continue;
+                walkRegistrations(registry, cls, m, new HashMap<>(), cases, depth);
+                break;
             }
-            break;
-        }
         }
         List<Map<String, Object>> out = cases.isEmpty() ? null : cases;
         registryCasesCache.put(registry, out);
         return out;
+    }
+
+    /** The element a case was registered as, when it carries no codec of its own and was kept whole. */
+    static final Map<Map<String, Object>, NewV> caseElemOf = new IdentityHashMap<>();
+
+    /**
+     * One bootstrap method, registration by registration. A static helper of the bootstrap
+     * class that is handed a name is walked too, with its arguments bound — Stats registers
+     * every stat type through makeRegistryStatType(name, registry) — and a registration into
+     * some other registry on the way (the custom stats, into custom_stat) is not a case here.
+     */
+    static void walkRegistrations(String registry, String cls, MethodModel m, Map<Integer, Value> locals, List<Map<String, Object>> cases, int depth) {
+        Deque<Value> stack = new ArrayDeque<>();
+        for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+            if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESTATIC && ii.name().stringValue().startsWith("register")) {
+                List<Value> a = popArgs(stack, arity(ii.typeSymbol().descriptorString()));
+                String ret = ii.typeSymbol().descriptorString();
+                ret = ret.substring(ret.indexOf(')') + 1);
+                if (arg(a, 0) instanceof OtherV r0 && r0.what().startsWith("idmap:BuiltInRegistries.")
+                        && !registryName(r0.what().substring(r0.what().lastIndexOf('.') + 1)).equals(registry)) {
+                    if (!ret.equals("V")) stack.push(new OtherV("registered-elsewhere"));
+                    continue;
+                }
+                String name = null;
+                int nameAt = -1;
+                for (int i = 0; i < a.size(); i++) if (a.get(i) instanceof ConstV c && c.v() instanceof String s0) { name = s0; nameAt = i; break; }
+                if (name == null) { stack.push(new OtherV("register")); continue; }
+                Map<String, Object> type = null;
+                NewV elem = null;
+                // register(name, CODEC, STREAM_CODEC) passes both the data codec and the
+                // wire one, and a MapCodec looks like a codec to the walker, so take the
+                // argument the method itself declares as a StreamCodec before guessing.
+                int wireAt = paramOfType(ii.typeSymbol().descriptorString(), "network/codec/StreamCodec");
+                if (wireAt > nameAt && arg(a, wireAt) instanceof CodecV wc) type = wc.n();
+                for (int i = nameAt + 1; i < a.size() && type == null; i++) {
+                    Value v = a.get(i);
+                    if (v instanceof LambdaV l && l.desc().endsWith("StreamCodec;")) {
+                        // register("block", …, BlockParticleOption::streamCodec): the codec with the type bound
+                        Map<String, Object> t = inlineMethod(l.owner(), l.name(), l.desc(), List.of(new OtherV("type")), depth + 1, false);
+                        type = t != null ? t : opaque("registry-case:" + shortName(l.owner()) + "." + l.name());
+                    } else if (v instanceof CodecV c) {
+                        type = c.n();   // new BlockPositionSource$Type(): its streamCodec()
+                    } else if (v instanceof OtherV ov && ov.what().startsWith("static:")) {
+                        // Registry.register(registry, "furnace", FurnaceRecipeDisplay.TYPE): the field's value carries the codec
+                        String ref = ov.what().substring(7);
+                        int dot = ref.lastIndexOf('.');
+                        type = codecFieldNode(ref.substring(0, dot), ref.substring(dot + 1), depth + 1);
+                    } else if (v instanceof NewV nv) {
+                        // new StatType(registry, name): what it reads is whatever the dispatch
+                        // asks of it, which only the dispatch knows
+                        type = opaque("registry-element:" + shortName(nv.cls()));
+                        elem = nv;
+                    }
+                }
+                if (type == null) type = a.size() - nameAt <= 2 ? node("unit") : opaque("registry-case:" + name);
+                Map<String, Object> c = node("case", "id", name.contains(":") ? name : "minecraft:" + name, "type", type);
+                if (elem != null) caseElemOf.put(c, elem);
+                cases.add(c);
+                stack.push(new OtherV("register:" + name));
+                continue;
+            }
+            if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESTATIC && ii.owner().asInternalName().equals(cls)) {
+                String desc = ii.typeSymbol().descriptorString();
+                List<Value> a = popArgs(stack, arity(desc));
+                MethodModel helper = findMethod(cls, ii.name().stringValue(), desc);
+                boolean named = a.stream().anyMatch(v -> v instanceof ConstV c && c.v() instanceof String);
+                if (helper != null && named && depth < MAX_DEPTH) {
+                    Map<Integer, Value> inner = new HashMap<>();
+                    List<Integer> slots = paramSlots(desc, true);
+                    for (int i = 0; i < slots.size() && i < a.size(); i++) inner.put(slots.get(i), a.get(i));
+                    walkRegistrations(registry, cls, helper, inner, cases, depth + 1);
+                }
+                if (!desc.endsWith(")V")) stack.push(new OtherV("helper:" + ii.name().stringValue()));
+                continue;
+            }
+            if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC) { stack.clear(); continue; }
+            if (el instanceof LoadInstruction li && locals.containsKey(li.slot())) { stack.push(locals.get(li.slot())); continue; }
+            if (el instanceof StoreInstruction st) { if (!stack.isEmpty()) locals.put(st.slot(), stack.pop()); continue; }
+            step(el, stack, cls, depth);
+        }
     }
 
     static final Map<String, List<Map<String, Object>>> registryMethodCache = new HashMap<>();
@@ -1151,6 +1301,15 @@ public class GenPacketSchema {
     }
 
     static Map<String, Object> getterFieldNode(String owner, String method, int depth) {
+        return getterFieldNode(owner, method, null, depth);
+    }
+
+    /**
+     * The same, for one particular object: the constructor that built `made` runs with the
+     * arguments it was given, so a field the constructor derives from an argument — the
+     * codec StatType builds from the registry it wraps — comes out as that element's.
+     */
+    static Map<String, Object> getterFieldNode(String owner, String method, NewV made, int depth) {
         ClassModel cm = classModel(owner);
         if (cm == null || depth > MAX_DEPTH) return null;
         String field = null;
@@ -1169,6 +1328,12 @@ public class GenPacketSchema {
         int assigned = 0;
         for (MethodModel m : cm.methods()) {
             if (!m.methodName().stringValue().equals("<init>")) continue;
+            if (made != null && !m.methodType().stringValue().equals(made.desc())) continue;
+            Map<Integer, Value> locals = new HashMap<>();
+            if (made != null) {
+                List<Integer> slots = paramSlots(made.desc(), false);
+                for (int i = 0; i < slots.size() && i < made.args().size(); i++) locals.put(slots.get(i), made.args().get(i));
+            }
             Deque<Value> stack = new ArrayDeque<>();
             for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
                 if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTFIELD) {
@@ -1179,6 +1344,8 @@ public class GenPacketSchema {
                     }
                     continue;
                 }
+                if (el instanceof LoadInstruction li && locals.containsKey(li.slot())) { stack.push(locals.get(li.slot())); continue; }
+                if (el instanceof StoreInstruction st) { if (!stack.isEmpty()) locals.put(st.slot(), stack.pop()); continue; }
                 step(el, stack, owner, depth);
             }
         }
@@ -1226,13 +1393,66 @@ public class GenPacketSchema {
     }
 
     static void attachEnumIds(Map<String, Object> n, String enumClass) {
-        LambdaV toId = idMapperOf(enumClass);
+        attachEnumIds(n, enumClass, idMapperOf(enumClass));
+    }
+
+    static void attachEnumIds(Map<String, Object> n, String enumClass, LambdaV toId) {
         // ByIdMap.continuous(Enum::ordinal, …): an id mapper that maps the ordinal, which is
         // what a plain enum node already says
         if (toId == null || toId.name().equals("ordinal")) return;
         List<Integer> ids = enumWireIds(enumClass, toId);
         if (ids == null) { n.put("idsUnknown", true); return; }
         for (int i = 0; i < ids.size(); i++) if (ids.get(i) != i) { n.put("ids", ids); return; }
+    }
+
+    /**
+     * What readById(IntFunction) reads: an id in a registry, or — DisplaySlot.BY_ID — a
+     * constant of an enum by the number its class gave it.
+     */
+    static Map<String, Object> byIdNode(Value v) {
+        if (v instanceof OtherV ov && ov.what().startsWith("idmap:")) return node("registry", "registry", ov.what().substring(6));
+        if (v instanceof OtherV ov && ov.what().startsWith("static:")) {
+            String ref = ov.what().substring(7);
+            int dot = ref.lastIndexOf('.');
+            String cls = ref.substring(0, dot);
+            Class<?> c = loadClass(cls);
+            if (c != null && c.isEnum()) {
+                Map<String, Object> n = enumNode(cls);
+                if (readingIds.add(cls)) {
+                    try { attachEnumIds(n, cls, byIdMapperOf(cls, ref.substring(dot + 1))); }
+                    finally { readingIds.remove(cls); }
+                }
+                return n;
+            }
+        }
+        return node("registry", "registry", "?");
+    }
+
+    /**
+     * The ToIntFunction an enum's class hands ByIdMap.continuous or ByIdMap.sparse to build the
+     * IntFunction it stores in `field`: BY_ID = ByIdMap.continuous(DisplaySlot::id, values(), ZERO).
+     * Null when the field is built some other way.
+     */
+    static LambdaV byIdMapperOf(String enumClass, String field) {
+        ClassModel cm = classModel(enumClass);
+        if (cm == null) return null;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("<clinit>")) continue;
+            LambdaV toInt = null, candidate = null;
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof InvokeDynamicInstruction idi) {
+                    if (idi.name().stringValue().equals("applyAsInt") && lambdaOf(idi) instanceof LambdaV l) toInt = l;
+                    continue;
+                }
+                if (el instanceof InvokeInstruction ii && ii.opcode() == Opcode.INVOKESTATIC && ii.owner().asInternalName().endsWith("util/ByIdMap")) { candidate = toInt; continue; }
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC) {
+                    if (fi.name().stringValue().equals(field)) return candidate;
+                    candidate = null; toInt = null;
+                }
+            }
+            break;
+        }
+        return null;
     }
 
     /** The ToIntFunction an enum's own class hands ByteBufCodecs.idMapper, if it uses one. */
@@ -1263,6 +1483,68 @@ public class GenPacketSchema {
      * base and its index into one. Null when the function is not a plain field, when the class
      * will not load, or when two constants would share a number.
      */
+    /**
+     * The numbering of an enum whose static byId(int) is a switch handing back a constant per
+     * number (ClientIntent: 1 STATUS, 2 LOGIN, 3 TRANSFER): the number of each constant in
+     * declaration order, or null when a constant has no case or the method is not such a switch.
+     */
+    static List<Integer> enumSwitchIds(String enumClass) {
+        ClassModel cm = classModel(enumClass);
+        List<String> constants = enumValues(enumClass);
+        if (cm == null || constants == null) return null;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("byId") || !m.methodType().stringValue().startsWith("(I)")) continue;
+            Map<Label, Integer> caseOf = new HashMap<>();
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof TableSwitchInstruction ts) for (SwitchCase sc : ts.cases()) caseOf.put(sc.target(), sc.caseValue());
+                if (el instanceof LookupSwitchInstruction ls) for (SwitchCase sc : ls.cases()) caseOf.put(sc.target(), sc.caseValue());
+            }
+            if (caseOf.isEmpty()) return null;
+            Map<String, Integer> idOf = new HashMap<>();
+            Integer current = null;
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof LabelTarget lt && caseOf.containsKey(lt.label())) current = caseOf.get(lt.label());
+                else if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.GETSTATIC && fi.owner().asInternalName().equals(enumClass) && current != null) {
+                    idOf.putIfAbsent(fi.name().stringValue(), current);
+                    current = null;
+                }
+            }
+            List<Integer> out = new ArrayList<>();
+            for (String c : constants) { Integer id = idOf.get(c); if (id == null) return null; out.add(id); }
+            return out;
+        }
+        return null;
+    }
+
+    /**
+     * The numbering of an enum whose static byId(int) applies an IntFunction field of its own
+     * (GameType.byId is BY_ID.apply, BY_ID = ByIdMap.continuous(GameType::getId, …)): the ids
+     * that function's ToIntFunction gives the constants, the ordinals when it is Enum::ordinal.
+     */
+    static List<Integer> enumByIdFieldIds(String enumClass) {
+        ClassModel cm = classModel(enumClass);
+        if (cm == null) return null;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals("byId") || !m.methodType().stringValue().startsWith("(I)")) continue;
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.GETSTATIC && fi.owner().asInternalName().equals(enumClass)
+                        && fi.typeSymbol().descriptorString().contains("IntFunction")) {
+                    LambdaV toId = byIdMapperOf(enumClass, fi.name().stringValue());
+                    if (toId == null) return null;
+                    if (toId.name().equals("ordinal")) {
+                        List<String> constants = enumValues(enumClass);
+                        if (constants == null) return null;
+                        List<Integer> out = new ArrayList<>();
+                        for (int i = 0; i < constants.size(); i++) out.add(i);
+                        return out;
+                    }
+                    return enumWireIds(enumClass, toId);
+                }
+            }
+        }
+        return null;
+    }
+
     static List<Integer> enumWireIds(String enumClass, LambdaV toId) {
         if (toId == null || !toId.owner().equals(enumClass)) return null;
         String f = getterField(enumClass, toId.name());
@@ -1362,6 +1644,7 @@ public class GenPacketSchema {
             // becomes a node, so an empty one really did leave the buffer alone.
             if ("opaque".equals(t.get("k")) && String.valueOf(t.get("java")).startsWith("empty-reader:")) t = node("unit");
             Map<String, Object> c = new LinkedHashMap<>();
+            c.put("k", "case");
             c.put("id", constants.get(i));
             c.put("num", i);
             c.put("type", t);
@@ -1433,7 +1716,8 @@ public class GenPacketSchema {
     static Value arg(List<Value> a, int i) { return i < a.size() ? a.get(i) : null; }
     /** The wire node behind a value, whether this reader read it or its caller did. */
     static Map<String, Object> nodeOfValue(Value v) {
-        return v instanceof CodecV c ? c.n() : v instanceof PassedV p ? p.of() : v instanceof BitsV b ? b.of() : null;
+        return v instanceof CodecV c ? c.n() : v instanceof PassedV p ? p.of() : v instanceof BitsV b ? b.of()
+            : v instanceof NewV nv ? opaque(shortName(nv.cls()) + ".streamCodec") : null;
     }
     /** The bit field a value is one of, if it is one: the name goes on the guard or the count. */
     static String subOfValue(Value v) {
@@ -1561,7 +1845,20 @@ public class GenPacketSchema {
         int idx = 0;
         boolean exited = false;   // the last instruction was a return or a throw
         Map<String, Object> returned = null;
+        // The names of the method's local variables (Mojang's jars keep the table): a read
+        // stored in `slot` or `itemStack` is named by that, which says more than the read
+        // method's name (`byte`, `optionalItemStack`) that would otherwise name the field.
+        Map<Integer, List<LocalVariableInfo>> localNames = new HashMap<>();
+        target.code().flatMap(c -> c.findAttribute(Attributes.localVariableTable())).ifPresent(a -> {
+            for (LocalVariableInfo lv : a.localVariables()) localNames.computeIfAbsent(lv.slot(), k -> new ArrayList<>()).add(lv);
+        });
+        int bci = 0;
+        // reads pushed and neither stored nor assigned to a field yet, by identity
+        Set<Map<String, Object>> unstored = Collections.newSetFromMap(new IdentityHashMap<>());
         for (CodeElement el : target.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+            int bciAfter = bci + (el instanceof Instruction ins0 ? ins0.sizeInBytes() : 0);
+            bci = bciAfter;
+            if (!stack.isEmpty() && stack.peek() instanceof CodecV top0) unstored.add(top0.n());
             idx++;
             if (el instanceof Instruction) exited = el instanceof ReturnInstruction || el instanceof ThrowInstruction;
             switch (el) {
@@ -1659,7 +1956,20 @@ public class GenPacketSchema {
                 case ConstantInstruction ci -> step(el, stack, owner, depth);
                 case NewObjectInstruction no -> stack.push(new OtherV("new:" + no.className().asInternalName()));
                 case LoadInstruction li -> stack.push(locals.getOrDefault(li.slot(), new OtherV("local:" + li.slot())));
-                case StoreInstruction st -> { if (!stack.isEmpty()) locals.put(st.slot(), stack.pop()); }
+                case StoreInstruction st -> {
+                    if (stack.isEmpty()) break;
+                    Value v = stack.pop();
+                    // `min = hasMin ? buf.readFloat() : -MAX`: the walker runs both arms, so
+                    // the read sits under the default it did not take; the variable holds the
+                    // read, and the default is what the wire does not carry.
+                    if (!(v instanceof CodecV) && !stack.isEmpty() && stack.peek() instanceof CodecV under && unstored.contains(under.n())) v = stack.pop();
+                    locals.put(st.slot(), v);
+                    String local = localName(localNames, st.slot(), bciAfter);
+                    if (v instanceof CodecV cv) {
+                        unstored.remove(cv.n());
+                        if (local != null) hintOf.put(cv.n(), local);
+                    }
+                }
                 case NewPrimitiveArrayInstruction na -> { if (!stack.isEmpty()) stack.push(new ArrayV(stack.pop())); }
                 case NewReferenceArrayInstruction na -> { if (!stack.isEmpty()) stack.push(new ArrayV(stack.pop())); }
                 case OperatorInstruction oi when oi.opcode() == Opcode.IADD || oi.opcode() == Opcode.ISUB -> {
@@ -2425,14 +2735,30 @@ public class GenPacketSchema {
      * earlier) → the constructor names the wire values, which stay in the enclosing reader in
      * read order; none → an ordinary object, not a wire value.
      */
-    static Map<String, Object> constructed(String cls, String desc, List<Value> args, List<Map<String, Object>> values) {
+    static Map<String, Object> constructed(String cls, String desc, List<Value> args, List<Map<String, Object>> values,
+                                           Map<Map<String, Object>, List<List<Map<String, Object>>>> guards) {
         List<Map<String, Object>> wire = new ArrayList<>();
         for (Value a : args) if (a instanceof CodecV c) wire.add(c.n());
         if (wire.isEmpty()) return null;
         List<String> params = ctorParamNames(cls, desc);
         List<String> comps = recordComponents(cls);
         List<String> names = params != null && params.size() == args.size() ? params : comps != null && comps.size() == args.size() ? comps : null;
-        if (wire.size() < args.size()) {
+        // A value read under a condition on an earlier read stays a field of the reader
+        // whose value it is conditional on: a `when` names a sibling, and inside a struct of
+        // its own the guard would be out of reach. When every value is read under the same
+        // condition the struct is what is conditional (a literal node stub, when the flags
+        // say literal), and the guard moves onto it; when the conditions differ (a command
+        // argument node's suggestion id, only when a further bit says so) the values stay
+        // flat, named by the constructor.
+        List<List<Map<String, Object>>> shared = null;
+        boolean guarded = false;
+        for (Map<String, Object> w : wire) {
+            List<List<Map<String, Object>>> g = guards.get(w);
+            if (g == null) { if (shared != null) guarded = true; continue; }
+            if (shared == null) { if (w != wire.get(0)) guarded = true; shared = g; }
+            else if (!shared.equals(g)) guarded = true;
+        }
+        if (wire.size() < args.size() || guarded) {
             // some arguments were computed (new Vec3(pos.x + dx, …)): the wire values keep their
             // read order in the enclosing reader; the constructor only names them
             if (names != null) for (int i = 0; i < args.size(); i++) if (args.get(i) instanceof CodecV c) hintOf.put(c.n(), names.get(i));
@@ -2451,7 +2777,12 @@ public class GenPacketSchema {
             f.put("name", names != null ? names.get(i) : hintOf.getOrDefault(wire.get(i), "v" + i));
             f.put("type", wire.get(i)); fs.add(f);
         }
-        return node("struct", "name", shortName(cls), "fields", fs);
+        Map<String, Object> st = node("struct", "name", shortName(cls), "fields", fs);
+        if (shared != null) {
+            for (Map<String, Object> w : wire) guards.remove(w);
+            guards.put(st, shared);
+        }
+        return st;
     }
 
     static void removeIdentity(List<Map<String, Object>> values, Map<String, Object> v) {
@@ -2578,6 +2909,20 @@ public class GenPacketSchema {
             List<Map<String, Object>> cases = registryMethodCases(re.registry(), name, depth + 1);
             if (cases != null) d.put("cases", cases);
             produced = d;
+        } else if (isStatic && name.equals("byId") && desc.startsWith("(I)L") && arg(args, 0) instanceof CodecV idv
+                && "prim".equals(idv.n().get("k")) && "VAR_INT".equals(idv.n().get("t")) && loadClass(owner) instanceof Class<?> ec && ec.isEnum()) {
+            // ClientIntent.byId(buf.readVarInt()): the var int is a constant of the enum, by the
+            // number its byId gives it. The node already read is retyped in place.
+            Map<String, Object> en = enumNode(owner);
+            List<Integer> ids = enumSwitchIds(owner);
+            if (ids == null) ids = enumByIdFieldIds(owner);
+            if (ids == null) en.put("idsUnknown", true);
+            else { boolean ordinal = true; for (int i = 0; i < ids.size(); i++) if (ids.get(i) != i) ordinal = false; if (!ordinal) en.put("ids", ids); }
+            idv.n().clear();
+            idv.n().putAll(en);
+            enumClassOf.put(idv.n(), owner);
+            stack.push(idv);
+            return;
         } else if (isBuf && name.startsWith("read")) {
             switch (name) {
                 case "readList", "readCollection" -> produced = node("list", "elem", elemOf(args, depth));
@@ -2585,7 +2930,7 @@ public class GenPacketSchema {
                 case "readMap" -> produced = node("map", "key", readerOf(args.size() > 1 ? arg(args, args.size() - 2) : null, depth), "val", readerOf(arg(args, args.size() - 1), depth));
                 case "readEnum" -> produced = arg(args, 0) instanceof ClassV cv ? enumNode(cv.internal()) : opaque("readEnum");
                 case "readResourceKey" -> produced = node("resourcekey", "registry", keyOf(arg(args, 0)));
-                case "readById" -> produced = node("registry", "registry", arg(args, 0) instanceof OtherV ov && ov.what().startsWith("idmap:") ? ov.what().substring(6) : "?");
+                case "readById" -> produced = byIdNode(arg(args, 0));
                 case "readJsonWithCodec", "readWithCodec" -> produced = nbtOrText(args.isEmpty() ? null : arg(args, 0));
                 case "readEnumSet" -> produced = arg(args, 0) instanceof ClassV cv ? node("enumset", "name", shortName(cv.internal()), "values", enumValues(cv.internal())) : opaque("readEnumSet");
                 // readableBytes() asks how much is left; it consumes nothing. Reading the rest
@@ -2654,7 +2999,7 @@ public class GenPacketSchema {
                 }
                 produced = null;
             } else {
-                Map<String, Object> st = constructed(cls, desc, args, values);
+                Map<String, Object> st = constructed(cls, desc, args, values, guards);
                 if (st == null) { stack.push(new OtherV("obj:" + shortName(cls))); return; }
                 produced = st;
             }

@@ -87,15 +87,9 @@ type propInfo struct {
 // The value order matches MC's internal ordinals (important for iota constants).
 type enumDef struct {
 	TypeName   string   // Go type name, e.g. "Direction"
-	TrimPrefix bool     // If true, const names omit type prefix (Direction → Down, Up, etc.)
 	Values     []string // Ordered MC values, e.g. ["down", "up", "north", "south", "west", "east"]
 }
 
-// trimPrefixTypes is a style preference for Go constant naming. When true,
-// const names omit the type prefix (e.g. Direction → Down, Up, not DirectionDown).
-// This is not derivable from MC data — it's a Go naming convention choice.
-// Loaded from hand-crafted/naming_overrides.json.
-var trimPrefixTypes map[string]bool
 
 // ---------------------------------------------------------------------------
 // NBT output model
@@ -166,16 +160,6 @@ func genBlocks(jsonDir, goMCRoot string) error {
 	statesOut := filepath.Join(goMCRoot, "level", "block", "block_states.nbt")
 	propsOut := filepath.Join(goMCRoot, "level", "block", "properties_enum.go")
 
-	if trimPrefixTypes == nil {
-		var no namingOverrides
-		if err := readHandCrafted(goMCRoot, "naming_overrides.json", &no); err != nil {
-			return fmt.Errorf("genBlocks: %w", err)
-		}
-		trimPrefixTypes = make(map[string]bool, len(no.BlockTrimPrefixTypes))
-		for _, t := range no.BlockTrimPrefixTypes {
-			trimPrefixTypes[t] = true
-		}
-	}
 
 	// Load block_properties.json — property type metadata extracted from MC runtime.
 	enumLookup, enumDefs, err := loadPropsJSON(propsJSONPath)
@@ -416,7 +400,6 @@ func loadPropsJSON(path string) (enumLookup map[string]string, defs []enumDef, e
 	for name, values := range pd.Enums {
 		defs = append(defs, enumDef{
 			TypeName:   name,
-			TrimPrefix: trimPrefixTypes[name],
 			Values:     values,
 		})
 	}
@@ -577,7 +560,7 @@ func writeEnumType(w *strings.Builder, def enumDef) {
 	// Constants.
 	fmt.Fprintf(w, "const (\n")
 	for i, val := range def.Values {
-		constName := makeConstName(typeName, val, def.TrimPrefix)
+		constName := makeConstName(typeName, val)
 		if i == 0 {
 			fmt.Fprintf(w, "\t%s %s = iota\n", constName, typeName)
 		} else {
@@ -616,7 +599,7 @@ func writeEnumType(w *strings.Builder, def enumDef) {
 	fmt.Fprintf(w, "func (%s *%s) UnmarshalText(text []byte) error {\n", receiver, typeName)
 	w.WriteString("\tswitch str := string(text); str {\n")
 	for _, val := range def.Values {
-		constName := makeConstName(typeName, val, def.TrimPrefix)
+		constName := makeConstName(typeName, val)
 		fmt.Fprintf(w, "\tcase %q:\n\t\t*%s = %s\n", val, receiver, constName)
 	}
 	w.WriteString("\tdefault:\n")
@@ -626,12 +609,8 @@ func writeEnumType(w *strings.Builder, def enumDef) {
 	w.WriteString("}\n\n")
 }
 
-func makeConstName(typeName, value string, trimPrefix bool) string {
-	camel := enumSnakeToCamel(value)
-	if trimPrefix {
-		return camel
-	}
-	return typeName + camel
+func makeConstName(typeName, value string) string {
+	return typeName + enumSnakeToCamel(value)
 }
 
 func enumSnakeToCamel(s string) string {

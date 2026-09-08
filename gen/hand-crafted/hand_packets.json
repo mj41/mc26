@@ -1,3 +1,0 @@
-{
-  "_comment": "Packets implemented by hand in src/protocol/<state>/hand.go, keyed <state>/<flow>/<packet name> as in packets.json, with the reason. Empty since every packet the schema types partially is either generated through a hand-written leaf type (externalHandTypes in gen_packets.go) or skipped; the generator still honours entries here and reports when the schema types one fully."
-}

@@ -19,12 +19,12 @@ func (c *Client) HandleGame() error {
 			return err
 		}
 
-		if p.ID == int32(packetid.ClientboundBundleDelimiter) {
+		if p.ID == int32(packetid.ClientboundPlayBundleDelimiter) {
 			err := c.handleBundlePackets()
 			if err != nil {
 				return err
 			}
-		} else if p.ID == int32(packetid.ClientboundStartConfiguration) {
+		} else if p.ID == int32(packetid.ClientboundPlayStartConfiguration) {
 			// MC 1.21.2+: server-initiated config-phase re-entry during play.
 			if err := c.handleStartConfiguration(); err != nil {
 				return err
@@ -64,7 +64,7 @@ func (c *Client) handleBundlePackets() (err error) {
 			return err
 		}
 
-		if p.ID == int32(packetid.ClientboundBundleDelimiter) {
+		if p.ID == int32(packetid.ClientboundPlayBundleDelimiter) {
 			// bundle finished
 			goto handlePackets
 		}

@@ -26,11 +26,11 @@ func NewWorld(c *bot.Client, p *basic.Player, events EventsListener) (w *World) 
 		Columns: make(map[level.ChunkPos]*level.Chunk),
 	}
 	c.Events.AddListener(
-		bot.PacketHandler{Priority: 64, ID: packetid.ClientboundLogin, F: w.onPlayerSpawn},
-		bot.PacketHandler{Priority: 64, ID: packetid.ClientboundRespawn, F: w.onPlayerSpawn},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundLevelChunkWithLight, F: w.handleLevelChunkWithLightPacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundForgetLevelChunk, F: w.handleForgetLevelChunkPacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundChunkBatchFinished, F: w.handleChunkBatchFinishedPacket},
+		bot.PacketHandler{Priority: 64, ID: packetid.ClientboundPlayLogin, F: w.onPlayerSpawn},
+		bot.PacketHandler{Priority: 64, ID: packetid.ClientboundPlayRespawn, F: w.onPlayerSpawn},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayLevelChunkWithLight, F: w.handleLevelChunkWithLightPacket},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayForgetLevelChunk, F: w.handleForgetLevelChunkPacket},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayChunkBatchFinished, F: w.handleChunkBatchFinishedPacket},
 	)
 	return
 }

@@ -23,14 +23,6 @@ func genComponent(jsonDir, goMCRoot string) error {
 	outPath := filepath.Join(goMCRoot, "level", "component", "components.go")
 	compDir := filepath.Join(goMCRoot, "level", "component")
 
-	if componentNameOverrides == nil {
-		var no namingOverrides
-		if err := readHandCrafted(goMCRoot, "naming_overrides.json", &no); err != nil {
-			return fmt.Errorf("genComponent: %w", err)
-		}
-		componentNameOverrides = no.ComponentNames
-	}
-
 	var components []componentJSON
 	if err := readJSON(jsonPath, &components); err != nil {
 		return fmt.Errorf("genComponent: %w", err)
@@ -133,22 +125,15 @@ func discoverImplementedTypes(dir string) map[string]bool {
 	return result
 }
 
-// componentNameOverrides is loaded from hand-crafted/naming_overrides.json.
-// Maps snake_case component names (without minecraft: prefix) to Go type names.
-var componentNameOverrides map[string]string
-
-// componentGoName converts a Minecraft registry name to a Go type name.
-// e.g., "minecraft:custom_data" → "CustomData"
-//
-//	"minecraft:map_id" → "MapID"
+// componentGoName converts a Minecraft registry name to a Go type name:
+// "minecraft:custom_data" → "CustomData", "minecraft:map_id" → "MapID" (a
+// trailing id is the Go initialism), "minecraft:tropical_fish/pattern" →
+// "TropicalFishPattern".
 func componentGoName(name string) string {
 	name = stripMinecraftPrefix(name)
-
-	if v, ok := componentNameOverrides[name]; ok {
-		return v
-	}
-
-	// Split on _ and / then PascalCase each part.
 	name = strings.ReplaceAll(name, "/", "_")
+	if strings.HasSuffix(name, "_id") {
+		return snakeToCamel(strings.TrimSuffix(name, "_id")) + "ID"
+	}
 	return snakeToCamel(name)
 }

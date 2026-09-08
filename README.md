@@ -11,7 +11,7 @@ Mojang jar ──► data-gen/ ──┬─► mc26-data      (releases)        
 | directory / repository | what |
 |---|---|
 | `data-gen/` | Java extractors: jar → JSON (`java.lang.classfile` reads the packet and component wire schemas) |
-| `gen/` | Go: the `mc26` command (extract, build, smoke, pipeline, release), the generators, the hand-written library sources (`gen/src`), templates, `cmd/packetdiff`, `cmd/mcmeta`, `cmd/schemacov` |
+| `gen/` | Go: the `mc26` command (extract, build, smoke, e2e, crosscheck, pipeline, release), the generators, the hand-written library sources (`gen/src`), templates, `cmd/packetdiff`, `cmd/mcmeta`, `cmd/schemacov` |
 | [mc26-data](https://github.com/mj41/mc26-data) | the JSON of every release: `mc-<version>` branches, `v0.<YYN>.<n>` tags |
 | [mc26-data-pre](https://github.com/mj41/mc26-data-pre) | the same for snapshots and pre-releases |
 | [go-mc26](https://github.com/mj41/go-mc26) | the generated library: `mc-<version>` branches, `v0.<YYN>.<patch>` tags |
@@ -29,6 +29,7 @@ go run ./gen/cmd/mc26 extract  --version 26.2           # only the JSON: temp/da
 go run ./gen/cmd/mc26 build    --data 26.2              # only the library: temp/lib/26.2
 go run ./gen/cmd/mc26 smoke    --version 26.2           # the library's smoke test against a vanilla server
 go run ./gen/cmd/mc26 e2e      --version 26.2           # the bots of ../go-mc26-examples (its mc-26.2 branch) against a vanilla server
+go run ./gen/cmd/mc26 crosscheck --version 26.2         # a recorded session read back from the JSON alone, in another language
 go run ./gen/cmd/schemacov 26.2                         # how much of the packet schema is typed
 go run ./gen/cmd/packetdiff 26.1 26.2                   # wire-layout changes between two versions
 go run ./gen/cmd/mcmeta diff 26.2 26.3-pre-2            # registry preview without Java (misode/mcmeta)
@@ -66,7 +67,7 @@ fixes; older branches are frozen.
 ## Docs
 
 [docs/](docs/README.md): [architecture](docs/architecture.md), [generated versus
-hand-written](docs/generated-vs-hand-written.md), [a new Minecraft version](docs/new-version.md),
+hand-written](docs/generated-vs-hand-written.md), [what is still hand-written and why](docs/hand-written.md), [a new Minecraft version](docs/new-version.md),
 [testing](docs/testing.md), [releasing](docs/release.md); [gen/README.md](gen/README.md) for the
 commands, generators and packet structs; [data-gen/README.md](data-gen/README.md) for the extractors.
 

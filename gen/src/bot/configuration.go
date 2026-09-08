@@ -69,7 +69,7 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 		}
 
 		switch packetid.ClientboundPacketID(p.ID) {
-		case packetid.ClientboundConfigCookieRequest:
+		case packetid.ClientboundConfigurationCookieRequest:
 			var req configuration.CookieRequest
 			if err := p.Scan(&req); err != nil {
 				return ConfigErr{"cookie request", err}
@@ -82,7 +82,7 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 				return ConfigErr{"cookie response", err}
 			}
 
-		case packetid.ClientboundConfigCustomPayload:
+		case packetid.ClientboundConfigurationCustomPayload:
 			var payload configuration.ClientboundCustomPayload
 			if err := p.Scan(&payload); err != nil {
 				return ConfigErr{"custom payload", err}
@@ -98,7 +98,7 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 			// And the custome payload packet seems to be same in config stage and play stage.
 			// How do we provide API for that?
 
-		case packetid.ClientboundConfigDisconnect:
+		case packetid.ClientboundConfigurationDisconnect:
 			const ErrStage = "disconnect"
 			var reason chat.Message
 			if err := p.Scan(&reason); err != nil {
@@ -106,13 +106,13 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 			}
 			return ConfigErr{ErrStage, DisconnectErr(reason)}
 
-		case packetid.ClientboundConfigFinishConfiguration:
+		case packetid.ClientboundConfigurationFinishConfiguration:
 			if err := sendConfig(conn, configuration.ServerboundFinishConfiguration{}); err != nil {
 				return ConfigErr{"finish config", err}
 			}
 			return nil
 
-		case packetid.ClientboundConfigKeepAlive:
+		case packetid.ClientboundConfigurationKeepAlive:
 			const ErrStage = "keep alive"
 			var ka configuration.ClientboundKeepAlive
 			if err := p.Scan(&ka); err != nil {
@@ -122,7 +122,7 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 				return ConfigErr{ErrStage, err}
 			}
 
-		case packetid.ClientboundConfigPing:
+		case packetid.ClientboundConfigurationPing:
 			var ping configuration.Ping
 			if err := p.Scan(&ping); err != nil {
 				return ConfigErr{"ping", err}
@@ -131,10 +131,10 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 				return ConfigErr{"pong", err}
 			}
 
-		case packetid.ClientboundConfigResetChat:
+		case packetid.ClientboundConfigurationResetChat:
 			// TODO
 
-		case packetid.ClientboundConfigRegistryData:
+		case packetid.ClientboundConfigurationRegistryData:
 			// The registry system decodes the entries straight into c.Registries.
 			const ErrStage = "registry"
 			var registryID pk.Identifier
@@ -152,7 +152,7 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 				return ConfigErr{ErrStage, fmt.Errorf("failed to read registry %s: %w", registryID, err)}
 			}
 
-		case packetid.ClientboundConfigResourcePackPop:
+		case packetid.ClientboundConfigurationResourcePackPop:
 			var pop configuration.ResourcePackPop
 			if err := p.Scan(&pop); err != nil {
 				return ConfigErr{"resource pack pop", err}
@@ -163,7 +163,7 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 				c.ConfigHandler.PopAllResourcePack()
 			}
 
-		case packetid.ClientboundConfigResourcePackPush:
+		case packetid.ClientboundConfigurationResourcePackPush:
 			var push configuration.ResourcePackPush
 			if err := p.Scan(&push); err != nil {
 				return ConfigErr{"resource pack", err}
@@ -179,14 +179,14 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 			}
 			c.ConfigHandler.PushResourcePack(res)
 
-		case packetid.ClientboundConfigStoreCookie:
+		case packetid.ClientboundConfigurationStoreCookie:
 			var store configuration.StoreCookie
 			if err := p.Scan(&store); err != nil {
 				return ConfigErr{"store cookie", err}
 			}
 			c.Cookies[string(store.Key)] = []byte(store.Payload)
 
-		case packetid.ClientboundConfigTransfer:
+		case packetid.ClientboundConfigurationTransfer:
 			var transfer configuration.Transfer
 			if err := p.Scan(&transfer); err != nil {
 				return ConfigErr{"transfer", err}
@@ -194,14 +194,14 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 			// TODO: trnasfer to the specific server
 			// How does it work? Just connect the new server, and re-start at handshake?
 
-		case packetid.ClientboundConfigUpdateEnabledFeatures:
+		case packetid.ClientboundConfigurationUpdateEnabledFeatures:
 			var features configuration.UpdateEnabledFeatures
 			if err := p.Scan(&features); err != nil {
 				return ConfigErr{"update enabled features", err}
 			}
 			c.ConfigHandler.EnableFeature(features.Features)
 
-		case packetid.ClientboundConfigUpdateTags:
+		case packetid.ClientboundConfigurationUpdateTags:
 			const ErrStage = "update tags"
 			r := bytes.NewReader(p.Data)
 
@@ -235,7 +235,7 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 				}
 			}
 
-		case packetid.ClientboundConfigSelectKnownPacks:
+		case packetid.ClientboundConfigurationSelectKnownPacks:
 			const ErrStage = "select known packs"
 			var offered configuration.ClientboundSelectKnownPacks
 			if err := p.Scan(&offered); err != nil {
@@ -246,7 +246,7 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 				return ConfigErr{ErrStage, err}
 			}
 
-		case packetid.ClientboundConfigCustomReportDetails:
+		case packetid.ClientboundConfigurationCustomReportDetails:
 			var details configuration.CustomReportDetails
 			if err := p.Scan(&details); err != nil {
 				return ConfigErr{"custom report details", err}
@@ -255,16 +255,16 @@ func (c *Client) joinConfiguration(conn packetReadWriter) error {
 				c.CustomReportDetails[string(d.Key)] = string(d.Val)
 			}
 
-		case packetid.ClientboundConfigServerLinks:
+		case packetid.ClientboundConfigurationServerLinks:
 			// TODO
 
-		case packetid.ClientboundConfigClearDialog:
+		case packetid.ClientboundConfigurationClearDialog:
 			// No UI to clear; ignore.
 
-		case packetid.ClientboundConfigShowDialog:
+		case packetid.ClientboundConfigurationShowDialog:
 			// Bot has no UI; ignore the dialog.
 
-		case packetid.ClientboundConfigCodeOfConduct:
+		case packetid.ClientboundConfigurationCodeOfConduct:
 			// Server waits for acceptance before continuing configuration.
 			if err := sendConfig(conn, configuration.AcceptCodeOfConduct{}); err != nil {
 				return ConfigErr{"accept code of conduct", err}

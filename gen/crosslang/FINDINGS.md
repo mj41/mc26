@@ -390,3 +390,33 @@ Two deviations, both disclosed rather than hidden:
    off by default, and every run that uses it prints how many packets depended on it.
    It exists so the size of the gap could be measured rather than merely asserted:
    without it 110/124, with it 124/124.
+
+---
+
+## 7. Since then (2026-09-08)
+
+The experiment above was run once, on 26.2, against a capture of play-clientbound
+traffic. `decode.py` is now what `mc26 crosscheck` runs on every version, against a
+session recorded by a proxy (all four states, both directions, 86–89 state/flow/id
+triples, ~290 packets), and it passes on 26.1, 26.2 and 26.3-pre-2: every packet
+decoded and re-encoded byte for byte, with the Go library required to consume each
+one exactly on the way. The companion scripts (`gen_capture.py`, `holes.py`,
+`negcontrol.py`, …) were not kept; the decoder was. What the findings look like now:
+
+| finding | state |
+|---|---|
+| §1.1 NBT not described | **closed** — `prims.json`'s `NBT` is a `native` definition that carries the tag table: every tag id, its payload layout, and what `EndTag`, lists and compounds do, each read from the `Tag` classes' `load`/`write` bytecode. `decode.py` reads NBT from that table; `--assume-nbt` is gone. |
+| §1.2 `coverage: "full"` on incomplete packets | **closed as a class** — the cross-check requires exact consumption on both sides, and both sides run on every version; six wire bugs were caught that way on 2026-09-08 alone (movement packets, light data, chunk sections, enum ids, …). `coverage` itself still only says what the extractor believed. |
+| §1.3 `optional{nbt}` contradiction | **closed** — serverbound `custom_click_action` is `lenprefixed{nbt}`: the var-int byte count, then the tag. |
+| §1.4 `opaque` holes (54) | **closed in packets and components** — 0 opaque nodes in the `packets` and `components` sections of all three versions (`recursive` codecs are interpreted; the registry dispatches have bootstrap rules). The `structs` section, which lists helper readers by name, still carries 8–13 for readers whose count is out of band, and those are described in `prims.json` instead (`CHUNK_SECTIONS`). |
+| §1.5 `conditional` structs (9) | **one left** — `FilterMask` in `player_chat` of 26.1 and 26.2 (a switch on an enum inside a reader); 26.3-pre-2 has none. |
+| §1.6 `enum` without `values` (4) | **closed** — the `Orientation` id map is a `registry` node labelled `Orientation`, which is what it is: an id space that is not an enum. |
+| §1.7 caseless `dispatch` (4) | **closed** — every dispatch of the three versions has cases (`consume_effect_type` has a bootstrap rule, and the either-keyed predicate dispatch is gone from the schema: its key and payload are read as fields). |
+| §1.8 the frame is prose | **open** — `nodes.json`'s `frame` is still text; the recording proxy is written from it, which is a check of the text, not data. |
+| §1.9 `guard` linkage by name | **open** — still a string match described in prose. |
+| §1.9 enum-dispatch cases without `k` | **closed** — every case node says `"k":"case"`. |
+| §1.9 `whilelist` test kinds | **closed** — `nodes.json` describes the general test. |
+| §1.9 pseudo-states in `state`, non-unique field names, `bit` value as mask | **open**, and documented in `nodes.json` as rules a reader must follow. |
+| §1.9 enum ids that are not ordinals | **closed** — an `enum` node carries `ids` when its numbers are not 0..n-1 (three in 26.3-pre-2), or `idsUnknown` when they could not be read. |
+| §1.9 `registry` label `"?"` | **closed** — the stat value is a dispatch on `stat_type` whose cases name their registry; the display slot is the `DisplaySlot` enum. |
+| §3 coverage of the real capture | play-clientbound only then; now every state, both directions, and the chunk sections down to the palettes and packed longs (a section with a hash-map palette and a two-biome section are built by the traffic test). A global palette (more than 256 block states in one section) is not provoked; its width is checked only against the formula. |

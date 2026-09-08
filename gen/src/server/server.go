@@ -31,13 +31,13 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"github.com/mj41/go-mc26/protocol/types"
 	"log"
 
 	"github.com/mj41/go-mc26/data/version"
 	"github.com/mj41/go-mc26/net"
 	pk "github.com/mj41/go-mc26/net/packet"
 	"github.com/mj41/go-mc26/protocol/configuration"
-	"github.com/mj41/go-mc26/protocol/handshake"
 	"github.com/mj41/go-mc26/protocol/login"
 )
 
@@ -77,9 +77,9 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 	}
 
 	switch intention {
-	case handshake.IntentStatus:
+	case types.ClientIntentStatus:
 		s.acceptListPing(conn, protocol)
-	case handshake.IntentLogin, handshake.IntentTransfer:
+	case types.ClientIntentLogin, types.ClientIntentTransfer:
 		name, id, profilePubKey, properties, err := s.AcceptLogin(conn, protocol)
 		if err != nil {
 			var loginErr LoginFailErr

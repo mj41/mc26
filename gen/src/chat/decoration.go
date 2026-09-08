@@ -7,7 +7,7 @@ import (
 	pk "github.com/mj41/go-mc26/net/packet"
 )
 
-// Decoration (style_gen.go) is the chat type decoration: a translation key,
+// ChatTypeDecoration (style_gen.go) is the chat type decoration: a translation key,
 // the parameters it takes and a style. This file is its wire form inside an
 // inline chat type, and Decorate.
 
@@ -21,11 +21,11 @@ type Type struct {
 }
 
 type InlineType struct {
-	Chat      Decoration
-	Narration Decoration
+	Chat      ChatTypeDecoration
+	Narration ChatTypeDecoration
 }
 
-func (d *Decoration) ReadFrom(r io.Reader) (n int64, err error) {
+func (d *ChatTypeDecoration) ReadFrom(r io.Reader) (n int64, err error) {
 	var params []pk.VarInt
 	var style Style
 	n, err = pk.Tuple{
@@ -37,21 +37,21 @@ func (d *Decoration) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	d.Style = &style
-	d.Parameters = make([]DecorationParameter, len(params))
+	d.Parameters = make([]ChatTypeDecorationParameter, len(params))
 	for i, v := range params {
-		if v < 0 || int(v) >= len(DecorationParameterValues) {
+		if v < 0 || int(v) >= len(ChatTypeDecorationParameterValues) {
 			return n, fmt.Errorf("unknown chat decoration parameter %d", v)
 		}
-		d.Parameters[i] = DecorationParameterValues[v]
+		d.Parameters[i] = ChatTypeDecorationParameterValues[v]
 	}
 	return
 }
 
-func (d Decoration) WriteTo(w io.Writer) (n int64, err error) {
+func (d ChatTypeDecoration) WriteTo(w io.Writer) (n int64, err error) {
 	params := make([]pk.VarInt, len(d.Parameters))
 	for i, p := range d.Parameters {
 		idx := -1
-		for j, name := range DecorationParameterValues {
+		for j, name := range ChatTypeDecorationParameterValues {
 			if name == p {
 				idx = j
 			}
@@ -82,19 +82,19 @@ func (i InlineType) WriteTo(w io.Writer) (int64, error) {
 
 // Decorate renders content through the decoration d: the translation with the
 // sender, target and content in the places the parameters name, in d's style.
-func (t *Type) Decorate(content Message, d *Decoration) (msg Message) {
+func (t *Type) Decorate(content Message, d *ChatTypeDecoration) (msg Message) {
 	with := make([]any, len(d.Parameters))
 	for i, para := range d.Parameters {
 		switch para {
-		case DecorationParameterSender:
+		case ChatTypeDecorationParameterSender:
 			with[i] = t.SenderName
-		case DecorationParameterTarget:
+		case ChatTypeDecorationParameterTarget:
 			if t.TargetName != nil {
 				with[i] = *t.TargetName
 			} else {
 				with[i] = Text("")
 			}
-		case DecorationParameterContent:
+		case ChatTypeDecorationParameterContent:
 			with[i] = content
 		default:
 			with[i] = Text("<nil>")

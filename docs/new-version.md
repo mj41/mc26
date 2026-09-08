@@ -35,9 +35,9 @@ go run ./gen/cmd/schemacov 26.3
 `packetdiff` prints packets added and removed, ids that moved, and a token diff for every packet
 whose layout changed — read the tokens, they name the primitive reads. `schemacov` says how many
 packets are fully typed and why the rest are not; a new `opaque` or `dispatch` hole usually
-means a new codec combinator the extractor does not understand yet (`GenPacketSchema.java`), or
-a packet to park in `hand_packets.json` with a struct in `gen/src/protocol/<state>/hand.go`
-(none today). The registry
+means a new codec combinator the extractor does not understand yet (`GenPacketSchema.java`);
+the packet is left out of the generated files, with the reason in their header, until the
+extractor types it. The registry
 elements have the same kind of report in the header of the generated
 `registry/elements_gen.go`: the fields kept as raw NBT, and why (`GenNbtSchema.java`, run alone
 with `mc26 extract --version 26.3 --only GenNbtSchema` while extending it).
@@ -91,8 +91,7 @@ pre-release data for early adaptation; it is not part of the normal release chai
 - A new codec shape in packets: extend `invoke` (codec chains) or `readerInvoke` (buffer reads)
   in `GenPacketSchema.java`; `schemacov -show` on the affected packet shows the tree you get.
 - A new data component shape: the same interpreter (`DataComponents.<clinit>`); a component the
-  schema still cannot type goes to `hand_components.json` (see `gen/hand-crafted/hand-crafted.md`)
-  with a hand-written type until it can.
+  schema cannot type is listed in `level/component/skipped_gen.go` until it can.
 - A new DataFixerUpper combinator in a registry codec (`invoke` in `GenNbtSchema.java`) or a
   registry codec class that moved (they are matched by short class name, as
   `net/minecraft/resources` became `net/minecraft/core/registries/codec` in 26.3).

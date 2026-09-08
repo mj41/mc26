@@ -29,11 +29,11 @@ func NewManager(c *bot.Client, e EventsListener) *Manager {
 	}
 	m.Screens[0] = &m.Inventory
 	c.Events.AddListener(
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundOpenScreen, F: m.onOpenScreen},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundContainerSetContent, F: m.onSetContentPacket},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundContainerClose, F: m.onCloseScreen},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundContainerSetSlot, F: m.onSetSlot},
-		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundSetPlayerInventory, F: m.onSetPlayerInventory},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayOpenScreen, F: m.onOpenScreen},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayContainerSetContent, F: m.onSetContentPacket},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayContainerClose, F: m.onCloseScreen},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlayContainerSetSlot, F: m.onSetSlot},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundPlaySetPlayerInventory, F: m.onSetPlayerInventory},
 	)
 	return m
 }

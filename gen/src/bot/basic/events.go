@@ -73,7 +73,7 @@ func (e EventsListener) attach(p *Player) {
 
 func attachJoinGameHandler(c *bot.Client, handler func() error) {
 	c.Events.AddListener(bot.PacketHandler{
-		Priority: 64, ID: packetid.ClientboundLogin,
+		Priority: 64, ID: packetid.ClientboundPlayLogin,
 		F: func(_ pk.Packet) error {
 			return handler()
 		},
@@ -82,7 +82,7 @@ func attachJoinGameHandler(c *bot.Client, handler func() error) {
 
 func attachDisconnect(c *bot.Client, handler func(reason chat.Message) error) {
 	c.Events.AddListener(bot.PacketHandler{
-		Priority: 64, ID: packetid.ClientboundDisconnect,
+		Priority: 64, ID: packetid.ClientboundPlayDisconnect,
 		F: func(p pk.Packet) error {
 			var d play.Disconnect
 			if err := p.Scan(&d); err != nil {
@@ -95,7 +95,7 @@ func attachDisconnect(c *bot.Client, handler func(reason chat.Message) error) {
 
 func attachUpdateHealth(c *bot.Client, healthChangeHandler func(health float32, food int32, saturation float32) error, deathHandler func() error) {
 	c.Events.AddListener(bot.PacketHandler{
-		Priority: 64, ID: packetid.ClientboundSetHealth,
+		Priority: 64, ID: packetid.ClientboundPlaySetHealth,
 		F: func(p pk.Packet) error {
 			var sh play.SetHealth
 			if err := p.Scan(&sh); err != nil {
@@ -118,7 +118,7 @@ func attachUpdateHealth(c *bot.Client, healthChangeHandler func(health float32, 
 
 func attachPlayerPosition(c *bot.Client, handler func(x, y, z float64, yaw, pitch float32, flags int32, teleportID int32) error) {
 	c.Events.AddListener(bot.PacketHandler{
-		Priority: 64, ID: packetid.ClientboundPlayerPosition,
+		Priority: 64, ID: packetid.ClientboundPlayPlayerPosition,
 		F: func(p pk.Packet) error {
 			var pos play.PlayerPosition
 			if err := p.Scan(&pos); err != nil {

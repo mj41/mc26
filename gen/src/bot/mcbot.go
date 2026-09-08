@@ -7,6 +7,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"github.com/mj41/go-mc26/protocol/types"
 	"net"
 	"strconv"
 
@@ -97,13 +98,13 @@ func (c *Client) join(addr string, options JoinOptions) error {
 	}
 
 	// Handshake
-	hs := handshake.Intention{
+	hs := handshake.ClientIntention{
 		ProtocolVersion: ProtocolVersion,
 		HostName:        pk.String(host),
 		Port:            pk.UnsignedShort(port),
-		Intention:       handshake.IntentLogin,
+		Intention:       types.ClientIntentLogin,
 	}
-	if err = conn.WritePacket(pk.Marshal(hs.PacketID(), hs)); err != nil {
+	if err = conn.WritePacket(pk.Marshal(int32(hs.PacketID()), hs)); err != nil {
 		return LoginErr{"handshake", err}
 	}
 

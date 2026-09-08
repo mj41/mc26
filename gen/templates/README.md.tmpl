@@ -26,6 +26,7 @@ go get {{.Module}}@mc-{{.V.ID}}
 | `level`, `level/block`, `level/biome`, `level/component` | chunks and palettes, blocks and block states, biomes, item data components |
 | `nbt`, `nbt/dynbt`, `save`, `save/region` | NBT, dynamic NBT, level.dat and player data, region files |
 | `net`, `net/packet`, `net/queue` | the connection, packet framing and field types, RCON |
+| `management` | the server management protocol (JSON-RPC over a WebSocket): a typed client generated from the server's own API document, with its notifications |
 | `chat`, `chat/sign` | text components, translations, signed chat |
 | `yggdrasil`, `microsoft`, `offline` | Mojang session server, Microsoft login, offline uuids |
 

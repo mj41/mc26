@@ -40,19 +40,19 @@ func New(c *bot.Client, p *basic.Player, pl *playerlist.PlayerList, events Event
 	}
 	if events.SystemChat != nil {
 		c.Events.AddListener(bot.PacketHandler{
-			Priority: 64, ID: packetid.ClientboundSystemChat,
+			Priority: 64, ID: packetid.ClientboundPlaySystemChat,
 			F: m.handleSystemChat,
 		})
 	}
 	if events.PlayerChatMessage != nil {
 		c.Events.AddListener(bot.PacketHandler{
-			Priority: 64, ID: packetid.ClientboundPlayerChat,
+			Priority: 64, ID: packetid.ClientboundPlayPlayerChat,
 			F: m.handlePlayerChat,
 		})
 	}
 	if events.DisguisedChat != nil {
 		c.Events.AddListener(bot.PacketHandler{
-			Priority: 64, ID: packetid.ClientboundDisguisedChat,
+			Priority: 64, ID: packetid.ClientboundPlayDisguisedChat,
 			F: m.handleDisguisedChat,
 		})
 	}
@@ -129,7 +129,7 @@ func (m *Manager) handlePlayerChat(packet pk.Packet) error {
 
 // chatDecoration resolves the chat decoration for a bound chat type: the inline
 // definition if the server sent one, otherwise the minecraft:chat_type registry entry.
-func (m *Manager) chatDecoration(t *chat.Type) (*chat.Decoration, error) {
+func (m *Manager) chatDecoration(t *chat.Type) (*chat.ChatTypeDecoration, error) {
 	if t.Inline != nil {
 		return &t.Inline.Chat, nil
 	}

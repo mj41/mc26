@@ -111,8 +111,6 @@ net/rcon.go	upstream
 net/rcon_test.go	modified
 offline/uuid.go	upstream
 offline/uuid_test.go	upstream
-protocol/handshake/handshake.go	new
-protocol/handshake/handshake_test.go	new
 protocol/types/types.go	new
 registry/codec.go	modified
 registry/nbttypes.go	new
@@ -191,3 +189,5 @@ yggdrasil/yggdrasil_test.go	upstream
 bot/smoke_test.go	new
 bot/traffic_smoke_test.go	new
 wire/wire.go	new
+management/client.go	new
+management/smoke_test.go	new

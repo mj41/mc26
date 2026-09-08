@@ -1,6 +1,7 @@
 package bot_test
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -140,7 +141,7 @@ func TestSmokeTraffic(t *testing.T) {
 		}
 		// A command the server refuses answers with the reason instead of failing, and a
 		// give that did not happen is coverage silently lost rather than a test failure.
-		for _, bad := range []string{"Unknown", "Expected", "Incorrect", "Invalid", "Unable"} {
+		for _, bad := range []string{"Unknown", "Expected", "Incorrect", "Invalid", "Unable", "out of this world", "Too many", "No blocks"} {
 			if strings.Contains(resp, bad) {
 				t.Errorf("the server refused %q: %s", cmd, strings.TrimSpace(resp))
 			}
@@ -164,28 +165,28 @@ func TestSmokeTraffic(t *testing.T) {
 		id packetid.ServerboundPacketID
 		v  pk.FieldEncoder
 	}{
-		{id: packetid.ServerboundPlayerLoaded, v: &play.PlayerLoaded{}},
-		{id: packetid.ServerboundMovePlayerStatusOnly, v: &play.MovePlayerStatusOnly{
+		{id: packetid.ServerboundPlayPlayerLoaded, v: &play.PlayerLoaded{}},
+		{id: packetid.ServerboundPlayMovePlayerStatusOnly, v: &play.MovePlayerStatusOnly{
 			Value: types.MovePlayerPacked{OnGround: true}}},
-		{id: packetid.ServerboundMovePlayerRot, v: &play.MovePlayerRot{
+		{id: packetid.ServerboundPlayMovePlayerRot, v: &play.MovePlayerRot{
 			YRot: 180, XRot: 10, Flags: types.MovePlayerPacked{OnGround: true}}},
-		{id: packetid.ServerboundMovePlayerPos, v: &play.MovePlayerPos{
+		{id: packetid.ServerboundPlayMovePlayerPos, v: &play.MovePlayerPos{
 			X: pk.Double(pos.x), Y: pk.Double(pos.y), Z: pk.Double(pos.z),
 			Flags: types.MovePlayerPacked{OnGround: true}}},
-		{id: packetid.ServerboundClientTickEnd, v: &play.ClientTickEnd{}},
-		{id: packetid.ServerboundMovePlayerPosRot, v: &play.MovePlayerPosRot{
+		{id: packetid.ServerboundPlayClientTickEnd, v: &play.ClientTickEnd{}},
+		{id: packetid.ServerboundPlayMovePlayerPosRot, v: &play.MovePlayerPosRot{
 			X: pk.Double(pos.x), Y: pk.Double(pos.y), Z: pk.Double(pos.z),
 			YRot: 90, XRot: 0, Flags: types.MovePlayerPacked{OnGround: true}}},
-		{id: packetid.ServerboundClientTickEnd, v: &play.ClientTickEnd{}},
-		{id: packetid.ServerboundSetCarriedItem, v: &play.SetCarriedItem{Slot: 1}},
-		{id: packetid.ServerboundPlayerCommand, v: &play.PlayerCommand{
+		{id: packetid.ServerboundPlayClientTickEnd, v: &play.ClientTickEnd{}},
+		{id: packetid.ServerboundPlaySetCarriedItem, v: &play.SetCarriedItem{Slot: 1}},
+		{id: packetid.ServerboundPlayPlayerCommand, v: &play.PlayerCommand{
 			Action: types.PlayerCommandActionStartSprinting}},
-		{id: packetid.ServerboundPlayerCommand, v: &play.PlayerCommand{
+		{id: packetid.ServerboundPlayPlayerCommand, v: &play.PlayerCommand{
 			Action: types.PlayerCommandActionStopSprinting}},
-		{id: packetid.ServerboundPlayerInput, v: &play.PlayerInput{Input: 0}},
-		{id: packetid.ServerboundPingRequest, v: &play.PingRequest{Time: 1}},
-		{id: packetid.ServerboundCommandSuggestion, v: &play.CommandSuggestion{ID: 1, Command: "/g"}},
-		{id: packetid.ServerboundClientCommand, v: &play.ClientCommand{
+		{id: packetid.ServerboundPlayPlayerInput, v: &play.PlayerInput{Input: 0}},
+		{id: packetid.ServerboundPlayPingRequest, v: &play.PingRequest{Time: 1}},
+		{id: packetid.ServerboundPlayCommandSuggestion, v: &play.CommandSuggestion{ID: 1, Command: "/g"}},
+		{id: packetid.ServerboundPlayClientCommand, v: &play.ClientCommand{
 			Action: types.ClientCommandActionRequestStats}},
 	} {
 		if err := c.Conn.WritePacket(pk.Marshal(int32(p.id), p.v)); err != nil {
@@ -202,12 +203,87 @@ func TestSmokeTraffic(t *testing.T) {
 		}
 	}
 
-	// Let what the commands set off arrive.
+	// A chunk section with many block states and two biomes, so the recording holds
+	// a hash-map block palette and a linear biome palette rather than only the
+	// single-value ones of open air: eighteen layers of different blocks in the
+	// section the bot stands in, then a rejoin. The recording keeps the first few
+	// packets of each id per session, and the first chunk a session receives is the
+	// one the player stands in, so the rebuilt section is recorded whatever the
+	// view distance. The global palette (more than 256 distinct states in one
+	// section) is not something a standing bot can honestly provoke.
+	layers := []string{"minecraft:stone", "minecraft:dirt", "minecraft:sand", "minecraft:gravel",
+		"minecraft:oak_planks", "minecraft:cobblestone", "minecraft:glass", "minecraft:white_wool",
+		"minecraft:red_wool", "minecraft:blue_wool", "minecraft:oak_log", "minecraft:birch_log",
+		"minecraft:gold_block", "minecraft:iron_block", "minecraft:oak_leaves[distance=1,persistent=true]",
+		"minecraft:oak_leaves[distance=2,persistent=true]", "minecraft:oak_leaves[distance=3,persistent=true]",
+		"minecraft:bricks"}
+	// A section is sixteen blocks tall, so sixteen layers of one block each are
+	// sixteen states, which is exactly four bits and still a linear palette: two
+	// blocks per layer, split down the middle, are thirty-two states, five bits, and
+	// the hash-map palette. Likewise a biome fill over the whole section is one biome
+	// again, so it covers half.
+	// The bot stands near the floor of the world, so the slab goes in the section
+	// above its head, aligned to a section so the layers are one section's worth.
+	floor := int(pos.y)
+	floor -= ((floor % 16) + 16) % 16
+	base := floor + 16
+	var build []string
+	for i, b := range layers {
+		other := layers[(i+len(layers)/2)%len(layers)]
+		build = append(build,
+			fmt.Sprintf("execute at %s run fill ~-15 %d ~-15 ~0 %d ~16 %s", name, base+i, base+i, b),
+			fmt.Sprintf("execute at %s run fill ~1 %d ~-15 ~16 %d ~16 %s", name, base+i, base+i, other))
+	}
+	build = append(build,
+		"execute at "+name+" run fillbiome ~-15 "+fmt.Sprint(base)+" ~-15 ~0 "+fmt.Sprint(base+17)+" ~16 minecraft:desert")
+	for _, cmd := range build {
+		if resp, err := commandResp(rcon, cmd); err != nil {
+			t.Fatalf("rcon %q: %v", cmd, err)
+		} else {
+			for _, bad := range []string{"Unknown", "Expected", "Incorrect", "Invalid", "Unable", "out of this world", "Too many", "No blocks"} {
+				if strings.Contains(resp, bad) {
+					t.Errorf("the server refused %q: %s", cmd, strings.TrimSpace(resp))
+				}
+			}
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+
+	// Let what the commands set off arrive, then leave and come back.
 	select {
 	case err := <-result:
 		t.Errorf("the session ended before the recording was done: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(3 * time.Second):
 	}
+	c.Close()
+	<-result
+
+	c2 := bot.NewClient()
+	c2.Auth.Name = name
+	var again *basic.Player
+	again = basic.NewPlayer(c2, basic.DefaultSettings, basic.EventsListener{
+		Death: func() error { return again.Respawn() },
+		Teleported: func(_, _, _ float64, _, _ float32, _ int32, id int32) error {
+			return again.AcceptTeleportation(pk.VarInt(id))
+		},
+		Disconnect: func(reason chat.Message) error { return bot.DisconnectErr(reason) },
+	})
+	world.NewWorld(c2, again, world.EventsListener{})
+	loaded2 := inTheWorld(c2)
+	if err := c2.JoinServer(addr); err != nil {
+		t.Fatalf("rejoin %s: %v", addr, err)
+	}
+	defer c2.Close()
+	result2 := make(chan error, 1)
+	go func() { result2 <- c2.HandleGame() }()
+	select {
+	case <-loaded2:
+	case err := <-result2:
+		t.Fatalf("HandleGame after the rejoin: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("no chunk arrived after the rejoin")
+	}
+	time.Sleep(2 * time.Second)
 
 	mu.Lock()
 	defer mu.Unlock()

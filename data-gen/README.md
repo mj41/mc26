@@ -16,6 +16,7 @@ started by `mc26 extract` (see `../gen`); the host only downloads the jar and th
 | `GenPacketSchema.java` | `packet_schema.json` — typed wire layout of every packet, shared structure and data component | `java.lang.classfile` over the stream codecs |
 | `GenEntityData.java` | `entity_data.json` — the entity metadata serializers with their wire form and the synched fields (index, serializer) of every entity type | reflection after bootstrap + `GenPacketSchema`'s interpreter over `EntityDataSerializers` |
 | `GenConstants.java` | `constants.json` — the compile-time constants of a few classes (inventory slot layout, section geometry, level limits, NBT keys) | reflection |
+| (Mojang's data generator) | `json-rpc-api-schema.json` — the OpenRPC document of the server management protocol, copied from the `--all` reports | Mojang's own `JsonRpcApiSchema` provider |
 | `GenNbtSchema.java` | `nbt_schema.json` — NBT shape of the registries sent in the configuration phase and of the chat style, events and decoration | `java.lang.classfile` over the DataFixerUpper codecs (shares the class access and JSON helpers of `GenPacketSchema`) |
 
 Container layout: `/cache` (server jars), `/jsons/<version>` (output), `/java` (this

@@ -44,15 +44,16 @@ rather than copying its fields avoids most overlays.
 | item | `items.json` + `registries.json` | `data/item/item.go` |
 | blocks | `blocks.json` + `block_properties.json` | `level/block/blocks.go`, `block_states.nbt`, `properties_enum.go` |
 | entity | `entities.json` | `data/entity/entity.go` |
-| component | `components.json` + the `components` section of `packet_schema.json` (the stream codec of every `DataComponents` registration) + `hand_components.json` | `level/component/components.go` (registry), one `<name>_gen.go` per component, `enums_gen.go`, `structs_gen.go`, a round-trip test |
+| component | `components.json` + the `components` section of `packet_schema.json` (the stream codec of every `DataComponents` registration) | `level/component/components.go` (registry), one `<name>_gen.go` per component, `enums_gen.go`, `structs_gen.go`, a round-trip test |
 | blockentities | `block_entities.json` | `level/block/blockentity.go`, `blockentities.go` |
 | registryid | `registries.json` | `data/registryid/*.go` |
 | biome | `biomes.json` | `level/biome/list.go` |
 | lang | `lang/*.json` | `data/lang/<locale>/<locale>.go` |
-| packets | `packet_schema.json` + `packets.json` + `packet_phases.json` | `protocol/<state>/{clientbound,serverbound}_gen.go` (+ round-trip tests), `protocol/types/{enums,structs}_gen.go` |
+| packets | `packet_schema.json` + `packets.json` | `protocol/<state>/{clientbound,serverbound}_gen.go` (+ round-trip tests), `protocol/types/{enums,structs}_gen.go` |
 | entity data (inside packets) | `entity_data.json` | `protocol/types/entitydata_gen.go` (serializer names, `NewEntityDataValue`), `data/entitydata/entitydata_gen.go` (field index constants per class, the fields of every entity type) |
 | constants | `constants.json` | `data/constants/constants_gen.go` — the compile-time constants of a few classes (inventory slot layout, section geometry, level limits, living-entity NBT keys) |
-| nbt | `nbt_schema.json` + `naming_overrides.json` | `registry/elements_gen.go` (the registry elements sent in the configuration phase, their enums and records, a decode test), `registry/registries_gen.go` (the `Registries` struct), `chat/style_gen.go` (`Style`, `ClickEvent`, `HoverEvent`, `Decoration`) |
+| nbt | `nbt_schema.json` | `registry/elements_gen.go` (the registry elements sent in the configuration phase, their enums and records, a decode test), `registry/registries_gen.go` (the `Registries` struct), `chat/style_gen.go` (`Style`, `ClickEvent`, `HoverEvent`, `Decoration`) |
+| rpc | `json-rpc-api-schema.json` | `management/types_gen.go` (every schema of the server's OpenRPC document: `Player`, `UserBan`, `ServerState`, the `Difficulty` and `GameType` constants), `management/methods_gen.go` (a typed method on `management.Client` for each of the API's methods — `ServerStatus`, `AllowlistAdd`, `ServersettingsMotdSet`, `GamerulesUpdate` — and a typed value for each notification it sends); the transport, JSON-RPC 2.0 over a WebSocket with the server's secret as a bearer token, is the hand-written `management/client.go` |
 
 Everything else in the library is copied from `src/` as is. A file the generators write is never
 in `src/`; `import-src` recognises them by their `Code generated … DO NOT EDIT` header.
@@ -170,9 +171,10 @@ type it becomes. It also carries the frame a packet travels in, which the schema
 and without which a primitive that reads to the end of the packet has no meaning. The build fails
 on a node kind nobody has defined, as it does on a primitive.
 
-`crosscheck <version>` is the test of whether all that is true. It starts a vanilla server,
-records the packets it sends, and hands the bytes to a decoder in another language that has only
-the JSON: `gen/crosslang/decode.py` reads the schema, the primitives and the node kinds, decodes
+`crosscheck <version>` is the test of whether all that is true. It starts a vanilla server, puts
+a recording proxy between it and the traffic test's bot — so every state and both directions are
+on record, framed by the description in `nodes.json` rather than by this library — and hands the
+bytes to a decoder in another language that has only the JSON: `gen/crosslang/decode.py` reads the schema, the primitives and the node kinds, decodes
 each captured packet and encodes it again. It passes only when every packet comes back byte for
 byte. A description that is complete to a reader who already has this library, and no one else,
 fails there. The recording half checks the same packets in Go as it goes: every one must decode
@@ -180,16 +182,13 @@ into its generated type and consume the body exactly, which is what `Packet.Scan
 what `New<Flow>(id)` in each protocol package makes possible. A packet whose schema is short of a
 field decodes without complaint, so reading it is not the test; reading all of it is. Byte-for-byte
 equality is left to the other language, because this library writes a chat component back as the
-compound that means the same rather than the bare string it arrived as. It passes on 26.1 and 26.2 — every packet a vanilla server sends, decoded and
-encoded again by a reader that has never seen Go. It does not pass on 26.3-pre-2, which has two
-shapes the extractor still reads wrongly: the movement packets, whose step count chooses between
-two branches, and the chunk packet, which changed.
+compound that means the same rather than the bare string it arrived as. It passes on 26.1, 26.2
+and 26.3-pre-2 — every packet of a session, the chunk sections down to their palettes and packed
+longs included, decoded and encoded again by a reader that has never seen Go.
 
 The header of every generated file lists the packets that were skipped and
 why (`opaque`, `dispatch`, a branch-guarded reader); as of 26.1, 26.2 and 26.3-pre-2 there are
-none — every packet of the protocol is generated — and none is hand-written
-(`hand_packets.json` is empty but still honoured), while `src/protocol/handshake` is
-hand-written because the handshake state has no packetid constants. `schemacov <version>` prints the coverage and the holes.
+none — every packet of every state, the handshake's included, is generated. `schemacov <version>` prints the coverage and the holes.
 
 ```go
 var sh play.SetHealth
@@ -213,8 +212,7 @@ components, `struct{ Value T }` for a single value — plus the records and enum
 The registry `components.go` maps ids to them. The wire generics come from package `wire`
 (shared with `protocol/types`); item stacks inside components are `SlotData`, typed
 components `Typed`, patches `Patch` (hand-written bridges in `src/level/component/types.go`).
-Components whose codec has a dispatch or recursion the schema cannot type are listed in
-`hand_components.json` and kept by hand.
+A component the schema cannot type is left out and named in `skipped_gen.go`; none is today.
 
 ### Entity metadata
 
@@ -241,7 +239,7 @@ string type with constants, a `RegistryFileCodec` a `Holder[T]` (id or inline el
 (the click and hover events) one struct with the fields of every case. What it cannot type — an
 `IntProvider` (`either`), a dispatch on a registry (`Dialog`) — stays a raw field and is listed
 in the header of `elements_gen.go`, so the rest of the element is still typed. The chat side
-(`chat.Style`, `chat.ClickEvent`, `chat.HoverEvent`, `chat.Decoration`) comes from the same
+(`chat.Style`, `chat.ClickEvent`, `chat.HoverEvent`, `chat.ChatTypeDecoration`) comes from the same
 schema, with `json` tags for text components.
 
 ## A new Minecraft version
@@ -250,7 +248,7 @@ schema, with `json` tags for text components.
 go run ./gen/cmd/mcmeta diff 26.2 26.3          # 0. preview: registries, block states, item components (no Java)
 go run ./gen/cmd/mc26 extract --version 26.3    # 1. temp/data/26.3
 go run ./gen/cmd/packetdiff 26.2 26.3           # 2. wire changes the hand-written code must follow
-go run ./gen/cmd/schemacov 26.3                 # 3. packets the generator cannot type yet → walker rule, or hand_packets.json + hand.go
+go run ./gen/cmd/schemacov 26.3                 # 3. packets the generator cannot type yet → a walker rule
 go run ./gen/cmd/mc26 extract --version 26.3 --only GenNbtSchema   #    iterate on one extractor (15 s a round)
 go run ./gen/cmd/mc26 build --data 26.3         # 4. the compiler points at the rest
 go run ./gen/cmd/mc26 smoke --version 26.3      # 5. against a vanilla server

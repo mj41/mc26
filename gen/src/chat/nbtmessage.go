@@ -3,6 +3,7 @@ package chat
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 
@@ -60,6 +61,15 @@ func (m *Message) UnmarshalNBT(tagType byte, r nbt.DecoderReader) error {
 	case nbt.TagList:
 		_, err := decoder.Decode(&m.Extra)
 		return err
+	case nbt.TagByte, nbt.TagShort, nbt.TagInt, nbt.TagLong, nbt.TagFloat, nbt.TagDouble:
+		// A bare number, as the server sends for a translatable component's
+		// numeric arguments ("Successfully filled %s block(s)"): shown as text.
+		var v any
+		if _, err := decoder.Decode(&v); err != nil {
+			return err
+		}
+		m.Text = fmt.Sprint(v)
+		return nil
 	default:
 		return errors.New("unknown chat message type: '" + strconv.FormatUint(uint64(tagType), 16) + "'")
 	}

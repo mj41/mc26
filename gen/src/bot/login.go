@@ -104,8 +104,8 @@ func (c *Client) joinLogin(conn *net.Conn) error {
 				return LoginErr{"Login Plugin", err}
 			}
 			answer := login.CustomQueryAnswer{TransactionID: q.TransactionID}
-			if handler, ok := c.LoginPlugin[string(q.Channel)]; ok {
-				data, err := handler(pk.PluginMessageData(q.Data))
+			if handler, ok := c.LoginPlugin[string(q.Identifier)]; ok {
+				data, err := handler(pk.PluginMessageData(q.Payload))
 				if err != nil {
 					return LoginErr{"Login Plugin", err}
 				}

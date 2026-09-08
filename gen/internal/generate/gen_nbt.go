@@ -43,7 +43,6 @@ type regField struct{ ID, Name, Elem, Comment string }
 // nbtGen collects the types to emit, per target package.
 type nbtGen struct {
 	pkgs   map[string]*nbtPkg
-	names  map[string]string // Java short name → Go type name (naming_overrides.json)
 	byJava map[string]string // Java internal name → "pkg.GoName" of an emitted type
 	pin    string            // Java name of a registry element: stays in registry even when it is a chat class (ChatType)
 }
@@ -82,11 +81,7 @@ func genNBT(jsonDir, outRoot string) error {
 	if err := readJSON(filepath.Join(jsonDir, "nbt_schema.json"), &schema); err != nil {
 		return fmt.Errorf("genNBT: %w (re-run extraction; the data must include GenNbtSchema's output)", err)
 	}
-	var overrides namingOverrides
-	if err := readHandCrafted(outRoot, "naming_overrides.json", &overrides); err != nil {
-		return err
-	}
-	g := &nbtGen{pkgs: map[string]*nbtPkg{}, names: overrides.NBTTypeNames, byJava: map[string]string{}}
+	g := &nbtGen{pkgs: map[string]*nbtPkg{}, byJava: map[string]string{}}
 	for _, p := range []string{"chat", "registry"} {
 		g.pkgs[p] = &nbtPkg{name: p, taken: map[string]*nbtType{}}
 	}
@@ -272,10 +267,7 @@ func (g *nbtGen) placement(java, pkg string) string {
 func (g *nbtGen) newType(pkg, java, kind string) *nbtType {
 	p := g.pkgs[pkg]
 	short := java[strings.LastIndex(java, "/")+1:]
-	name := g.names[short]
-	if name == "" {
-		name = nbtTypeName(short)
-	}
+	name := nbtTypeName(short)
 	base := name
 	for i := 2; ; i++ {
 		if t, ok := p.taken[name]; !ok || t.Java == java {

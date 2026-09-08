@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mj41/go-mc26/protocol/types"
 	"net"
 	"os"
 	"strconv"
@@ -80,13 +81,13 @@ func pingAndList(ctx context.Context, addr string, conn *mcnet.Conn) (data []byt
 	}
 
 	// Handshake
-	hs := handshake.Intention{
+	hs := handshake.ClientIntention{
 		ProtocolVersion: ProtocolVersion,
 		HostName:        pk.String(host),
 		Port:            pk.UnsignedShort(port),
-		Intention:       handshake.IntentStatus,
+		Intention:       types.ClientIntentStatus,
 	}
-	if err = conn.WritePacket(pk.Marshal(hs.PacketID(), hs)); err != nil {
+	if err = conn.WritePacket(pk.Marshal(int32(hs.PacketID()), hs)); err != nil {
 		return nil, 0, fmt.Errorf("bot: send handshake packect fail: %v", err)
 	}
 

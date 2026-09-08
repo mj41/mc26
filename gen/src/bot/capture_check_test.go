@@ -121,9 +121,7 @@ func TestCaptureCheck(t *testing.T) {
 func newPacket(state, flow string, id int32) pk.Field {
 	switch state + "/" + flow {
 	case "handshake/serverbound":
-		if id == handshake.IntentionID {
-			return new(handshake.Intention)
-		}
+		return handshake.NewServerbound(packetid.ServerboundPacketID(id))
 	case "status/clientbound":
 		return status.NewClientbound(packetid.ClientboundPacketID(id))
 	case "status/serverbound":

@@ -94,8 +94,6 @@ type Proxy struct {
 	Log    func(string, ...any) //
 	mu     sync.Mutex           //
 	out    []Packet             //
-	seen   map[string]int       //
-	last   map[string]int       // where the most recent packet of an id was put
 	err    error                // the first frame this could not read
 }
 
@@ -175,6 +173,11 @@ type session struct {
 	mu        sync.Mutex
 	state     string
 	threshold int // negative while compression is off
+	// The per-id limit counts within one connection: every session logs in and is
+	// configured, and its first chunk packet is the chunk the player stands in, so
+	// a bot that rejoins after changing the world is recorded standing in the change.
+	seen map[string]int
+	last map[string]int // where the most recent packet of an id was put
 }
 
 func (p *Proxy) handle(client net.Conn) {
@@ -185,7 +188,7 @@ func (p *Proxy) handle(client net.Conn) {
 		return
 	}
 	defer server.Close()
-	s := &session{p: p, state: "handshake", threshold: -1}
+	s := &session{p: p, state: "handshake", threshold: -1, seen: map[string]int{}, last: map[string]int{}}
 	done := make(chan struct{}, 2)
 	go func() { s.pump(server, client, "serverbound"); done <- struct{}{} }()
 	go func() { s.pump(client, server, "clientbound"); done <- struct{}{} }()
@@ -244,7 +247,7 @@ func (s *session) record(flow string, frame []byte) error {
 	if err := s.advance(state, flow, id, rest); err != nil {
 		return err
 	}
-	s.p.keep(Packet{State: state, Flow: flow, ID: id, Data: hex.EncodeToString(rest)})
+	s.keep(Packet{State: state, Flow: flow, ID: id, Data: hex.EncodeToString(rest)})
 	return nil
 }
 
@@ -315,12 +318,13 @@ func (s *session) advance(state, flow string, id int32, data []byte) error {
 	return nil
 }
 
-// keep records a packet, at most PerID of each state/flow/id. What matters is the
-// variety of ids, not the volume — but the newest of an id is kept too, replacing
-// the last one recorded for it, because a packet that carries accumulated state
-// says most when it is the latest: the inventory after every item was given, not
-// after the first four.
-func (p *Proxy) keep(x Packet) {
+// keep records a packet, at most PerID of each state/flow/id per session. What
+// matters is the variety of ids, not the volume — but the newest of an id is kept
+// too, replacing the last one recorded for it, because a packet that carries
+// accumulated state says most when it is the latest: the inventory after every
+// item was given, not after the first four.
+func (s *session) keep(x Packet) {
+	p := s.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.PerID <= 0 {
@@ -328,16 +332,12 @@ func (p *Proxy) keep(x Packet) {
 		return
 	}
 	k := fmt.Sprintf("%s/%s/%d", x.State, x.Flow, x.ID)
-	if p.seen == nil {
-		p.seen = map[string]int{}
-		p.last = map[string]int{}
-	}
-	if p.seen[k] >= p.PerID {
-		p.out[p.last[k]] = x
+	if s.seen[k] >= p.PerID {
+		p.out[s.last[k]] = x
 		return
 	}
-	p.seen[k]++
-	p.last[k] = len(p.out)
+	s.seen[k]++
+	s.last[k] = len(p.out)
 	p.out = append(p.out, x)
 }
 

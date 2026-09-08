@@ -50,7 +50,7 @@ func TestSmokeCommands(t *testing.T) {
 	})
 
 	c.Events.AddListener(
-		bot.PacketHandler{Priority: 32, ID: packetid.ClientboundCommands, F: func(p pk.Packet) error {
+		bot.PacketHandler{Priority: 32, ID: packetid.ClientboundPlayCommands, F: func(p pk.Packet) error {
 			mu.Lock()
 			defer mu.Unlock()
 			var cmds play.Commands

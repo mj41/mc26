@@ -35,19 +35,18 @@ type packetNameTable struct {
 	Names   []string // constant name per id of the play state
 }
 
-// phases is loaded from hand-crafted/packet_phases.json.
-// Defines protocol phases in generation order with Go naming conventions.
-var phases []packetPhase
+// protocolStates are the connection states in the order a connection goes
+// through them; each one prefixes its packet id constants with its own name
+// (ServerboundHandshakeIntention, ClientboundPlaySetHealth), since ids restart
+// at zero in every state and share one package.
+var protocolStates = []string{"handshake", "status", "login", "configuration", "play"}
+
+// statePrefix is the Go prefix of a state's constants: configuration → Configuration.
+func statePrefix(state string) string { return snakeToCamel(state) }
 
 func genPacketID(jsonDir, goMCRoot string) error {
 	jsonPath := filepath.Join(jsonDir, "packets.json")
 	outPath := filepath.Join(goMCRoot, "data", "packetid", "packetid.go")
-
-	if phases == nil {
-		if err := readHandCrafted(goMCRoot, "packet_phases.json", &phases); err != nil {
-			return fmt.Errorf("genPacketID: %w", err)
-		}
-	}
 
 	var packets PacketsJSON
 	if err := readJSON(jsonPath, &packets); err != nil {
@@ -103,8 +102,8 @@ func genPacketID(jsonDir, goMCRoot string) error {
 func buildPacketSections(packets PacketsJSON) []packetSection {
 	var sections []packetSection
 
-	for _, ph := range phases {
-		phaseData, ok := packets[ph.Name]
+	for _, state := range protocolStates {
+		phaseData, ok := packets[state]
 		if !ok {
 			continue
 		}
@@ -115,7 +114,7 @@ func buildPacketSections(packets PacketsJSON) []packetSection {
 				continue
 			}
 
-			pkts := sortPacketIDEntries(dirData, dir, ph.GoPrefix)
+			pkts := sortPacketIDEntries(dirData, dir, statePrefix(state))
 
 			// Sequential from 0 ⇒ use iota; otherwise explicit values.
 			sequential := true
@@ -141,13 +140,13 @@ func buildPacketSections(packets PacketsJSON) []packetSection {
 			}
 
 			// Guard sentinel for play phase.
-			if ph.Name == "play" {
+			if state == "play" {
 				lines = append(lines, fmt.Sprintf("%sPacketIDGuard", dirPrefix(dir)))
 			}
 
 			dirTitle := strings.ToUpper(dir[:1]) + dir[1:]
 			sections = append(sections, packetSection{
-				Comment: fmt.Sprintf("%s %s", ph.Comment, dirTitle),
+				Comment: fmt.Sprintf("%s %s", statePrefix(state), dirTitle),
 				Entries: lines,
 			})
 		}

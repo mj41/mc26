@@ -25,6 +25,13 @@ strictly, so a missing field or a wrong generated `nbt` tag fails the test with 
 the entries that carry the unknown key, instead of decoding to a zero value in silence.
 `--runtime host` uses the host's Java 25 instead of a container.
 
+The server is started with its management protocol on (`management-server-enabled`, plain text,
+a generated 40-character secret), published as a third port, and `go test ./management` runs in
+the same pass: `TestSmokeManagement` dials it with the generated client, reads the status and
+checks the protocol number against `data/version`, changes a setting and reads it back, adds a
+player to the allowlist and waits for the notification that causes, lists the game rules, and
+checks an unknown method comes back as the server's error.
+
 A second test in the same package (`TestSmokeEntityData`) checks the generated entity metadata:
 it summons a handful of entity types over RCON, each with NBT that moves the fields a server
 would otherwise leave at their defaults and never send, and compares every value it receives
@@ -54,6 +61,30 @@ against the given library through a temporary `go.work`, whatever `go.mod` pins)
 The `daze` example has a console: a line on stdin is sent as chat, a `/line` as a command. That
 is how the harness drives bots; it works for a person too.
 
+## Cross-check — the JSON against a reader that has never seen Go
+
+```bash
+go run ./gen/cmd/mc26 crosscheck --version 26.2 [--keep]
+```
+
+The question the extracted JSON has to answer is whether it describes the protocol, or only
+describes it to a reader who already has this library. `crosscheck` starts a vanilla server as
+above and runs the traffic test (`TestSmokeTraffic`, the same bot the smoke test uses, driven
+over RCON through gives, summons, a scoreboard, a boss bar, a built chunk section and a rejoin)
+through a recording proxy. The proxy splits the stream by the frame `nodes.json` describes
+rather than by the library's framing code, follows the state changes, and keeps the first few
+packets of every state/flow/id triple of each session, both directions, in
+`temp/capture/<version>.jsonl`.
+
+The recording is then read twice. In Go, `TestCaptureCheck` decodes every packet into its
+generated type and requires the body to be consumed exactly — a type short of a field reads
+without complaint, so reading all of it is the test. Then `gen/crosslang/decode.py`, a decoder
+written from `packet_schema.json`, `packets.json`, `registries.json`, `entity_data.json`,
+`prims.json` and `nodes.json` and nothing else, decodes each packet and encodes it again; the
+command passes only when every packet comes back byte for byte. `--keep` re-reads the capture
+that is already there without starting a server. `gen/crosslang/FINDINGS.md` records what that
+decoder found the JSON did and did not say when it was first written, and what has closed since.
+
 ## Everything at once
 
 ```bash
@@ -75,4 +106,5 @@ a `syncBuffer`) or `runFor` (run until every expected line appeared); drive the 
 ## Where the files are
 
 `temp/smoke/<version>/` and `temp/e2e/<version>/server/` hold the servers (world, `server.log`);
-`temp/e2e/<version>/bin/` the built examples. `temp/` is ignored by git.
+`temp/e2e/<version>/bin/` the built examples; `temp/capture/<version>.jsonl` the last recorded
+session. `temp/` is ignored by git.

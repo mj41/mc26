@@ -1,3 +1,0 @@
-{
-  "_comment": "Data components implemented by hand in src/level/component (a codec the schema cannot type yet). The components generator skips them even when the schema types them fully, and says so. Key: the registry name. Empty since 26.3-pre-2: every component the extractor meets is described."
-}

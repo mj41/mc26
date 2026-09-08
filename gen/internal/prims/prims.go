@@ -47,6 +47,21 @@ func Load(path string) (Set, error) {
 	return file.Prims, nil
 }
 
+// DefKinds counts every distinct node kind the definitions themselves use, so
+// that a kind a definition introduces — packed, rest — is described in
+// nodes.json like any the schema emits.
+func DefKinds(defs Set) map[string]int {
+	out := map[string]int{}
+	for _, d := range defs {
+		walkNodes(d.Def, func(n map[string]any) {
+			if k, ok := n["k"].(string); ok && k != "native" {
+				out[k]++
+			}
+		})
+	}
+	return out
+}
+
 // Kinds counts every distinct node kind a schema file uses. A generator that
 // reads the JSON has to know what each one is on the wire, so they are defined
 // alongside the primitives.
@@ -128,13 +143,32 @@ func Check(defs Set, used map[string]int) Report {
 			r.Undefined = append(r.Undefined, fmt.Sprintf("%s (%d uses)", t, used[t]))
 		}
 	}
+	// A definition is in use when the schema names it, or when a definition the
+	// schema names reaches it: CHUNK_SECTIONS is on the wire through the chunk
+	// packet, and the two paletted containers through CHUNK_SECTIONS.
+	reached := map[string]bool{}
+	var reach func(string)
+	reach = func(t string) {
+		if reached[t] {
+			return
+		}
+		reached[t] = true
+		if d, ok := defs[t]; ok {
+			for _, ref := range Refs(d.Def) {
+				reach(ref)
+			}
+		}
+	}
+	for t := range used {
+		reach(t)
+	}
 	for _, t := range sortedKeys(defs) {
 		for _, ref := range Refs(defs[t].Def) {
 			if _, ok := defs[ref]; !ok {
 				r.Dangling = append(r.Dangling, t+" -> "+ref)
 			}
 		}
-		if used[t] == 0 {
+		if !reached[t] {
 			r.Unused = append(r.Unused, t)
 		}
 	}

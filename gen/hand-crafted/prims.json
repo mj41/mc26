@@ -118,6 +118,50 @@
    "java": "net/minecraft/network/FriendlyByteBuf.readChunkPos -> net/minecraft/world/level/ChunkPos.unpack(J); ChunkPos.pack(II) and the ChunkPos(int,int) record constructor",
    "note": "One big-endian signed 64-bit long with x in the low 32 bits and z in the high 32 bits - so on the wire the four bytes of z arrive FIRST, then the four bytes of x."
   },
+  "CHUNK_SECTIONS": {
+   "def": {
+    "k": "lenprefixed",
+    "elem": {
+     "k": "rest",
+     "elem": {
+      "k": "struct",
+      "name": "LevelChunkSection",
+      "fields": [
+       {
+        "name": "nonEmptyBlockCount",
+        "type": {
+         "k": "prim",
+         "t": "SHORT"
+        }
+       },
+       {
+        "name": "fluidCount",
+        "type": {
+         "k": "prim",
+         "t": "SHORT"
+        }
+       },
+       {
+        "name": "states",
+        "type": {
+         "k": "prim",
+         "t": "PALETTED_BLOCK_STATES"
+        }
+       },
+       {
+        "name": "biomes",
+        "type": {
+         "k": "prim",
+         "t": "PALETTED_BIOMES"
+        }
+       }
+      ]
+     }
+    }
+   },
+   "java": "net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.<init>(FriendlyByteBuf, int, int): buffer = new byte[readVarInt()], readBytes(buffer); extractChunkData writes every LevelChunkSection.write into it and asserts the buffer is exactly full; LevelChunkSection.read: readShort nonEmptyBlockCount, readShort fluidCount, states.read, biomes.read",
+   "note": "The chunk data of level_chunk_with_light: a var int byte count, then that many bytes holding one LevelChunkSection per 16 blocks of the dimension's height, back to back and nothing else. The section count is not in the packet - the client takes it from the dimension type it was sent at configuration time - which is why this is `rest` inside the window rather than a list: reading sections until the bytes run out gives the same result. Byte-identical across 26.1, 26.2 and 26.3-pre-2 (fluidCount is in all three)."
+  },
   "COMPONENT_PATCH": {
    "def": {
     "k": "struct",
@@ -594,6 +638,167 @@
    },
    "java": "net/minecraft/network/codec/ByteBufCodecs.OPTIONAL_VAR_INT = VAR_INT.map(lambda$static$0, lambda$static$1); ByteBufCodecs$6; net/minecraft/network/syncher/EntityDataSerializers$3.decode",
    "note": "A single var-int where 0 encodes absence and n > 0 encodes the value n - 1. WARNING: the extractor also attaches this token to EntityDataSerializers$2, where it is wrong - see evidence."
+  },
+  "PALETTED_BIOMES": {
+   "def": {
+    "k": "struct",
+    "name": "PalettedContainer$Biomes",
+    "fields": [
+     {
+      "name": "bits",
+      "type": {
+       "k": "prim",
+       "t": "BYTE"
+      }
+     },
+     {
+      "name": "single",
+      "type": {
+       "k": "prim",
+       "t": "VAR_INT"
+      },
+      "when": [
+       [
+        {
+         "field": "bits",
+         "test": "eq",
+         "value": 0
+        }
+       ]
+      ]
+     },
+     {
+      "name": "palette",
+      "type": {
+       "k": "list",
+       "elem": {
+        "k": "prim",
+        "t": "VAR_INT"
+       }
+      },
+      "when": [
+       [
+        {
+         "field": "bits",
+         "test": "cmp",
+         "op": ">=",
+         "value": 1
+        }
+       ],
+       [
+        {
+         "field": "bits",
+         "test": "cmp",
+         "op": "<=",
+         "value": 3
+        }
+       ]
+      ]
+     },
+     {
+      "name": "data",
+      "type": {
+       "k": "packed",
+       "entries": 64,
+       "bits": "bits",
+       "width": {
+        "0": 0,
+        "1": 1,
+        "2": 2,
+        "3": 3,
+        "*": {
+         "registryBits": "worldgen/biome"
+        }
+       }
+      }
+     }
+    ]
+   },
+   "java": "net/minecraft/world/level/chunk/PalettedContainer.read(FriendlyByteBuf) with the strategy of Strategy.createForBiomes (Strategy$2.getConfigurationForBitCount, bitsPerAxis 2 so entryCount 1 << 6); the same palette readers",
+   "note": "As PALETTED_BLOCK_STATES over 64 entries (a 4x4x4 grid of biomes per section): 0 = single value; 1, 2, 3 = a linear palette at that many bits; 4 and above = global at ceillog2(number of biomes), 7 for the 65-67 vanilla biomes of 26.1-26.3 but a property of whatever biome registry the server synchronised. Identical in 26.1, 26.2 and 26.3-pre-2."
+  },
+  "PALETTED_BLOCK_STATES": {
+   "def": {
+    "k": "struct",
+    "name": "PalettedContainer$BlockStates",
+    "fields": [
+     {
+      "name": "bits",
+      "type": {
+       "k": "prim",
+       "t": "BYTE"
+      }
+     },
+     {
+      "name": "single",
+      "type": {
+       "k": "prim",
+       "t": "VAR_INT"
+      },
+      "when": [
+       [
+        {
+         "field": "bits",
+         "test": "eq",
+         "value": 0
+        }
+       ]
+      ]
+     },
+     {
+      "name": "palette",
+      "type": {
+       "k": "list",
+       "elem": {
+        "k": "prim",
+        "t": "VAR_INT"
+       }
+      },
+      "when": [
+       [
+        {
+         "field": "bits",
+         "test": "cmp",
+         "op": ">=",
+         "value": 1
+        }
+       ],
+       [
+        {
+         "field": "bits",
+         "test": "cmp",
+         "op": "<=",
+         "value": 8
+        }
+       ]
+      ]
+     },
+     {
+      "name": "data",
+      "type": {
+       "k": "packed",
+       "entries": 4096,
+       "bits": "bits",
+       "width": {
+        "0": 0,
+        "1": 4,
+        "2": 4,
+        "3": 4,
+        "4": 4,
+        "5": 5,
+        "6": 6,
+        "7": 7,
+        "8": 8,
+        "*": {
+         "registryBits": "block_state"
+        }
+       }
+      }
+     }
+    ]
+   },
+   "java": "net/minecraft/world/level/chunk/PalettedContainer.read(FriendlyByteBuf) with the strategy of Strategy.createForBlockStates (Strategy$1.getConfigurationForBitCount, bitsPerAxis 4 so entryCount 1 << 12); SingleValuePalette.read, LinearPalette.read, HashMapPalette.read, GlobalPalette.read; FriendlyByteBuf.readFixedSizeLongArray",
+   "note": "One byte selects the palette and the storage width: 0 = a single value (one var int block state id, no data longs); 1-4 = a linear palette (var int count, then that many block state ids) stored at 4 bits per entry whatever the byte said; 5-8 = a hash-map palette (same bytes as linear) at that many bits; 9 and above = the global palette (nothing) at ceillog2(number of block states) bits, 16 in 26.3-pre-2 and 15 in 26.1 and 26.2. Then the 4096 entries packed into longs, see `packed`. The writer emits the storage width as the byte (PalettedContainer$Data.write writes storage.getBits()), so vanilla never sends 1-3 for block states, but a reader must take them as 4. Identical in 26.1, 26.2 and 26.3-pre-2."
   },
   "PUBLIC_KEY": {
    "def": {
