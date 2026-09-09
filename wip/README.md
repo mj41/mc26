@@ -18,16 +18,23 @@ here as its record until the docs carry everything worth keeping, then it goes.
 |---|---|---|
 | 4 | [release-26-3.md](release-26-3.md) | Minecraft 26.3 through `mc26 update`, then `release --push` |
 
-## 3. Deferred
+## 3. Research
+
+| task | what is asked |
+|---|---|
+| [exports.md](exports.md) | exports of the schema to other ecosystems' formats, and the errors a comparison with one found (docs/minecraft-data.md) |
+
+## 4. Deferred
 
 | task | why it waits |
 |---|---|
 | [multi-version.md](multi-version.md) | a bot that speaks two Minecraft versions at once: no need yet |
 
-## 4. Done — the record
+## 5. Done — the record
 
 | task | done |
 |---|---|
+| [derive-primitives.md](derive-primitives.md) | 2026-09-09: the composed primitives read from the jar into the schema's `prims` section; `prims.json` names members only, four definitions still by hand |
 | [generation.md](generation.md) | 2026-09-09: every packet, component, registry and shared type generated; what stays hand-written and why |
 | [automation.md](automation.md) | 2026-09-09: `verify`, the schema check in every build, `update`, `nbtdiff` |
 | [repositories-and-versioning.md](repositories-and-versioning.md) | 2026-09-05: the repositories, the branch and tag scheme, no backward compatibility, the workflows |

@@ -56,8 +56,9 @@ Generated share of lines: 98 % overall, 70 % without the translations.
 
 The machinery that produces the library: 10,458 lines of Go in `gen/` (commands, generators,
 build, test harness, the recording proxy), 4,926 lines of Java in `data-gen/java`, the
-two hand-crafted files that make the JSON a description rather than a hint (`prims.json`, 50
-primitives, and `nodes.json`, 33 node kinds and the frame; the naming overrides, hand lists and
+two hand-crafted files that make the JSON a description rather than a hint (`prims.json`, the jar
+members the 50 primitives stand for — their definitions are read from the jar since 2026-09-09,
+four still by hand — and `nodes.json`, 33 node kinds and the frame; the naming overrides, hand lists and
 phase file of earlier snapshots are gone), one overlay of one file for 26.1 (`server/login.go`),
 and `gen/crosslang`, the reader written from the JSON alone that checks all of it (a Go module that
 imports nothing from the library; Python until 2026-09-09).

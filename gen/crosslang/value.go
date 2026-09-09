@@ -1,11 +1,11 @@
 // Schema-driven Minecraft packet codec, written from the JSON alone.
 //
 // Reads a capture of packet bodies, decodes each one against packet_schema.json
-// using only the node kinds nodes.json lists and the primitives prims.json
-// defines, then re-encodes the decoded value and checks the bytes match.
+// using only the node kinds nodes.json lists and the primitives the schema's
+// own "prims" section defines, then re-encodes the decoded value and checks the bytes match.
 // Nothing here special-cases a packet: the reader is driven by the node kind.
 //
-//	go run . --data <dir> --prims <prims.json> --nodes <nodes.json> --capture <file.jsonl> [--verbose]
+//	go run . --data <dir> --nodes <nodes.json> --capture <file.jsonl> [--verbose]
 //
 // It is a module of its own so that it cannot import the Go library or the
 // generators: what it can read, the JSON describes.

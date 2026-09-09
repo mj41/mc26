@@ -19,7 +19,7 @@ type data struct {
 		ProtocolID int `json:"protocol_id"`
 	}
 	nbt   map[string]any // nbt_schema.json
-	prims map[string]any // prims.json "prims"
+	prims map[string]any // packet_schema.json "prims": the definitions of this version
 	nodes map[string]any // nodes.json
 }
 
@@ -52,13 +52,10 @@ func load(o Options) (*data, error) {
 	if err := readJSON(filepath.Join(o.DataDir, "nbt_schema.json"), &d.nbt); err != nil {
 		return nil, err
 	}
-	var prims struct {
-		Prims map[string]any `json:"prims"`
+	d.prims, _ = d.packet["prims"].(map[string]any)
+	if len(d.prims) == 0 {
+		return nil, fmt.Errorf("%s has no \"prims\" section (re-run extraction)", filepath.Join(o.DataDir, "packet_schema.json"))
 	}
-	if err := readJSON(filepath.Join(o.HandDir, "prims.json"), &prims); err != nil {
-		return nil, err
-	}
-	d.prims = prims.Prims
 	if err := readJSON(filepath.Join(o.HandDir, "nodes.json"), &d.nodes); err != nil {
 		return nil, err
 	}
@@ -202,7 +199,9 @@ func (d *data) frame(args []string) (string, error) {
 	return sb.String(), nil
 }
 
-// primsTable lists every primitive of prims.json with what it is.
+// primsTable lists every primitive of this version's schema with what it is
+// and where that was read from: the jar member it was derived from, or "by
+// hand" for the few the walker does not read yet.
 func (d *data) primsTable(args []string) (string, error) {
 	used := d.primUses()
 	var sb strings.Builder
@@ -210,16 +209,24 @@ func (d *data) primsTable(args []string) (string, error) {
 	for _, name := range sortedKeys(d.prims) {
 		p, _ := d.prims[name].(map[string]any)
 		def, _ := p["def"].(map[string]any)
-		fmt.Fprintf(&sb, "| `%s` | %s | `%s` | %d |\n", name, escape(defSummary(def)), str(p["java"]), used[name])
-	}
-	sb.WriteString("\n")
-	for _, name := range sortedKeys(d.prims) {
-		p, _ := d.prims[name].(map[string]any)
-		if note := str(p["note"]); note != "" {
-			fmt.Fprintf(&sb, "- `%s` — %s\n", name, note)
+		from := "the buffer"
+		switch {
+		case str(p["derived"]) != "":
+			from = "`" + shortMember(str(p["derived"])) + "`"
+		case str(p["hand"]) != "":
+			from = "by hand"
 		}
+		fmt.Fprintf(&sb, "| `%s` | %s | %s | %d |\n", name, escape(defSummary(def)), from, used[name])
 	}
 	return sb.String(), nil
+}
+
+// shortMember is a jar member without its package: FriendlyByteBuf.readUUID.
+func shortMember(m string) string {
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		return m[i+1:]
+	}
+	return m
 }
 
 // primUses counts the primitives the version's packets and components name.

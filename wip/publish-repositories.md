@@ -10,7 +10,7 @@ them exists on GitHub yet (`gh repo view mj41/<name>` fails for all five):
 | local | branches | tags | remote (set, unreachable) |
 |---|---|---|---|
 | `mc26` (this repo) | `main` | – | `git@github.com:mj41/mc26.git` |
-| `mc26-data` | `main`, `mc-26.1`, `mc-26.2` | `v0.261.1`, `v0.262.1` (with `docs/`, 2026-09-09) | `mj41/mc26-data` |
+| `mc26-data` | `main`, `mc-26.1`, `mc-26.2` | `v0.261.2`, `v0.262.2` (with `docs/`, 2026-09-09) | `mj41/mc26-data` |
 | `mc26-data-pre` | `main`, `mc-26.3-pre-2`, `mc-26.3-pre-3` | `v0.263.0-pre2.0`, `v0.263.0-pre3.0` | `mj41/mc26-data-pre` |
 | `go-mc26` | `main`, `mc-26.1`, `mc-26.2` | `v0.261.0`, `v0.262.0` | `mj41/go-mc26` |
 | `go-mc26-examples` | `main` | – | `mj41/go-mc26-examples` |

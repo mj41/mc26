@@ -115,9 +115,9 @@ func Run(o Options) (*Info, error) {
 
 	// Every primitive the schema leaves as a name has to have a definition, or
 	// the JSON describes the protocol only to a reader that already owns a Go
-	// library. A version that introduces one nobody has defined stops here.
-	primsFile := filepath.Join(o.GenRoot, "hand-crafted", "prims.json")
-	defs, err := prims.Load(primsFile)
+	// library. The definitions are the schema's own "prims" section, read from
+	// the jar; a version that introduces one nobody has named stops here.
+	defs, err := prims.Load(filepath.Join(o.DataDir, "packet_schema.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -140,9 +140,15 @@ func Run(o Options) (*Info, error) {
 		return nil, fmt.Errorf("node kinds used but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
 	}
 	if missing := prims.CheckKinds(nodes, prims.DefKinds(defs)); len(missing) > 0 {
-		return nil, fmt.Errorf("node kinds used by prims.json but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("node kinds used by the primitive definitions but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
 	}
-	o.Log("build %s: %d primitives and %d node kinds, all defined", v.ID, len(used), len(kinds))
+	hand := 0
+	for _, d := range defs {
+		if d.Hand != "" {
+			hand++
+		}
+	}
+	o.Log("build %s: %d primitives (%d defined by hand) and %d node kinds, all defined", v.ID, len(used), hand, len(kinds))
 	// … and every kind has its section in the documentation template, whose
 	// directives all parse: the documentation cannot fall behind the schema.
 	var kindNames []string

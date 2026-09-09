@@ -7,8 +7,14 @@ entry moves out of here.
 
 ## What is here
 
-`prims.json` defines every named primitive of the schema (a node tree, a `bits` layout, or a
-native) with the Java member it was read from and a note; `nodes.json` lists the node kinds with
+`prims.json` says which Java members the schema's named primitives stand for
+(`FriendlyByteBuf.readUUID`, `ItemStack.OPTIONAL_STREAM_CODEC`, …): the extractor reads each
+definition from that member's bytecode into the schema's own `prims` section, so a primitive is
+described the way a packet is, by this version's jar. The file keeps the definition itself only
+for the natives (a var int, a big-endian int: what the buffer does) and, marked `hand` with the
+reason, for the four the bytecode of a reader cannot say — the chunk sections, the two paletted
+containers, the entity data (since 2026-09-09; until then all 50 were written from the bytecode
+by hand). `nodes.json` lists the node kinds with
 a one-line summary and carries the frame as data (length, body, compression, encryption, the
 state transitions), which the recording proxy of `crosscheck` follows. What a node kind or the
 frame *is* on the wire is prose, and prose is written in Markdown: `gen/docs/protocol.mc26tmpl.md`,

@@ -25,20 +25,19 @@ type failure struct {
 
 func main() {
 	data := flag.String("data", "", "extracted data directory")
-	prims := flag.String("prims", "", "prims.json")
 	nodes := flag.String("nodes", "", "nodes.json")
 	capture := flag.String("capture", "", "capture file (JSON lines: state, flow, id, data as hex)")
 	verbose := flag.Bool("verbose", false, "print every packet's value, and both byte strings on a mismatch")
 	flag.Parse()
-	if *data == "" || *prims == "" || *nodes == "" || *capture == "" {
-		fmt.Fprintln(os.Stderr, "usage: crosslang --data <dir> --prims <prims.json> --nodes <nodes.json> --capture <file.jsonl> [--verbose]")
+	if *data == "" || *nodes == "" || *capture == "" {
+		fmt.Fprintln(os.Stderr, "usage: crosslang --data <dir> --nodes <nodes.json> --capture <file.jsonl> [--verbose]")
 		os.Exit(2)
 	}
-	os.Exit(run(*data, *prims, *nodes, *capture, *verbose))
+	os.Exit(run(*data, *nodes, *capture, *verbose))
 }
 
-func run(dataDir, primsPath, nodesPath, capturePath string, verbose bool) int {
-	s, err := loadSchema(dataDir, primsPath, nodesPath)
+func run(dataDir, nodesPath, capturePath string, verbose bool) int {
+	s, err := loadSchema(dataDir, nodesPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "crosslang:", err)
 		return 1

@@ -696,7 +696,7 @@ func (c *ctx) decDispatch(n node, r *reader) (Value, error) {
 	inlineKey := true
 	switch {
 	case key["k"] == nil && key["field"] != nil:
-		// prims.json DELIMITED_COMPONENT_PATCH: the key is an earlier sibling
+		// DELIMITED_COMPONENT_PATCH: the key is an earlier sibling
 		// field, already on the wire, not read again here
 		sib := c.siblings[len(c.siblings)-1]
 		v, _, err := fieldValue(sib.node, sib.vals, len(sib.vals), str(key["field"]))

@@ -2,7 +2,7 @@ package main
 
 import "encoding/binary"
 
-// NBT. prims.json's NBT definition carries a `tags` table: for every tag id,
+// NBT. The schema's NBT definition carries a `tags` table: for every tag id,
 // what its payload is. This reader follows that table and nothing else, and
 // refuses when the table is absent.
 

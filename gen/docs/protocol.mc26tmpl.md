@@ -81,10 +81,71 @@ pk.Packet{ID int32; Data []byte} at gen/src/net/packet/packet.go:13-17 (MaxDataL
 
 The schema's leaves. A definition is a node tree in the schema's own vocabulary, a `bits`
 layout inside one integer, or a native every language implements in its runtime; a definition
-may name another primitive, which a reader resolves recursively. The uses column counts how
-often this version's packets and components name the primitive.
+may name another primitive, which a reader resolves recursively. The definitions are the
+`prims` section of `packet_schema.json`, read by the extractor from the jar member the name
+stands for (`gen/hand-crafted/prims.json` says which), the same way it reads any packet; the
+natives are what the buffer itself does; four are still written by hand, where the bytecode of
+the reader does not say what the count or the width is (the chunk sections, the two paletted
+containers, the entity data). The uses column counts how often this version's packets and
+components name the primitive. A primitive this version has no member for is left out.
 
 <!-- mc26 include: prims -->
+
+### Notes on the primitives
+
+What each one is, beyond its definition. Where a note names a version, that is where the fact
+was checked.
+
+- `BIT_SET` — Byte-for-byte a LONG_ARRAY (var-int word count, then that many big-endian longs), interpreted as java.util.BitSet.valueOf(long[]): bit i is bit (i mod 64) of word i/64 counting from the least significant bit, and the writer trims the word count to the last word that has a bit set.
+- `BLOCK_POS` — One big-endian signed 64-bit long packing three two's-complement fields: y in bits 0-11, z in bits 12-37, x in bits 38-63 (read from BlockPos.getX/getY/getZ over the long).
+- `BOOL` — A single byte: 0 means false and any non-zero byte means true, and true is written as 1.
+- `BYTE` — One byte read as a signed two's-complement value in -128..127.
+- `BYTE_ARRAY` — A var-int count then exactly that many raw bytes; a node's `max` only caps the count and is not on the wire - note Mojang checks only count > max, not count < 0, so a generated reader must reject a negative count itself.
+- `BYTE_BIT_SET` — Byte-for-byte a BYTE_ARRAY (var-int byte count, then that many bytes), interpreted as java.util.BitSet.valueOf(byte[]): bit i is bit (i mod 8) of byte i/8 counting from the least significant bit, and the writer trims the count to the last byte that has a bit set. Not the same wire form as BIT_SET, which is a long array; 26.3 moved the chunk light masks from one to the other, so a version may use either or both.
+- `CHUNK_POS` — One big-endian signed 64-bit long with x in the low 32 bits and z in the high 32 bits (read from ChunkPos.unpack) - so on the wire the four bytes of z arrive FIRST, then the four bytes of x.
+- `CHUNK_SECTIONS` — The chunk data of level_chunk_with_light: a var int byte count, then that many bytes holding one LevelChunkSection per 16 blocks of the dimension's height, back to back and nothing else. The section count is not in the packet - the client takes it from the dimension type it was sent at configuration time - which is why this is `rest` inside the window rather than a list: reading sections until the bytes run out gives the same result. Byte-identical across 26.1, 26.2 and 26.3-pre-2 (fluidCount is in all three).
+- `COMPONENT_PATCH` — Two var-int counts first, then positiveCount components (each a component type id and the value in that type's own codec) and then negativeCount component-type ids — it is NOT two `list`s, because both counts precede both runs. The guard the reader puts on both runs (either count non-zero) changes nothing on the wire: a run of zero is empty either way.
+- `CONTAINER_ID` — A plain var-int with no bias or offset - the token only records that the number identifies an open container.
+- `DELIMITED_COMPONENT_PATCH` — COMPONENT_PATCH with every added value preceded by its length in bytes, so a reader can step over a component it does not know.
+- `DOUBLE` — Eight big-endian bytes reinterpreted as an IEEE-754 double-precision float.
+- `ENTITY_DATA` — Entries of { unsigned-byte field index, var-int serializer id, value in that serializer's codec } repeated UNTIL an index byte of 0xff, which is the terminator and carries nothing after it; the `while` clause is the schema's end-of-list condition, not a continue condition. The serializer ids and their value types are the serializers list of entity_data.json.
+- `FIXED_BIT_SET` — A bit set whose size the packet already knows: ceil(bits/8) bare bytes with no count, LSB-first within each byte.
+- `FIXED_BYTES` — A block of exactly `len` bytes with no length prefix; all six occurrences in the 26.2 schema are len 256, the chat message-signature block, and several are conditional fields (present only when the preceding packed id says so).
+- `FLOAT` — Four big-endian bytes reinterpreted as an IEEE-754 single-precision float.
+- `GAME_PROFILE_PROPERTIES` — A var-int count of at most 16 properties (the count is read with that cap; the list carries it as `max`), each a name string (max 64 chars), a value string (max 32767 chars) and a boolean-prefixed optional signature string (max 1024 chars); every string is a var-int BYTE length then UTF-8, and each max is a character cap.
+- `IDENTIFIER` — Exactly a `string` (var-int byte length + UTF-8), cap 32767 characters, whose text is a namespaced id "namespace:path"; a string with no ':' (or a leading ':') takes the default "minecraft" namespace.
+- `INSTANT` — An ordinary big-endian signed 64-bit long holding milliseconds since the Unix epoch (Instant.ofEpochMilli).
+- `INT` — Four bytes, most significant first, read as a signed two's-complement 32-bit value.
+- `ITEM_STACK` — Byte-for-byte OPTIONAL_ITEM_STACK with the empty encoding forbidden: the count is always at least one, so the item id and the component patch always follow. The creative mode slot packet sends UNTRUSTED_ITEM_STACK instead, which delimits its components.
+- `JSON_TEXT` — An ordinary `string` read - var-int byte length + UTF-8 bytes - whose text is then parsed as JSON; `max` on the prim node is the character cap given to lenientJson (262144 for login disconnect, 32767 for the status response).
+- `LONG` — Eight bytes, most significant first, read as a signed two's-complement 64-bit value.
+- `LONG_ARRAY` — A var-int count followed by that many big-endian signed 64-bit longs; the decoder rejects a count larger than readableBytes()/8.
+- `LP_VEC3` — Minecraft's low-precision packed vector: a 1-byte zero marker, else 6 mixed-endian bytes holding three 15-bit quantised components plus 3 scale/flag bits, optionally followed by a VarInt carrying the rest of the scale.
+- `MESSAGE_SIGNATURE` — A 256-byte signature block with no length prefix; the 26.2 extractor never emits this token - the codec field it is keyed on does not exist, and signatures reach the schema as FIXED_BYTES len 256 through the inlined reader.
+- `NBT` — One NBT tag in network form: a 1-byte tag id followed by that tag's payload with NO root name; id 0 (TAG_End) is the entire value, and whether that means "absent" or is a decode error depends on the reader (FriendlyByteBuf.readNbt returns null; ByteBufCodecs.TAG/COMPOUND_TAG throw). The payload of every tag id is in the tags table of the definition, so a reader needs nothing else: the format is self-describing and recursive, which is why it stays native.
+- `OPTIONAL_ITEM_STACK` — A var-int count; when it is <= 0 the stack is empty and nothing else is read, otherwise a var-int item registry id and a COMPONENT_PATCH follow.
+- `OPTIONAL_ITEM_STACK_LIST` — An ordinary var-int-counted list whose elements are OPTIONAL_ITEM_STACK, so empty stacks may appear inside it; no wire-relevant maximum.
+- `OPTIONAL_NBT` — Byte-for-byte an NBT and NOT boolean-prefixed: absence is the single TAG_End byte 0x00 that NBT already allows, and when a tag is present it must be a TAG_Compound (anything else is a decode error).
+- `OPTIONAL_TEXT` — A boolean; when true one TEXT (a network NBT tag) follows, when false nothing follows — genuinely boolean-prefixed, unlike OPTIONAL_NBT.
+- `OPTIONAL_VAR_INT` — A single var-int where 0 encodes absence and n > 0 encodes the value n - 1. The entity-data serializer OPTIONAL_BLOCK_STATE is named with this token too, and there it is wrong: that one writes the state id itself with 0 for absent, no n - 1.
+- `PALETTED_BIOMES` — As PALETTED_BLOCK_STATES over 64 entries (a 4x4x4 grid of biomes per section): 0 = single value; 1, 2, 3 = a linear palette at that many bits; 4 and above = global at ceillog2(number of biomes), 7 for the 65-67 vanilla biomes of 26.1-26.3 but a property of whatever biome registry the server synchronised. Identical in 26.1, 26.2 and 26.3-pre-2.
+- `PALETTED_BLOCK_STATES` — One byte selects the palette and the storage width: 0 = a single value (one var int block state id, no data longs); 1-4 = a linear palette (var int count, then that many block state ids) stored at 4 bits per entry whatever the byte said; 5-8 = a hash-map palette (same bytes as linear) at that many bits; 9 and above = the global palette (nothing) at ceillog2(number of block states) bits, 16 in 26.3-pre-2 and 15 in 26.1 and 26.2. Then the 4096 entries packed into longs, see `packed`. The writer emits the storage width as the byte (PalettedContainer$Data.write writes storage.getBits()), so vanilla never sends 1-3 for block states, but a reader must take them as 4. Identical in 26.1, 26.2 and 26.3-pre-2.
+- `PUBLIC_KEY` — A var-int length (the reader rejects above 512) then that many bytes, holding the DER X.509 SubjectPublicKeyInfo encoding of an RSA public key; the writer imposes no cap of its own.
+- `REGISTRY_KEY` — One IDENTIFIER naming the registry itself (e.g. "minecraft:block"); the ResourceKey's root-registry parent is a static field in Java and never travels.
+- `REST_BYTES` — The raw remainder of the buffer after the fields before it, with no length prefix; it is opaque bytes - when a channel is one the server knows (minecraft:brand carries a STRING) that structure is inside the blob, not described by this token.
+- `ROTATION_BYTE` — One signed byte covering a whole turn in 256 steps: the angle in degrees is b * 360 / 256 (b is signed, so -128..127 covers -180..+179.3).
+- `SHORT` — Two bytes, most significant first, read as a signed two's-complement 16-bit value.
+- `STRING` — Var-int BYTE count followed by that many UTF-8 bytes; where a cap applies it is a CHARACTER count (the byte length is rejected above 3x the cap before reading, the decoded String.length() above the cap after), and in the 26.2 schema no prim STRING node carries a cap at all - the separate `string` node kind is what carries `max`.
+- `TEXT` — A chat component carried as exactly one network NBT tag (parsed with NbtOps, the codec is ComponentSerialization.CODEC): a TAG_String for a plain literal, a non-empty TAG_List of components, or a TAG_Compound — TAG_End is rejected, and there is no length prefix on the codec field itself.
+- `TYPED_DATA_COMPONENT` — A var-int data_component_type registry id, then the value in that component type's own stream codec, with no length prefix: a struct of the type and a dispatch on it. The cases are the components section of packet_schema.json, keyed by the same registry name, which casesFrom points at. It is marked recursive because several components (container, bundle_contents, charged_projectiles, use_remainder) hold item stacks, which hold a component patch again: the format recurses, so a reader has to stop inlining here and recurse at run time instead.
+- `UNSIGNED_BYTE` — The same single byte as BYTE, but interpreted as unsigned 0..255.
+- `UNSIGNED_SHORT` — The same two big-endian bytes as SHORT, interpreted as unsigned 0..65535; the writer truncates the int to 16 bits.
+- `UNTRUSTED_ITEM_STACK` — OPTIONAL_ITEM_STACK with the delimited component patch: a count of at most zero is an empty stack and nothing follows it; the item is a holder of the item registry (a var-int id).
+- `UUID` — Sixteen bytes: the high 64 bits then the low 64 bits, each a big-endian signed long - the same as writing the 128-bit value big-endian.
+- `VAR_INT` — Little-endian base-128: each byte carries seven data bits, the high bit says another byte follows, and a value is at most five bytes; negative numbers are the 32-bit two's-complement pattern, so they always take five bytes.
+- `VAR_INT_ARRAY` — A var-int count followed by that many var-ints; the no-arg overload caps the count at readableBytes().
+- `VAR_INT_LIST` — Identical on the wire to VAR_INT_ARRAY - a var-int count then that many var-ints - differing only in the Java container (IntList rather than int[]).
+- `VAR_LONG` — The same base-128 scheme as VAR_INT but over 64 bits and at most ten bytes; negative numbers are the 64-bit two's-complement pattern and always take ten bytes.
 
 ## Node kinds
 
@@ -289,7 +350,7 @@ often this version's packets and components name the primitive.
 **Keys.** `entries` = how many values (4096 for a section's block states, 64 for its biomes); `bits` = the name of the earlier sibling field holding the byte that selected the palette; `width` = an object mapping that byte's value (as a string) to the storage width, with the key "*" for every other value; a width may be an integer or {"registryBits": <id space>}, meaning ceillog2 of the number of entries in that id space ("block_state": the total of every block's states in blocks.json; "worldgen/biome": the biomes the server synchronised, biomes.json for vanilla). ceillog2(n) = ceil(log2(n)), so ceillog2(1) = 0 and ceillog2(64) = 6; net.minecraft.util.Mth.ceillog2.
 
 <!-- mc26 internal -->
-**Where it comes from.** Only inside gen/hand-crafted/prims.json, in PALETTED_BLOCK_STATES and PALETTED_BIOMES, derived from PalettedContainer.read, Strategy$1/Strategy$2.getConfigurationForBitCount, Configuration$Simple/$Global.bitsInMemory, SimpleBitStorage.<init>(int,int,long[]) (valuesPerLong = 64/bits, longs = (size + valuesPerLong - 1) / valuesPerLong) and ZeroBitStorage. The extractor emits an opaque 'length-not-on-the-wire:readFixedSizeLongArray' for the same bytes in the structs section, which is the honest answer from the bytecode alone. gen/crosslang (the `packed` cases of its codec).
+**Where it comes from.** Only inside the two definitions still written by hand in gen/hand-crafted/prims.json, PALETTED_BLOCK_STATES and PALETTED_BIOMES, derived from PalettedContainer.read, Strategy$1/Strategy$2.getConfigurationForBitCount, Configuration$Simple/$Global.bitsInMemory, SimpleBitStorage.<init>(int,int,long[]) (valuesPerLong = 64/bits, longs = (size + valuesPerLong - 1) / valuesPerLong) and ZeroBitStorage. The extractor emits an opaque 'length-not-on-the-wire:readFixedSizeLongArray' for the same bytes in the structs section, which is the honest answer from the bytecode alone. gen/crosslang (the `packed` cases of its codec).
 
 **In Go.** wire.Packed (the longs as read) in gen/src/wire/wire.go, read and written through wire.PackedOf(&field, entries, width): the generated struct hands it the count and the width, the width from a generated function per packed field (level.PalettedContainerBlockStatesDataWidth, from this node's `width`), the global width being block.BitsPerBlock / biome.BitsPerBiome. level's own BitStorage is built from the longs (level.StatesFromWire). Note that the Go global width is bits.Len(n) where Java's is ceillog2(n): equal for every registry size in 26.1-26.3, different when a registry has exactly a power of two entries (bits.Len(64) is 7, ceillog2(64) is 6).
 <!-- mc26 end -->
@@ -310,7 +371,7 @@ often this version's packets and components name the primitive.
 
 ### prim
 
-**On the wire.** Whatever prims.json defines for the name in `t`. It is the schema's only leaf.
+**On the wire.** Whatever the schema's `prims` section defines for the name in `t`. It is the schema's only leaf.
 
 **Keys.** t is the primitive's name; a few carry a parameter the primitive's definition uses (len for FIXED_BYTES, bits for FIXED_BIT_SET, max for a bounded one).
 
@@ -363,7 +424,7 @@ often this version's packets and components name the primitive.
 **Keys.** `elem` = the node repeated. Nothing else: no count, no max, no terminator.
 
 <!-- mc26 internal -->
-**Where it comes from.** Only inside gen/hand-crafted/prims.json, in CHUNK_SECTIONS; the extractor does not emit it, since the count it stands in for is not in the bytecode of the reader (ClientboundLevelChunkPacketData reads the array as bytes and LevelChunk reads the sections out of it later with the level's section count). gen/crosslang (the `rest` cases of its codec).
+**Where it comes from.** Only inside the definition of CHUNK_SECTIONS, still written by hand in gen/hand-crafted/prims.json; the extractor does not emit it, since the count it stands in for is not in the bytecode of the reader (ClientboundLevelChunkPacketData reads the array as bytes and LevelChunk reads the sections out of it later with the level's section count). gen/crosslang (the `rest` cases of its codec).
 
 **In Go.** wire.Rest[T, *T] in gen/src/wire/wire.go: elements until the reader is exhausted, which inside wire.LenPrefixed is the window. CHUNK_SECTIONS is types.LenPrefixed[types.Rest[level.LevelChunkSection]], and level.Chunk.PutSections checks the number of sections against the dimension's height.
 <!-- mc26 end -->

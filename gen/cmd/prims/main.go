@@ -1,7 +1,7 @@
 // prims reports whether every primitive a version's schema uses has a
-// definition in gen/hand-crafted/prims.json, and whether the definitions form a
-// set a reader can resolve. `mc26 build` runs the same check and fails on it;
-// this command is for looking.
+// definition in the schema's own "prims" section, and whether the definitions
+// form a set a reader can resolve. `mc26 build` runs the same check and fails
+// on it; this command is for looking.
 //
 //	go run ./gen/cmd/prims 26.2
 //	go run ./gen/cmd/prims -show ITEM_STACK 26.2
@@ -20,16 +20,14 @@ import (
 
 func main() {
 	show := flag.String("show", "", "print one primitive's definition and stop")
-	file := flag.String("prims", "", "definitions file (default gen/hand-crafted/prims.json)")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: prims [-show TOKEN] [-prims file] <version|dir>")
+		fmt.Fprintln(os.Stderr, "usage: prims [-show TOKEN] <version|dir>")
 		os.Exit(2)
 	}
-	path := *file
-	if path == "" {
-		path = filepath.Join(paths.MustRoot(), "gen", "hand-crafted", "prims.json")
-	}
+	dir := paths.Data(flag.Arg(0))
+	schema := filepath.Join(dir, "packet_schema.json")
+	path := schema
 	defs, err := prims.Load(path)
 	if err != nil {
 		fail("%v", err)
@@ -44,12 +42,10 @@ func main() {
 		return
 	}
 
-	nodes, err := prims.LoadNodes(filepath.Join(filepath.Dir(path), "nodes.json"))
+	nodes, err := prims.LoadNodes(filepath.Join(paths.MustRoot(), "gen", "hand-crafted", "nodes.json"))
 	if err != nil {
 		fail("%v", err)
 	}
-	dir := paths.Data(flag.Arg(0))
-	schema := filepath.Join(dir, "packet_schema.json")
 	used, err := prims.Used(schema)
 	if err != nil {
 		fail("%v", err)

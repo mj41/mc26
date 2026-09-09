@@ -453,7 +453,6 @@ func runCrossCheck(version, data, lib, capturePath string, keep bool, port int, 
 	}
 	cmd := exec.Command("go", "run", ".",
 		"--data", data,
-		"--prims", filepath.Join(root, "gen", "hand-crafted", "prims.json"),
 		"--nodes", filepath.Join(root, "gen", "hand-crafted", "nodes.json"),
 		"--capture", capturePath)
 	cmd.Dir = decoder

@@ -10,6 +10,7 @@ gen/
 ├── cmd/mc26/            extract · build · smoke · crosscheck · e2e · verify · update · pipeline · release · report · commit · latest · tag · import-src · import-examples
 ├── cmd/packetdiff/      wire-layout diff of two versions (packet_schema.json + packets.json)
 ├── cmd/nbtdiff/         what the registry elements and shared NBT types gained, lost or changed between two versions (nbt_schema.json)
+├── cmd/protodefdiff/    our packet schema against another description of the same version (docs/minecraft-data.md)
 ├── cmd/mcmeta/          registry preview and check against misode/mcmeta, no Java needed
 ├── cmd/schemacov/       how much of packet_schema.json is fully typed, and why the rest is not
 ├── internal/extract/    downloads (jar, language files) and the extraction container; _meta.json
@@ -22,7 +23,7 @@ gen/
 ├── internal/gitx/       branch, replace tree, commit, tag, push
 ├── internal/importsrc/  one-time import of the library sources and examples from a go-mc tree
 ├── internal/paths/      <root>/temp layout (data/<version>, cache, lib/<version>, smoke/<version>)
-├── hand-crafted/        prims.json and nodes.json: what the schema's names mean, as data (see hand-crafted/hand-crafted.md)
+├── hand-crafted/        prims.json (which jar members the primitives stand for) and nodes.json (the node kinds, the frame), see hand-crafted/hand-crafted.md)
 ├── templates/           version.go, packetid.go, README.md, ci.yml, the data and index READMEs, … (text/template)
 ├── src/_versions/<v>/   files an older version needs different from src/ (same relative paths), applied by build; the underscore keeps them out of every ./... walk
 └── src/                 the hand-written library packages; module github.com/mj41/go-mc26, no generated files
@@ -53,7 +54,7 @@ rather than copying its fields avoids most overlays.
 | registryid | `registries.json` | `data/registryid/*.go` |
 | biome | `biomes.json` | `level/biome/list.go` |
 | lang | `lang/*.json` | `data/lang/<locale>/<locale>.go` |
-| packets | `packet_schema.json` + `packets.json` + `prims.json` (a primitive with no Go type of its own, `CHUNK_SECTIONS`, is rendered from its definition) | `protocol/<state>/{clientbound,serverbound}_gen.go` (+ round-trip tests), `protocol/types/{enums,structs}_gen.go`, `level/section_gen.go` (the chunk section and its paletted containers, with the width function of each packed run) |
+| packets | `packet_schema.json` (its `prims` section defines the primitives; one with no Go type of its own, `CHUNK_SECTIONS`, is rendered from its definition) + `packets.json` | `protocol/<state>/{clientbound,serverbound}_gen.go` (+ round-trip tests), `protocol/types/{enums,structs}_gen.go`, `level/section_gen.go` (the chunk section and its paletted containers, with the width function of each packed run) |
 | entity data (inside packets) | `entity_data.json` | `protocol/types/entitydata_gen.go` (serializer names, `NewEntityDataValue`), `data/entitydata/entitydata_gen.go` (field index constants per class, the fields of every entity type) |
 | constants | `constants.json` | `data/constants/constants_gen.go` — the compile-time constants of a few classes (inventory slot layout, section geometry, level limits, living-entity NBT keys) |
 | nbt | `nbt_schema.json` | `registry/elements_gen.go` (the registry elements sent in the configuration phase, their enums and records, a decode test), `registry/registries_gen.go` (the `Registries` struct), `chat/style_gen.go` (`Style`, `ClickEvent`, `HoverEvent`, `Decoration`) |
@@ -158,13 +159,16 @@ while the packet still counted as fully typed.
 
 The schema's leaves are named primitives — `VAR_INT`, `ITEM_STACK`, `COMPONENT_PATCH` — and the
 names are all this generator needs, because the library has a Go type for each. A generator for
-another language has nothing, so `hand-crafted/prims.json` says what each name is on the wire: a
-node tree in the schema's own vocabulary where one describes it, a bit layout where the value is
-fields inside an integer, and `native` for the few a language implements in its runtime (the
-var-int framing, the binary NBT format, the integers themselves). Each definition records the
-Java member it was read from. `mc26 build` checks that every primitive a version uses is defined
-and that the definitions resolve, so a version that introduces a new one stops the build instead
-of producing a binding with a hole in it; `prims <version>` prints the same report.
+another language has nothing, so the schema's own `prims` section says what each name is on the
+wire: a node tree in the schema's own vocabulary where one describes it, a bit layout where the
+value is fields inside an integer, and `native` for the few a language implements in its runtime
+(the var-int framing, the binary NBT format, the integers themselves). The extractor reads each
+definition from the jar member `hand-crafted/prims.json` names for it (`FriendlyByteBuf.readUUID`,
+`ItemStack.OPTIONAL_STREAM_CODEC`), with the name's own stop rule switched off, so a primitive
+is derived the way a packet is and records the member it was read from; four are still written
+by hand there, marked with the reason. `mc26 build` checks that every primitive a version uses
+is defined and that the definitions resolve, so a version that introduces a new one stops the
+build instead of producing a binding with a hole in it; `prims <version>` prints the same report.
 
 `hand-crafted/nodes.json` does the same for the vocabulary the trees are built from. A node kind
 such as `list` or `holder` meant something exact, but that meaning lived only in this extractor

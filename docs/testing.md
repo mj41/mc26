@@ -81,8 +81,8 @@ packets of every state/flow/id triple of each session, both directions, in
 The recording is then read twice. In Go, `TestCaptureCheck` decodes every packet into its
 generated type and requires the body to be consumed exactly — a type short of a field reads
 without complaint, so reading all of it is the test. Then `gen/crosslang`, a reader
-written from `packet_schema.json`, `packets.json`, `registries.json`, `entity_data.json`,
-`prims.json` and `nodes.json` and nothing else, decodes each packet and encodes it again; the
+written from `packet_schema.json` (its `prims` section included), `packets.json`,
+`registries.json`, `entity_data.json` and `nodes.json` and nothing else, decodes each packet and encodes it again; the
 command passes only when every packet comes back byte for byte. `--keep` re-reads the capture
 that is already there without starting a server. `gen/crosslang/FINDINGS.md` records what that
 decoder found the JSON did and did not say when it was first written, and what has closed since.

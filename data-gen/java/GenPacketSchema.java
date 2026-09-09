@@ -162,63 +162,116 @@ public class GenPacketSchema {
 
     // ---- primitives ---------------------------------------------------------------
 
-    static final Map<String, String> BYTEBUF_CODECS = Map.ofEntries(
-        Map.entry("BOOL", "BOOL"), Map.entry("BYTE", "BYTE"), Map.entry("SHORT", "SHORT"),
-        Map.entry("UNSIGNED_SHORT", "UNSIGNED_SHORT"), Map.entry("INT", "INT"), Map.entry("LONG", "LONG"),
-        Map.entry("FLOAT", "FLOAT"), Map.entry("DOUBLE", "DOUBLE"), Map.entry("VAR_INT", "VAR_INT"),
-        Map.entry("VAR_LONG", "VAR_LONG"), Map.entry("OPTIONAL_VAR_INT", "OPTIONAL_VAR_INT"),
-        Map.entry("STRING_UTF8", "STRING"), Map.entry("BYTE_ARRAY", "BYTE_ARRAY"),
-        Map.entry("LONG_ARRAY", "LONG_ARRAY"), Map.entry("VAR_INT_ARRAY", "VAR_INT_ARRAY"),
-        // ByteBufCodecs.BIT_SET is not FriendlyByteBuf.readBitSet: it is a byte array,
-        // not a long array, and 26.3 moved the light masks from one to the other
-        Map.entry("BIT_SET", "BYTE_BIT_SET"), Map.entry("INSTANT", "INSTANT"),
-        Map.entry("PUBLIC_KEY", "PUBLIC_KEY"), Map.entry("TAG", "NBT"), Map.entry("TRUSTED_TAG", "NBT"),
-        Map.entry("COMPOUND_TAG", "NBT"), Map.entry("TRUSTED_COMPOUND_TAG", "NBT"),
-        Map.entry("OPTIONAL_COMPOUND_TAG", "OPTIONAL_NBT"), Map.entry("CONTAINER_ID", "CONTAINER_ID"),
-        Map.entry("ROTATION_BYTE", "ROTATION_BYTE"), Map.entry("VAR_INT_UNSIGNED", "VAR_INT"),
-        // RGB_COLOR is not an int: it reads three bytes and packs them, see rgbColorNode
-        Map.entry("ARGB_COLOR", "INT"),
-        Map.entry("PLAYER_NAME", "STRING"), Map.entry("GAME_PROFILE_PROPERTIES", "GAME_PROFILE_PROPERTIES")
-    );
-    /** Well-known codec constants on other classes that are wire primitives for our purposes. */
-    static final Map<String, String> KNOWN_CODEC_FIELDS = Map.ofEntries(
-        Map.entry("net/minecraft/core/UUIDUtil.STREAM_CODEC", "UUID"),
-        Map.entry("net/minecraft/resources/Identifier.STREAM_CODEC", "IDENTIFIER"),
-        Map.entry("net/minecraft/resources/ResourceLocation.STREAM_CODEC", "IDENTIFIER"),
-        Map.entry("net/minecraft/core/BlockPos.STREAM_CODEC", "BLOCK_POS"),
-        Map.entry("net/minecraft/world/level/ChunkPos.STREAM_CODEC", "CHUNK_POS"),
-        Map.entry("net/minecraft/world/phys/Vec3.LP_STREAM_CODEC", "LP_VEC3"),
-        Map.entry("net/minecraft/network/chat/ComponentSerialization.STREAM_CODEC", "TEXT"),
-        Map.entry("net/minecraft/network/chat/ComponentSerialization.TRUSTED_STREAM_CODEC", "TEXT"),
-        Map.entry("net/minecraft/network/chat/ComponentSerialization.OPTIONAL_STREAM_CODEC", "OPTIONAL_TEXT"),
-        Map.entry("net/minecraft/network/chat/ComponentSerialization.TRUSTED_OPTIONAL_STREAM_CODEC", "OPTIONAL_TEXT"),
-        Map.entry("net/minecraft/world/item/ItemStack.STREAM_CODEC", "ITEM_STACK"),
-        Map.entry("net/minecraft/core/component/TypedDataComponent.STREAM_CODEC", "TYPED_DATA_COMPONENT"),
-        Map.entry("net/minecraft/world/item/ItemStack.OPTIONAL_STREAM_CODEC", "OPTIONAL_ITEM_STACK"),
-        Map.entry("net/minecraft/world/item/ItemStack.OPTIONAL_LIST_STREAM_CODEC", "OPTIONAL_ITEM_STACK_LIST"),
-        Map.entry("net/minecraft/world/item/ItemStack.OPTIONAL_UNTRUSTED_STREAM_CODEC", "UNTRUSTED_ITEM_STACK"),
-        Map.entry("net/minecraft/core/component/DataComponentPatch.STREAM_CODEC", "COMPONENT_PATCH"),
-        Map.entry("net/minecraft/network/chat/MessageSignature.STREAM_CODEC", "MESSAGE_SIGNATURE"),
-        Map.entry("net/minecraft/nbt/CompoundTag.STREAM_CODEC", "NBT")
-    );
-    static final Map<String, String> BUF_READS = Map.ofEntries(
-        Map.entry("readBoolean", "BOOL"), Map.entry("readByte", "BYTE"), Map.entry("readUnsignedByte", "UNSIGNED_BYTE"),
-        Map.entry("readShort", "SHORT"), Map.entry("readUnsignedShort", "UNSIGNED_SHORT"), Map.entry("readInt", "INT"),
-        Map.entry("readUnsignedInt", "UNSIGNED_INT"), Map.entry("readLong", "LONG"), Map.entry("readFloat", "FLOAT"),
-        Map.entry("readDouble", "DOUBLE"), Map.entry("readVarInt", "VAR_INT"), Map.entry("readVarLong", "VAR_LONG"),
-        Map.entry("readUtf", "STRING"), Map.entry("readUUID", "UUID"), Map.entry("readIdentifier", "IDENTIFIER"),
-        Map.entry("readResourceLocation", "IDENTIFIER"), Map.entry("readByteArray", "BYTE_ARRAY"),
-        Map.entry("readVarIntArray", "VAR_INT_ARRAY"), Map.entry("readLongArray", "LONG_ARRAY"),
-        Map.entry("readBitSet", "BIT_SET"), Map.entry("readFixedBitSet", "FIXED_BIT_SET"), Map.entry("readInstant", "INSTANT"),
-        Map.entry("readBlockPos", "BLOCK_POS"), Map.entry("readChunkPos", "CHUNK_POS"),
-        Map.entry("readLpVec3", "LP_VEC3"), Map.entry("readNbt", "NBT"),
-        Map.entry("readPublicKey", "PUBLIC_KEY"), Map.entry("readBytes", "RAW_BYTES"), Map.entry("readIntIdList", "VAR_INT_LIST"),
-        Map.entry("readChar", "CHAR"), Map.entry("readComponent", "TEXT"), Map.entry("readComponentTrusted", "TEXT"),
-        Map.entry("readJsonWithCodec", "JSON"), Map.entry("readWithCodec", "NBT"),
-        Map.entry("readContainerId", "CONTAINER_ID"), Map.entry("readRegistryKey", "REGISTRY_KEY"),
+    /**
+     * The named primitives, from gen/hand-crafted/prims.json (MC_PRIMS_JSON): which Java
+     * members mean each name. A member that maps to a name stops the walker there, so the
+     * packets keep their leaves' names; the definition of a name that is not a native is then
+     * read from its first member with its own stop rule off (derivePrims), so that what the
+     * jar says a block position or an item stack is travels with the schema, like any packet.
+     */
+    static final Map<String, String> MEMBER_PRIM = new HashMap<>();          // "owner.member" -> name
+    static final Map<String, Map<String, Object>> PRIM_ENTRIES = new LinkedHashMap<>();   // name -> the prims.json entry
+    static String derivingPrim = null;   // the name whose definition is being read: its members do not stop the walker
 
-        Map.entry("readSectionPos", "SECTION_POS"), Map.entry("readDate", "LONG")
-    );
+    static void loadPrims() throws Exception {
+        String path = System.getenv("MC_PRIMS_JSON");
+        if (path == null) throw new IllegalStateException("MC_PRIMS_JSON is not set: gen/hand-crafted/prims.json names the primitives");
+        Object doc = fromJson(com.google.gson.JsonParser.parseString(Files.readString(Path.of(path))));
+        Map<String, Object> prims = castNode((Map<?, ?>) ((Map<?, ?>) doc).get("prims"));
+        for (var e : prims.entrySet()) {
+            Map<String, Object> entry = castNode((Map<?, ?>) e.getValue());
+            PRIM_ENTRIES.put(e.getKey(), entry);
+            for (Object m : (List<?>) entry.get("members")) MEMBER_PRIM.put(String.valueOf(m), e.getKey());
+        }
+    }
+
+    static Object fromJson(com.google.gson.JsonElement el) {
+        if (el.isJsonNull()) return null;
+        if (el.isJsonPrimitive()) {
+            var p = el.getAsJsonPrimitive();
+            if (p.isBoolean()) return p.getAsBoolean();
+            if (p.isNumber()) { double d = p.getAsDouble(); return d == Math.rint(d) && Math.abs(d) < 1e15 ? (Object) (long) d : (Object) d; }
+            return p.getAsString();
+        }
+        if (el.isJsonArray()) { List<Object> l = new ArrayList<>(); for (var x : el.getAsJsonArray()) l.add(fromJson(x)); return l; }
+        Map<String, Object> m = new LinkedHashMap<>();
+        for (var x : el.getAsJsonObject().entrySet()) m.put(x.getKey(), fromJson(x.getValue()));
+        return m;
+    }
+
+    /** The primitive a Java member stands for, or null: also null for the one being derived. */
+    static String primOfMember(String member) {
+        String p = MEMBER_PRIM.get(member);
+        return p == null || p.equals(derivingPrim) ? null : p;
+    }
+
+    /** The primitive a FriendlyByteBuf reader stands for, by method name (any buffer class). */
+    static String primOfBufRead(String name) { return primOfMember("net/minecraft/network/FriendlyByteBuf." + name); }
+
+    /**
+     * The definition of every named primitive: the natives' and the hand-written ones' from
+     * prims.json, the rest read from the first member's bytecode.
+     */
+    static Map<String, Map<String, Object>> derivePrims() {
+        Map<String, Map<String, Object>> out = new LinkedHashMap<>();
+        for (var e : PRIM_ENTRIES.entrySet()) {
+            String name = e.getKey();
+            Map<String, Object> entry = e.getValue();
+            List<?> members = (List<?>) entry.get("members");
+            Map<String, Object> o = new LinkedHashMap<>();
+            if (entry.get("def") != null) {
+                o.put("def", entry.get("def"));
+                if (entry.get("hand") != null) o.put("hand", entry.get("hand"));
+            } else {
+                derivingPrim = name;
+                try {
+                    // the first member this version has: readInstant left FriendlyByteBuf, the codec constant stayed
+                    Map<String, Object> def = null;
+                    String from = null;
+                    for (Object m : members) {
+                        Map<String, Object> d = deriveMember(String.valueOf(m));
+                        from = String.valueOf(m);
+                        if (d != null && !(String.valueOf(d.get("java")).startsWith("no-") && "opaque".equals(d.get("k")))) { def = d; break; }
+                        if (def == null) def = d;
+                    }
+                    if (def == null || "opaque".equals(def.get("k")) && String.valueOf(def.get("java")).startsWith("no-")) {
+                        System.err.println("GenPacketSchema: primitive " + name + " has no member in this version, left out");
+                        continue;
+                    }
+                    o.put("def", def);
+                    o.put("derived", from);
+                } finally {
+                    derivingPrim = null;
+                }
+            }
+            o.put("java", members);
+            out.put(name, o);
+        }
+        return out;
+    }
+
+    /** Reads a member: a static codec field, a reader of a buffer, or a factory that returns a codec. */
+    static Map<String, Object> deriveMember(String member) {
+        int dot = member.lastIndexOf('.');
+        String owner = member.substring(0, dot), name = member.substring(dot + 1);
+        if (name.equals(name.toUpperCase(Locale.ROOT))) return codecFieldNode(owner, name, 0);
+        ClassModel cm = classModel(owner);
+        if (cm == null) return opaque("no-class:" + member);
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals(name)) continue;
+            String d = m.methodType().stringValue();
+            if (owner.endsWith("FriendlyByteBuf") || d.contains("FriendlyByteBuf") || d.contains("ByteBuf;)")) return readerNode(owner, name, d, 0);
+        }
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals(name)) continue;
+            String d = m.methodType().stringValue();
+            List<Value> args = new ArrayList<>();
+            for (int i = 0; i < arity(d); i++) args.add(new OtherV("param:" + i));
+            Map<String, Object> n = inlineFactory(owner, name, d, args, 0);
+            if (n != null) return n;
+        }
+        return opaque("no-reader:" + member);
+    }
 
     // ---- entry point --------------------------------------------------------------
 
@@ -228,6 +281,7 @@ public class GenPacketSchema {
         // Enum/record reflection initialises MC classes that touch the registries.
         net.minecraft.SharedConstants.tryDetectVersion();
         net.minecraft.server.Bootstrap.bootStrap();
+        loadPrims();
         List<Entry> packets = new ArrayList<>();
         List<Entry> structs = new ArrayList<>();
         for (String[] tc : TYPES_CLASSES) {
@@ -263,12 +317,20 @@ public class GenPacketSchema {
         writeEntries(sb, structs);
         sb.append("  },\n  \"components\": {\n");
         writeEntries(sb, components);
+        Map<String, Map<String, Object>> prims = derivePrims();
+        sb.append("  },\n  \"prims\": {\n");
+        int pi = 0;
+        for (var e : prims.entrySet()) {
+            sb.append("    ").append(json(e.getKey())).append(": ").append(jsonNode(e.getValue()));
+            sb.append(++pi < prims.size() ? ",\n" : "\n");
+        }
         sb.append("  }\n}\n");
         Files.writeString(Path.of("packet_schema.json"), sb.toString(), StandardCharsets.UTF_8);
         long full = packets.stream().filter(e -> coverage(e.type).equals("full")).count();
         long fullC = components.stream().filter(e -> coverage(e.type).equals("full")).count();
-        System.err.printf("GenPacketSchema: %d packets (%d fully typed, %d partial) + %d structs + %d data components (%d fully typed) written to packet_schema.json%n",
-            packets.size(), full, packets.size() - full, structs.size(), components.size(), fullC);
+        long derived = prims.values().stream().filter(v -> v.containsKey("derived")).count();
+        System.err.printf("GenPacketSchema: %d packets (%d fully typed, %d partial) + %d structs + %d data components (%d fully typed) + %d primitives (%d read from the jar) written to packet_schema.json%n",
+            packets.size(), full, packets.size() - full, structs.size(), components.size(), fullC, prims.size(), derived);
     }
 
     // ---- data components -----------------------------------------------------------
@@ -493,6 +555,16 @@ public class GenPacketSchema {
     static List<String> ctorParamNames(String internalName, String desc, String method) {
         // Unobfuscated 26.x jars keep parameter names (MethodParameters attribute).
         ClassModel cm = classModel(internalName);
+        if (internalName.startsWith("java/") && method.equals("<init>")) {
+            // a JDK class keeps no parameter names; its constructor stores them in its fields, in order (UUID: mostSigBits, leastSigBits)
+            try {
+                List<String> names = new ArrayList<>();
+                for (Field f : Class.forName(internalName.replace('/', '.')).getDeclaredFields()) if (!Modifier.isStatic(f.getModifiers())) names.add(f.getName());
+                return names.size() == arity(desc) ? names : null;
+            } catch (Throwable t) {
+                return null;
+            }
+        }
         if (cm == null) return null;
         for (MethodModel m : cm.methods()) {
             if (!m.methodName().stringValue().equals(method) || !m.methodType().stringValue().equals(desc)) continue;
@@ -513,7 +585,7 @@ public class GenPacketSchema {
 
     /** The node for a static codec field of a class, interpreting its <clinit> segment. */
     static Map<String, Object> codecFieldNode(String owner, String field, int depth) {
-        String known = KNOWN_CODEC_FIELDS.get(owner + "." + field);
+        String known = primOfMember(owner + "." + field);
         if (known != null) return prim(known);
         if (field.equals("STREAM_CODEC") && !hasStaticField(owner, field)) {
             ClassModel cm0 = classModel(owner);
@@ -526,7 +598,6 @@ public class GenPacketSchema {
             for (String c : List.of("red", "green", "blue")) fs.add(field(c, prim("UNSIGNED_BYTE")));
             return node("struct", "name", "RGBColor", "fields", fs);
         }
-        if (owner.endsWith("ByteBufCodecs") && BYTEBUF_CODECS.containsKey(field)) return prim(BYTEBUF_CODECS.get(field));
         String key = owner + "." + field;
         if (codecFieldCache.containsKey(key)) return codecFieldCache.get(key);
         if (depth > MAX_DEPTH) return opaque("depth:" + key);
@@ -580,7 +651,7 @@ public class GenPacketSchema {
                 if (o.endsWith("core/registries/Registries") || d.contains("ResourceKey")) stack.push(new KeyV(registryName(n)));
                 else if (d.contains("Codec") || o.endsWith("ByteBufCodecs")) {
                     Map<String, Object> cn = codecFieldNode(o, n, depth + 1);
-                    String known = KNOWN_CODEC_FIELDS.get(o + "." + n);
+                    String known = primOfMember(o + "." + n);
                     hintOf.putIfAbsent(cn, known != null ? hintName("read" + camel(known))
                         : o.endsWith("ByteBufCodecs") ? hintName("read" + camel(n)) : lowerFirst(shortName(o).replace("$", "")));
                     stack.push(new CodecV(cn));
@@ -808,13 +879,17 @@ public class GenPacketSchema {
                 case "byteArray" -> { stack.push(new CodecV(node("prim", "t", "BYTE_ARRAY", "max", constOf(arg(args, 0))))); return; }
                 case "fixedBitSet" -> { stack.push(new CodecV(node("prim", "t", "FIXED_BIT_SET", "bits", constOf(arg(args, 0))))); return; }
                 case "fromCodec", "fromCodecTrusted", "fromCodecWithRegistries", "fromCodecWithRegistriesTrusted", "compoundTagCodec", "tagCodec" -> { stack.push(new CodecV(nbtOrText(args.isEmpty() ? null : arg(args, 0)))); return; }
-                case "lengthPrefixed" -> { stack.push(new FnV("lengthPrefixed", constOf(arg(args, 0)))); return; }
+                case "lengthPrefixed", "registryFriendlyLengthPrefixed" -> { stack.push(new FnV("lengthPrefixed", constOf(arg(args, 0)))); return; }
                 case "either" -> { stack.push(new CodecV(node("either", "left", nodeOf(arg(args, 0)), "right", nodeOf(arg(args, 1))))); return; }
                 // optionalTagCodec has no boolean of its own: it is readNbt, whose TAG_End is
                 // the absent value, so the optionality is inside the tag.
                 case "optionalTagCodec" -> { stack.push(new CodecV(node("nbt"))); return; }
-                case "lenientJson" -> { stack.push(new CodecV(node("prim", "t", "JSON_TEXT", "max", constOf(arg(args, 0))))); return; }
-                default -> { stack.push(new CodecV(opaque("ByteBufCodecs." + name))); return; }
+                default -> {
+                    String t = primOfMember(owner + "." + name);
+                    if (t != null) { stack.push(new CodecV(node("prim", "t", t, "max", constOf(arg(args, 0))))); return; }
+                    Map<String, Object> made = inlineFactory(owner, name, desc, args, depth + 1);
+                    stack.push(new CodecV(made != null ? made : opaque("ByteBufCodecs." + name))); return;
+                }
             }
         }
         if (owner.endsWith("resources/ResourceKey") && name.equals("streamCodec")) { stack.push(new CodecV(node("resourcekey", "registry", keyOf(arg(args, 0))))); return; }
@@ -826,6 +901,7 @@ public class GenPacketSchema {
             return;
         }
         if (owner.endsWith("resources/ResourceKey") && name.equals("createRegistryKey")) { stack.push(new KeyV("dynamic")); return; }
+        if (name.equals("streamCodec") && isComponentType(recv)) { stack.push(new CodecV(componentDispatch(nodeOfValue(recv)))); return; }
         if (name.equals("enumStreamCodec") || (name.equals("streamCodec") && ret.contains("StreamCodec"))) {
             // an enum's codec, or a static factory (Filterable.streamCodec(c), TypedEntityData.streamCodec(c), …)
             // whose body is interpreted with the arguments bound
@@ -864,12 +940,23 @@ public class GenPacketSchema {
                 if (desc.substring(i, end).contains("network/codec/StreamCodec") && pi < args.size() && args.get(pi) instanceof CodecV cv) fromCtor = cv;
                 i = end;
             }
-            String decodeDesc = fromCtor == null ? methodDesc(cls, "decode", "ByteBuf") : null;
+            String decodeDesc = methodDesc(cls, "decode", "ByteBuf");
+            if (decodeDesc != null) fromCtor = null;   // an anonymous codec built with a codec: its decode reads, with that codec as a field
             String[] codecMethod = fromCtor == null && decodeDesc == null ? codecMethodOf(cls) : null;
             if (fromCtor != null || decodeDesc != null || codecMethod != null) {
                 if (!stack.isEmpty() && stack.peek() instanceof OtherV top && top.what().equals(ov.what())) stack.pop();
                 if (fromCtor != null) stack.push(fromCtor);
-                else if (decodeDesc != null) stack.push(new CodecV(readerNode(cls, "decode", decodeDesc, depth + 1)));
+                else if (decodeDesc != null) {
+                    Map<String, Value> bound = capturedFields(cls, desc, args);
+                    if (bound.isEmpty()) stack.push(new CodecV(readerNode(cls, "decode", decodeDesc, depth + 1)));
+                    else {
+                        // the answer depends on what was captured, so it is not cached
+                        Map<String, Value> outer = new HashMap<>(captured);
+                        captured.putAll(bound);
+                        try { stack.push(new CodecV(interpretReader(cls, "decode", decodeDesc, depth + 1))); }
+                        finally { captured.clear(); captured.putAll(outer); }
+                    }
+                }
                 else {
                     Map<String, Object> n0 = inlineMethod(cls, codecMethod[0], codecMethod[1], List.of(), depth, false);
                     // a streamCodec() that reads a field the constructor built: kept whole,
@@ -883,6 +970,26 @@ public class GenPacketSchema {
             return;
         }
         if (!ret.equals("V")) stack.push(new OtherV(o + "." + name));
+    }
+
+    /** The values an anonymous class's constructor stores in its fields (val$patchCodec), by "class.field". */
+    static final Map<String, Value> captured = new HashMap<>();
+
+    static Map<String, Value> capturedFields(String cls, String ctorDesc, List<Value> args) {
+        Map<String, Value> out = new HashMap<>();
+        MethodModel init = findMethod(cls, "<init>", ctorDesc);
+        if (init == null) return out;
+        List<Integer> slots = paramSlots(ctorDesc, false);
+        Integer loaded = null;
+        for (CodeElement el : init.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+            if (el instanceof LoadInstruction li) loaded = li.slot();
+            else if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTFIELD && loaded != null) {
+                int at = slots.indexOf(loaded);
+                if (at >= 0 && at < args.size() && !(args.get(at) instanceof OtherV)) out.put(cls + "." + fi.name().stringValue(), args.get(at));
+                loaded = null;
+            } else if (el instanceof Instruction) loaded = null;
+        }
+        return out;
     }
 
     /** A zero-argument method of a class returning a StreamCodec (streamCodec(), codec()): {name, desc}, or null. */
@@ -1795,6 +1902,17 @@ public class GenPacketSchema {
         return v instanceof CodecV c ? c.n() : v instanceof PassedV p ? p.of() : v instanceof BitsV b ? b.of()
             : v instanceof NewV nv ? opaque(shortName(nv.cls()) + ".streamCodec") : null;
     }
+    /**
+     * A value as a range of bits of a long read or passed in, when it is one: an unnamed
+     * `BitsV` from a shift, mask or (int) cast already, or the whole long. Null for anything
+     * else, so the arithmetic of a reader never cuts fields out of a value that is not packed.
+     */
+    static BitsV inlineBits(Value v) {
+        if (v instanceof BitsV b && b.name() == null) return b;
+        Map<String, Object> of = nodeOfValue(v);
+        if (of == null || subOfValue(v) != null || !("prim".equals(of.get("k")) && "LONG".equals(of.get("t")) || "bits".equals(of.get("k")) && "LONG".equals(of.get("of")))) return null;
+        return new BitsV(of, null, 0, 64, true);
+    }
     /** The bit field a value is one of, if it is one: the name goes on the guard or the count. */
     static String subOfValue(Value v) {
         return v instanceof BitsV b ? b.name() : v instanceof PassedV p ? p.sub() : null;
@@ -1803,14 +1921,18 @@ public class GenPacketSchema {
     /** An array stands for the size it was created with (new byte[256], new String[4]). */
     static Value unwrap(Value v) { return v instanceof ArrayV a ? a.size() : v; }
     static String keyOf(Value v) { return v instanceof KeyV k ? k.registry() : "?"; }
-    static String lambdaOrOther(Value v) { return v instanceof LambdaV l ? shortName(l.owner()) + "." + l.name() : v == null ? null : v.toString(); }
+    static String lambdaOrOther(Value v) {
+        if (v instanceof LambdaV l) return shortName(l.owner()) + "." + l.name();
+        if (v instanceof CodecV c && "opaque".equals(c.n().get("k")) && String.valueOf(c.n().get("java")).startsWith("not-a-codec:")) return String.valueOf(c.n().get("java")).substring(12);
+        return v == null ? null : v.toString();
+    }
 
     // nbtOrText is the node for ByteBufCodecs.fromCodec*(codec) and buf.readWithCodec(codec):
     // an NBT payload, except when the codec is ComponentSerialization.CODEC (a chat
     // component), which has the same wire form as ComponentSerialization.STREAM_CODEC → TEXT.
     static Map<String, Object> nbtOrText(Value codec) {
         if (codec instanceof CodecV cv && "opaque".equals(cv.n().get("k"))
-                && String.valueOf(cv.n().get("java")).endsWith("network/chat/ComponentSerialization.CODEC")) return prim("TEXT");
+                && String.valueOf(cv.n().get("java")).endsWith("network/chat/ComponentSerialization.CODEC") && !"TEXT".equals(derivingPrim)) return prim("TEXT");
         return node("nbt", "java", lambdaOrOther(codec));
     }
 
@@ -1833,6 +1955,20 @@ public class GenPacketSchema {
      * the struct both end up in, so the node is recorded here and named there.
      */
     static final Map<Map<String, Object>, PassedV> pendingCounts = new IdentityHashMap<>();
+    /** Dispatches whose key is a field read earlier (type.streamCodec() on a component type): the key's name is resolved like a count's. */
+    static final Map<Map<String, Object>, Map<String, Object>> pendingKeys = new IdentityHashMap<>();
+
+    /** The codec of a data component whose type was just read: every component's own, by that type. */
+    static Map<String, Object> componentDispatch(Map<String, Object> typeNode) {
+        Map<String, Object> d = node("dispatch", "name", "DataComponent", "key", new LinkedHashMap<String, Object>(), "casesFrom", "packet_schema.json#components");
+        d.put("recursive", true);
+        pendingKeys.put(d, typeNode);
+        return d;
+    }
+    static boolean isComponentType(Value v) {
+        Map<String, Object> n = nodeOfValue(v);
+        return n != null && "registry".equals(n.get("k")) && "data_component_type".equals(n.get("registry"));
+    }
 
     static Map<String, Object> readerNode(Value decoder, int depth) {
         if (!(decoder instanceof LambdaV l)) return opaque("decoder:" + decoder);
@@ -1923,6 +2059,7 @@ public class GenPacketSchema {
         int expansionsBefore = guardExpansions;
         int idx = 0;
         boolean exited = false;   // the last instruction was a return or a throw
+        boolean returned0 = false; // … a return: `if (count <= 0) return EMPTY;` leaves the rest as the other branch
         Map<String, Object> returned = null;
         // The names of the method's local variables (Mojang's jars keep the table): a read
         // stored in `slot` or `itemStack` is named by that, which says more than the read
@@ -1939,7 +2076,7 @@ public class GenPacketSchema {
             bci = bciAfter;
             if (!stack.isEmpty() && stack.peek() instanceof CodecV top0) unstored.add(top0.n());
             idx++;
-            if (el instanceof Instruction) exited = el instanceof ReturnInstruction || el instanceof ThrowInstruction;
+            if (el instanceof Instruction) { exited = el instanceof ReturnInstruction || el instanceof ThrowInstruction; returned0 = el instanceof ReturnInstruction; }
             switch (el) {
                 case BranchInstruction bi -> {
                     if (bound.contains(bi.target())) {
@@ -1951,6 +2088,9 @@ public class GenPacketSchema {
                         if (loop != null && collapseLoop(loop, values, fields, fieldValues, isCtor, owner)) {
                             pending.remove(loop);
                             collapsed.add(loop);
+                            // the repetition stands where its body was read: guarded by what was
+                            // open around the loop, not by whatever the next read is inside
+                            guardNew(values, seen, pending, forcedBy, guards);
                         } else if (!collapseTerminated(bi.target(), labelAt, lastClosed, values, fields, fieldValues, isCtor, owner)) {
                             conditional = true;
                         }
@@ -2005,6 +2145,7 @@ public class GenPacketSchema {
                         else if (sw.caseOf.containsKey(lt.label())) { sw.current = sw.caseOf.get(lt.label()); sw.segStart = values.size(); }
                         else if (lt.label().equals(sw.dflt)) { sw.current = -1; sw.segStart = values.size(); }
                     }
+                    Region negated = null;
                     for (Region r : new ArrayList<>(pending)) {
                         if (!lt.label().equals(r.target)) continue;
                         pending.remove(r);
@@ -2012,10 +2153,17 @@ public class GenPacketSchema {
                         // `if (n > 0) { … return a; } return b;`: the region left the method, so
                         // everything after its target is the other branch. A region with no
                         // target never closes, which is what "to the end of the reader" is.
-                        if (r.known && r.reads && r.alts.size() == 1 && exited) pending.add(new Region(null, idx, negate(r.alts.get(0))));
-                        // if (a) goto body; if (b) …: a jump into a region still open is an alternative to its condition
+                        // `if (a == 0 && b == 0) return EMPTY;` is two regions ending here, the
+                        // inner one returning: the rest runs when either condition fails.
+                        if (r.known && r.alts.size() == 1 && (r.reads ? exited : returned0)) {
+                            if (negated == null) { negated = new Region(null, idx, negate(r.alts.get(0))); pending.add(negated); }
+                            else negated.alts.add(negate(r.alts.get(0)));
+                        }
+                        // if (a) goto body; if (b) …: a jump into a region still open is an
+                        // alternative to its condition; a region ending at the same label is not
+                        // jumped into
                         if (r.known && !r.reads && r.alts.size() == 1) {
-                            for (Region s : pending) if (s.openedAt > r.openedAt && s.known) s.alts.add(negate(r.alts.get(0)));
+                            for (Region s : pending) if (s.openedAt > r.openedAt && s.known && s != negated && !lt.label().equals(s.target)) s.alts.add(negate(r.alts.get(0)));
                         }
                     }
                 }
@@ -2037,6 +2185,8 @@ public class GenPacketSchema {
                     // own reader, so the value becomes a dispatch waiting for its arguments.
                     if (obj instanceof CodecV c && enumClassOf.containsKey(c.n())) {
                         stack.push(new EnumFnV(c.n(), enumClassOf.get(c.n()), fi.name().stringValue()));
+                    } else if (captured.containsKey(fi.owner().asInternalName() + "." + fi.name().stringValue())) {
+                        stack.push(captured.get(fi.owner().asInternalName() + "." + fi.name().stringValue()));
                     } else {
                         stack.push(fieldValues.getOrDefault(fi.name().stringValue(), new OtherV("field:" + fi.name().stringValue())));
                     }
@@ -2049,18 +2199,7 @@ public class GenPacketSchema {
                     inKnownRegion = outer;
                     // every value this call produced (a read, or a record built from reads that
                     // replaced them) is guarded by the regions open now
-                    for (Map<String, Object> v : values) {
-                        if (!seen.add(v) || pending.isEmpty()) continue;
-                        boolean known = pending.stream().allMatch(r -> r.known);
-                        for (Region r : pending) r.reads = true;
-                        if (!known) {
-                            for (Region r : pending) if (!r.known) forcedBy.add(r);
-                            continue;
-                        }
-                        List<List<Map<String, Object>>> when = new ArrayList<>();
-                        for (Region r : pending) when.add(new ArrayList<>(r.alts));
-                        guards.put(v, when);
-                    }
+                    guardNew(values, seen, pending, forcedBy, guards);
                 }
                 case InvokeDynamicInstruction idi -> { popArgs(stack, arity(idi.typeSymbol().descriptorString())); stack.push(lambdaOf(idi)); }
                 case ConstantInstruction ci -> step(el, stack, owner, depth);
@@ -2091,6 +2230,32 @@ public class GenPacketSchema {
                     Object d = constOf(b);
                     if (of == null && sign > 0) { of = nodeOfValue(b); d = constOf(a); }
                     stack.push(of != null && d instanceof Integer k ? new OffsetV(of, sign * k) : new OtherV("arith"));
+                }
+                case ConvertInstruction cv when cv.opcode() == Opcode.L2I -> {
+                    // `(int) packed`: the low 32 bits of the long, as a signed int
+                    Value a = stack.isEmpty() ? null : stack.pop();
+                    BitsV b = inlineBits(a);
+                    if (b == null) { if (a != null) stack.push(a); }
+                    else stack.push(new BitsV(b.of(), null, b.offset(), Math.min(b.width(), 32), b.width() >= 32 || b.signed()));
+                }
+                case OperatorInstruction oi when oi.opcode() == Opcode.LSHR || oi.opcode() == Opcode.LUSHR -> {
+                    // `packed >> 32`: the bits above the shift; `>>` keeps the sign, `>>>` does not
+                    Value b = stack.isEmpty() ? null : stack.pop();
+                    Value a = stack.isEmpty() ? null : stack.pop();
+                    BitsV bv = inlineBits(a);
+                    if (bv != null && constOf(b) instanceof Integer sh && sh > 0 && sh < bv.width())
+                        stack.push(new BitsV(bv.of(), null, bv.offset() + sh, bv.width() - sh, oi.opcode() == Opcode.LSHR && bv.signed()));
+                    else stack.push(new OtherV("shift"));
+                }
+                case OperatorInstruction oi when oi.opcode() == Opcode.LAND -> {
+                    // `packed & 0xFFFFFFFFL`: the low bits the mask keeps, unsigned
+                    Value b = stack.isEmpty() ? null : stack.pop();
+                    Value a = stack.isEmpty() ? null : stack.pop();
+                    BitsV bv = inlineBits(a) != null ? inlineBits(a) : inlineBits(b);
+                    Object m = inlineBits(a) != null ? constOf(b) : constOf(a);
+                    if (bv != null && m instanceof Long mask && mask > 0 && (mask & (mask + 1)) == 0)
+                        stack.push(new BitsV(bv.of(), null, bv.offset(), Math.min(bv.width(), Long.bitCount(mask)), false));
+                    else stack.push(new OtherV("and"));
                 }
                 case OperatorInstruction oi when oi.opcode() == Opcode.IAND -> {
                     // `flags & 3`: the bits of a value read earlier, which a branch then tests
@@ -2183,6 +2348,23 @@ public class GenPacketSchema {
         return result;
     }
 
+    /** Guards every value not classified yet by the regions open now. */
+    static void guardNew(List<Map<String, Object>> values, Set<Map<String, Object>> seen, List<Region> pending,
+                         Set<Region> forcedBy, Map<Map<String, Object>, List<List<Map<String, Object>>>> guards) {
+        for (Map<String, Object> v : values) {
+            if (!seen.add(v) || pending.isEmpty()) continue;
+            boolean known = pending.stream().allMatch(r -> r.known);
+            for (Region r : pending) r.reads = true;
+            if (!known) {
+                for (Region r : pending) if (!r.known) forcedBy.add(r);
+                continue;
+            }
+            List<List<Map<String, Object>>> when = new ArrayList<>();
+            for (Region r : pending) when.add(new ArrayList<>(r.alts));
+            guards.put(v, when);
+        }
+    }
+
     /** A forward-branch region of a reader: [branch, target). */
     static final class Region {
         final Label target;
@@ -2247,13 +2429,30 @@ public class GenPacketSchema {
             return true;
         }
         Value b = unwrap(loop.bound);
+        if (b instanceof CodecV c && "prim".equals(c.n().get("k")) && String.valueOf(c.n().get("t")).startsWith("VAR_INT")
+                && loop.valuesAt > 0 && values.get(loop.valuesAt - 1) != c.n() && values.contains(c.n())) {
+            // The count was read earlier, with other reads between it and the loop (a component
+            // patch reads both of its counts first): the count stays where it is and the
+            // repetition points back at it by name, resolved in the struct they share.
+            while (values.size() > loop.valuesAt) values.remove(values.size() - 1);
+            Map<String, Object> counted = node("counted", "elem", elem);
+            pendingCounts.put(counted, new PassedV(c.n()));
+            String countName = hintOf.get(c.n());
+            String hint = arrayField != null ? arrayField
+                : countName != null && countName.endsWith("Count") && countName.length() > 5 ? countName.substring(0, countName.length() - 5)
+                : hintOf.getOrDefault(body.get(0), "entries");
+            hintOf.putIfAbsent(counted, hint);
+            values.add(counted);
+            if (isCtor && !fields.isEmpty()) fields.add(field(hint, counted));
+            return true;
+        }
         if (b instanceof CodecV c && "prim".equals(c.n().get("k")) && String.valueOf(c.n().get("t")).startsWith("VAR_INT")) {
             // Truncate the body first: removing the count shifts everything after it down,
             // and a truncation to the index the body started at would then stop one short and
             // leave the first turn of the loop standing beside the list.
             while (values.size() > loop.valuesAt) values.remove(values.size() - 1);
             removeIdentity(values, c.n());          // the bound was the list's length prefix
-            Map<String, Object> list = node("list", "elem", elem);
+            Map<String, Object> list = node("list", "elem", elem, "max", c.n().get("max"));
             String hint = arrayField != null ? arrayField : hintOf.getOrDefault(body.get(0), "entries");
             hintOf.putIfAbsent(list, hint);
             values.add(list);
@@ -2286,7 +2485,27 @@ public class GenPacketSchema {
      */
     @SuppressWarnings("unchecked")
     static void attachCounts(Map<String, Object> result) {
-        if (pendingCounts.isEmpty() || !(result.get("fields") instanceof List<?> fs)) return;
+        if (pendingCounts.isEmpty() && pendingKeys.isEmpty()) return;
+        for (Map<String, Object> st : structsIn(result)) attachCountsIn(st);
+    }
+
+    /** Every struct node in a tree, outer first. */
+    @SuppressWarnings("unchecked")
+    static List<Map<String, Object>> structsIn(Map<String, Object> n) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if ("struct".equals(n.get("k"))) out.add(n);
+        for (Object v : n.values()) {
+            if (v instanceof Map<?, ?> m) out.addAll(structsIn(castNode(m)));
+            if (v instanceof List<?> l) for (Object e : l) if (e instanceof Map<?, ?> m) {
+                Object t = ((Map<String, Object>) m).get("type");
+                out.addAll(structsIn(t instanceof Map<?, ?> tm ? castNode(tm) : castNode(m)));
+            }
+        }
+        return out;
+    }
+
+    static void attachCountsIn(Map<String, Object> result) {
+        if (!(result.get("fields") instanceof List<?> fs)) return;
         Map<Map<String, Object>, String> nameOf = new IdentityHashMap<>();
         for (Object o : fs) {
             Map<String, Object> f = castNode((Map<?, ?>) o);
@@ -2295,6 +2514,13 @@ public class GenPacketSchema {
         for (Object o : fs) {
             Map<String, Object> f = castNode((Map<?, ?>) o);
             for (Map<String, Object> c : countedIn(castNode((Map<?, ?>) f.get("type")))) {
+                if (pendingKeys.containsKey(c)) {
+                    String name = nameOf.get(pendingKeys.get(c));
+                    if (name == null) continue;
+                    castNode((Map<?, ?>) c.get("key")).put("field", name);
+                    pendingKeys.remove(c);
+                    continue;
+                }
                 PassedV pv = pendingCounts.get(c);
                 String name = nameOf.get(pv.of());
                 if (name == null) continue;
@@ -2308,7 +2534,7 @@ public class GenPacketSchema {
     @SuppressWarnings("unchecked")
     static List<Map<String, Object>> countedIn(Map<String, Object> n) {
         List<Map<String, Object>> out = new ArrayList<>();
-        if (pendingCounts.containsKey(n)) out.add(n);
+        if (pendingCounts.containsKey(n) || pendingKeys.containsKey(n)) out.add(n);
         for (Object v : n.values()) {
             if (v instanceof Map<?, ?> m) out.addAll(countedIn(castNode(m)));
             if (v instanceof List<?> l) for (Object e : l) if (e instanceof Map<?, ?> m) {
@@ -2713,33 +2939,98 @@ public class GenPacketSchema {
      * `(packed & 1) != 0`, so the var int they are both given is not two values converted but
      * one packed integer. Null when the body is anything but shifts, masks and a test of them.
      */
+    /**
+     * The bit field a static helper of one integer returns, as {offset, width, signed}: the
+     * helper's shifts and masks are followed over a model of the value — which bits of the
+     * original sit where — so `packed << (64 - X_OFFSET - PACKED_HORIZONTAL_LENGTH) >> (64 -
+     * PACKED_HORIZONTAL_LENGTH)` (BlockPos.getX) is bits 38..63 signed, and `(int) (packed &
+     * 0xFFFFFFFFL)` (ChunkPos.getX) bits 0..31 signed. Constants come from the bytecode and
+     * from the static final fields it reads, folded through the arithmetic between them.
+     * Null when the method is not such a helper.
+     */
     static int[] bitField(String owner, String name, String desc) {
+        int[] r = bitField0(owner, name, desc);
+        if (System.getenv("MC26_TRACE") != null && name.startsWith("get")) System.err.println("trace: bitField " + shortName(owner) + "." + name + desc + " -> " + (r == null ? "null" : r[0] + ":" + r[1]) + " last=" + lastBitFieldStop);
+        return r;
+    }
+    static String lastBitFieldStop = "";
+    static int[] bitField0(String owner, String name, String desc) {
         MethodModel target = findMethod(owner, name, desc);
-        if (target == null) return null;
+        if (target == null) { lastBitFieldStop = "no method"; return null; }
         int width = desc.startsWith("(J") ? 64 : 32;
-        Deque<Object> st = new ArrayDeque<>();   // Integer constant, or int[]{offset, width, signed}
+        // a run: {source offset, width, signed, position in the value}; a constant: Long
+        Deque<Object> st = new ArrayDeque<>();
         for (CodeElement el : target.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
             switch (el) {
                 case LoadInstruction li -> {
-                    if (li.slot() != 0) return null;
-                    st.push(new int[]{0, width, 0});
+                    if (li.slot() != 0) { lastBitFieldStop = "load " + li.slot(); return null; }
+                    st.push(new int[]{0, width, 0, 0});
                 }
                 case ConstantInstruction ci -> {
-                    if (!(ci.constantValue() instanceof Integer k)) return null;
-                    st.push(k);
+                    Object v = ci.constantValue();
+                    if (v instanceof Integer k) st.push((long) k);
+                    else if (v instanceof Long k) st.push(k);
+                    else return null;
+                }
+                case FieldInstruction fi when fi.opcode() == Opcode.GETSTATIC -> {
+                    Object v = staticConstant(fi.owner().asInternalName(), fi.name().stringValue());
+                    if (v == null) { lastBitFieldStop = "getstatic " + fi.name().stringValue(); return null; }
+                    st.push(v);
+                }
+                case ConvertInstruction cv -> {
+                    // (int) of a long keeps its low 32 bits; the int's top bit is then the sign
+                    Opcode op = cv.opcode();
+                    if (op != Opcode.L2I && op != Opcode.I2L) { lastBitFieldStop = "convert " + op; return null; }
+                    if (!(st.peek() instanceof int[] f)) { if (st.peek() instanceof Long) break; lastBitFieldStop = "convert of nothing"; return null; }
+                    if (op == Opcode.L2I) {
+                        if (f[3] >= 32) { lastBitFieldStop = "l2i above 32"; return null; }
+                        f[1] = Math.min(f[1], 32 - f[3]);
+                        if (f[1] + f[3] == 32) f[2] = 1;
+                    }
                 }
                 case OperatorInstruction oi -> {
+                    Opcode op = oi.opcode();
                     Object b = st.isEmpty() ? null : st.pop(), a = st.isEmpty() ? null : st.pop();
-                    if (!(a instanceof int[] f) || !(b instanceof Integer k)) return null;
-                    switch (oi.opcode()) {
-                        case IUSHR, LUSHR -> st.push(new int[]{f[0] + k, f[1] - k, 0});
-                        case ISHR, LSHR -> st.push(new int[]{f[0] + k, f[1] - k, 1});
+                    if (a instanceof Long x && b instanceof Long y) {
+                        switch (op) {
+                            case IADD, LADD -> st.push(x + y);
+                            case ISUB, LSUB -> st.push(x - y);
+                            case IMUL, LMUL -> st.push(x * y);
+                            case ISHL, LSHL -> st.push(x << y);
+                            case ISHR, LSHR -> st.push(x >> y);
+                            case IUSHR, LUSHR -> st.push(x >>> y);
+                            case IAND, LAND -> st.push(x & y);
+                            case IOR, LOR -> st.push(x | y);
+                            default -> { return null; }
+                        }
+                        break;
+                    }
+                    if (!(a instanceof int[] f) || !(b instanceof Long kl)) { lastBitFieldStop = "operands " + op + " " + a + " " + b; return null; }
+                    int k = (int) (long) kl;
+                    switch (op) {
+                        case ISHL, LSHL -> {
+                            // the run moves up; what leaves the top is gone
+                            f[3] += k;
+                            f[1] = Math.min(f[1], width - f[3]);
+                            if (f[1] <= 0) return null;
+                            st.push(f);
+                        }
+                        case IUSHR, LUSHR, ISHR, LSHR -> {
+                            f[3] -= k;
+                            if (f[3] < 0) { f[0] += -f[3]; f[1] += f[3]; f[3] = 0; }
+                            if (f[1] <= 0) return null;
+                            f[2] = (op == Opcode.ISHR || op == Opcode.LSHR) ? 1 : 0;
+                            st.push(f);
+                        }
                         case IAND, LAND -> {
                             // one run of bits: `& 1` is bit 0, `& 2` is bit 1, `& 12` is bits 2-3
-                            if (k <= 0) return null;
-                            int off = Integer.numberOfTrailingZeros(k), w = Integer.numberOfTrailingZeros((k >> off) + 1);
-                            if (((1L << w) - 1) << off != k) return null;
-                            st.push(new int[]{f[0] + off, Math.min(f[1] - off, w), 0});
+                            long mask = op == Opcode.IAND ? (kl & 0xFFFFFFFFL) : kl;
+                            if (mask <= 0) return null;
+                            int off = Long.numberOfTrailingZeros(mask), w = Long.numberOfTrailingZeros((mask >>> off) + 1);
+                            if (((1L << w) - 1) << off != mask) return null;
+                            int from = Math.max(f[3], off), to = Math.min(f[3] + f[1], off + w);
+                            if (to <= from) return null;
+                            st.push(new int[]{f[0] + (from - f[3]), to - from, 0, from});
                         }
                         default -> { return null; }
                     }
@@ -2748,14 +3039,31 @@ public class GenPacketSchema {
                 // A test of the whole value is a predicate of it, not a field of it.
                 case BranchInstruction bi -> {
                     if (!bi.opcode().name().equals("IFEQ") && !bi.opcode().name().equals("IFNE")) return null;
-                    return st.peek() instanceof int[] f && (f[0] > 0 || f[1] < width) ? f : null;
+                    return st.peek() instanceof int[] f && (f[0] > 0 || f[1] < width) ? new int[]{f[0], f[1], f[2]} : null;
                 }
                 case ReturnInstruction ri -> {
-                    return st.peek() instanceof int[] f && (f[0] > 0 || f[1] < width) ? f : null;
+                    return st.peek() instanceof int[] f && (f[0] > 0 || f[1] < width) ? new int[]{f[0], f[1], f[2]} : null;
                 }
-                case Instruction any -> { return null; }
+                case Instruction any -> { lastBitFieldStop = "instruction " + any.opcode(); return null; }
                 default -> { }
             }
+        }
+        lastBitFieldStop = "fell off";
+        return null;
+    }
+
+    /** A static final int or long of a loaded class, read by reflection (BlockPos.X_OFFSET is computed in <clinit>). */
+    static Long staticConstant(String owner, String field) {
+        try {
+            Class<?> c = loadClass(owner);
+            if (c == null) return null;
+            Field f = c.getDeclaredField(field);
+            f.setAccessible(true);
+            Object v = f.get(null);
+            if (v instanceof Integer i) return (long) i;
+            if (v instanceof Long l) return l;
+        } catch (Throwable t) {
+            return null;
         }
         return null;
     }
@@ -2869,6 +3177,27 @@ public class GenPacketSchema {
 
     @SuppressWarnings("unchecked")
     static Map<String, Object> castNode(Map<?, ?> m) { return (Map<String, Object>) m; }
+
+    /**
+     * When every argument of a constructor is an unnamed range of bits of one long, the
+     * constructor's parameter names name those ranges as bit fields of that long, which is
+     * returned as the packed node it now is. Null otherwise.
+     */
+    static Map<String, Object> namedInlineBits(String cls, String desc, List<Value> args) {
+        if (args.isEmpty()) return null;
+        Map<String, Object> of = null;
+        for (Value a : args) {
+            if (!(a instanceof BitsV b) || b.name() != null) return null;
+            if (of == null) of = b.of(); else if (of != b.of()) return null;
+        }
+        List<String> params = ctorParamNames(cls, desc);
+        if (params == null || params.size() != args.size()) return null;
+        for (int i = 0; i < args.size(); i++) {
+            BitsV b = (BitsV) args.get(i);
+            if (putBitField(of, cls, params.get(i), new int[] {b.offset(), b.width(), b.signed() ? 1 : 0}) == null) return null;
+        }
+        return of;
+    }
 
     static List<Map<String, Object>> namedByCtor(String owner, String desc, List<Map<String, Object>> values) {
         List<String> names = recordComponents(owner);
@@ -3010,14 +3339,57 @@ public class GenPacketSchema {
             stack.push(new PassedV(oc.n(), "ordinal"));
             return;
         }
+        // type.streamCodec() on a data component type just read: the component's own codec,
+        // every one of which the components section describes, selected by that type
+        if (name.equals("streamCodec") && isComponentType(recv)) { stack.push(new CodecV(componentDispatch(nodeOfValue(recv)))); return; }
+        // codecGetter.apply(type): a captured function of the type — a method reference to
+        // streamCodec, or a lambda wrapping it (in a length prefix)
+        if (recv instanceof LambdaV l && (name.equals("apply") || name.equals("get"))) {
+            if (l.name().equals("streamCodec") && isComponentType(arg(args, 0))) { stack.push(new CodecV(componentDispatch(nodeOfValue(arg(args, 0))))); return; }
+            Map<String, Object> made = inlineFactory(l.owner(), l.name(), l.desc(), args, depth + 1);
+            stack.push(made != null ? new CodecV(made) : new OtherV("apply:" + shortName(l.owner()) + "." + l.name()));
+            return;
+        }
+        if ((recv instanceof NewV || recv instanceof OtherV ov1 && ov1.what().startsWith("new:")) && (name.equals("apply") || name.equals("get"))) {
+            String cls = recv instanceof NewV nv1 ? nv1.cls() : ((OtherV) recv).what().substring(4);
+            Map<String, Object> made = inlineMethod(cls, name, desc, args, depth + 1, false);
+            stack.push(made != null ? new CodecV(made) : new OtherV("apply:" + shortName(cls)));
+            return;
+        }
+        // BlockPos.of(readLong()), new ChunkPos(readLong()): a factory or constructor over one
+        // integer read here. Its body is read with the integer bound, so the static helpers it
+        // applies (getX(packed)) cut their bit fields out of that integer's node in place; when
+        // they did, the value is the integer, as a packed one.
+        if (args.size() == 1 && owner.startsWith("net/minecraft/") && arg(args, 0) instanceof CodecV pv && "prim".equals(pv.n().get("k"))
+                && (isStatic && ret.startsWith("L") || name.equals("<init>") && recv instanceof OtherV nv && nv.what().startsWith("new:"))) {
+            String t = String.valueOf(pv.n().get("t"));
+            if (t.equals("LONG") || t.equals("INT") || t.equals("VAR_INT") || t.equals("SHORT") || t.equals("BYTE")) {
+                List<Integer> slots = paramSlots(desc, isStatic);
+                if (!slots.isEmpty() && depth < MAX_DEPTH) {
+                    interpretReader(owner, name, desc, depth + 1, Map.of(slots.get(0), new PassedV(pv.n())));
+                    if (System.getenv("MC26_TRACE") != null) System.err.println("trace: " + owner + "." + name + " over " + t + " -> " + pv.n().get("k"));
+                    if ("bits".equals(pv.n().get("k"))) {
+                        if (!isStatic && !stack.isEmpty() && stack.peek() instanceof OtherV top && top.what().equals(((OtherV) recv).what())) stack.pop();
+                        stack.push(pv);
+                        return;
+                    }
+                }
+            }
+        }
         boolean isBuf = owner.endsWith("FriendlyByteBuf") || owner.endsWith("RegistryFriendlyByteBuf") || owner.endsWith("io/netty/buffer/ByteBuf")
             // VarInt moved out of the codec package in 26.3; its own byte loop is not a
             // packet's, so it has to be recognised wherever it lives
             || owner.endsWith("/VarInt") || owner.endsWith("/VarLong") || owner.endsWith("/Utf8String");
         Map<String, Object> produced = null;
+        // ByteBufCodecs.readCount(buf, 16): a var int that is a count, at most that many
+        if (isStatic && owner.endsWith("codec/ByteBufCodecs") && name.equals("readCount") && constOf(arg(args, 1)) instanceof Integer max) {
+            Map<String, Object> cnt = node("prim", "t", "VAR_INT", "max", max);
+            values.add(cnt); stack.push(new CodecV(cnt)); return;
+        }
         // Wrappers that keep the value: Optional.of(x) (a branch-guarded read), List.of(x), requireNonNull(x)…
         if (owner.equals("java/util/Optional") && (name.equals("of") || name.equals("ofNullable")) && arg(args, 0) instanceof CodecV c) {
             if (inKnownRegion) { stack.push(c); return; }   // the region's condition says when the value is present
+            if ("nbt".equals(c.n().get("k")) || "prim".equals(c.n().get("k")) && "NBT".equals(c.n().get("t"))) { stack.push(c); return; }   // TAG_End is the absent tag
             Map<String, Object> opt = node("optional", "elem", c.n()); stack.push(new CodecV(opt)); return;
         }
         if ((owner.equals("java/util/Objects") && name.equals("requireNonNull")) || (owner.endsWith("ImmutableList") && name.equals("copyOf"))
@@ -3104,11 +3476,21 @@ public class GenPacketSchema {
                 // somewhere else entirely — the bits per entry of a chunk section — so the
                 // count is not on the wire and this is not a list of any length the schema
                 // can state.
-                case "readFixedSizeLongArray" -> produced = opaque("length-not-on-the-wire:readFixedSizeLongArray");
+                case "readFixedSizeLongArray" -> {
+                    Value arr = args.size() > 1 && arg(args, 1) instanceof ArrayV ? arg(args, 1) : arg(args, 0);
+                    if (unwrap(arr) instanceof CodecV len && "prim".equals(len.n().get("k")) && "VAR_INT".equals(len.n().get("t"))) {
+                        // new long[buf.readVarInt()] + readFixedSizeLongArray(array): the count node becomes the list, in place
+                        len.n().clear(); len.n().putAll(node("list", "elem", prim("LONG")));
+                        return;
+                    }
+                    produced = opaque("length-not-on-the-wire:readFixedSizeLongArray");
+                }
                 case "readBytes" -> {
                     if (constOf(arg(args, 0)) != null) produced = node("prim", "t", "FIXED_BYTES", "len", constOf(arg(args, 0)));   // readBytes(256): a fixed-size block
                     else if (unwrap(arg(args, 0)) instanceof CodecV len && "prim".equals(len.n().get("k")) && "VAR_INT".equals(len.n().get("t"))) {
-                        len.n().put("t", "BYTE_ARRAY");   // new byte[buf.readVarInt()] + readBytes(array): the length node becomes the array, in place
+                        // new byte[buf.readVarInt()] + readBytes(array): the length node becomes the array, in place
+                        if ("BYTE_ARRAY".equals(derivingPrim)) { len.n().clear(); len.n().putAll(node("list", "elem", prim("BYTE"))); }
+                        else len.n().put("t", "BYTE_ARRAY");
                         return;
                     } else if (arg(args, 0) instanceof OtherV rb && rb.what().equals("readableBytes")) {
                         produced = prim("REST_BYTES");   // readBytes(readableBytes()): the rest of the packet
@@ -3116,9 +3498,10 @@ public class GenPacketSchema {
                 }
                 case "readEither" -> produced = node("either", "left", readerOf(arg(args, 0), depth), "right", readerOf(arg(args, 1), depth));
                 case "readUtf" -> produced = node("string", "max", args.isEmpty() ? null : constOf(arg(args, 0)));
-                case "read" -> produced = prim(owner.endsWith("VarInt") ? "VAR_INT" : owner.endsWith("VarLong") ? "VAR_LONG" : "STRING");
                 default -> {
-                    String t = BUF_READS.get(name);
+                    if (owner.endsWith("network/Utf8String") && name.equals("read")) { produced = node("string", "max", constOf(arg(args, 1))); break; }
+                    String t = primOfMember(owner + "." + name);
+                    if (t == null) t = primOfBufRead(name);
                     produced = t != null ? prim(t) : owner.startsWith("net/minecraft/") ? readerNode(owner, name, desc, depth + 1) : opaque("buf." + name);
                 }
             }
@@ -3132,6 +3515,9 @@ public class GenPacketSchema {
             produced = new LinkedHashMap<>(c.n());
             String h = hintOf.get(c.n());
             if (h != null) hintOf.put(produced, h);
+            // the copy waits for the same name as the node it was made from
+            if (pendingKeys.containsKey(c.n())) pendingKeys.put(produced, pendingKeys.get(c.n()));
+            if (pendingCounts.containsKey(c.n())) pendingCounts.put(produced, pendingCounts.get(c.n()));
         } else if (name.equals("<init>") && !(recv instanceof OtherV ov0 && ov0.what().startsWith("new:"))) {
             // this(v1, v2, …): a delegating constructor names the values by its parameters
             List<String> params = ctorParamNames(owner, desc);
@@ -3148,6 +3534,12 @@ public class GenPacketSchema {
                 return; // a validation failure, not a wire value
             } else if (desc.contains("FriendlyByteBuf") || desc.contains("io/netty/buffer/ByteBuf")) {
                 produced = readerNode(cls, "<init>", desc, depth + 1);
+            } else if (namedInlineBits(cls, desc, args) instanceof Map<String, Object> packed) {
+                // new ChunkPos((int) l, (int) (l >> 32)): the constructor's parameters name the
+                // bit fields cut out of one long, which becomes a packed integer; the object is
+                // that integer
+                stack.push(values.contains(packed) ? new CodecV(packed) : new PassedV(packed, null));
+                return;
             } else if (cls.equals(self)) {
                 // the packet's own constructor from the values read: it names them (handled by the caller)
                 List<String> params = ctorParamNames(cls, desc);
@@ -3309,11 +3701,9 @@ public class GenPacketSchema {
     }
     static Map<String, Object> readerOf(Value v, int depth) {
         if (v instanceof LambdaV l) {
-            if (l.owner().endsWith("FriendlyByteBuf") || l.owner().endsWith("RegistryFriendlyByteBuf")) {
-                String t = BUF_READS.get(l.name()); return t != null ? prim(t) : readerNode(l.owner(), l.name(), l.desc(), depth + 1);
-            }
-            if (l.owner().endsWith("UUIDUtil")) return prim("UUID");
-            return readerNode(l.owner(), l.name(), l.desc(), depth + 1);
+            String t = primOfMember(l.owner() + "." + l.name());
+            if (t == null && (l.owner().endsWith("FriendlyByteBuf") || l.owner().endsWith("RegistryFriendlyByteBuf"))) t = primOfBufRead(l.name());
+            return t != null ? prim(t) : readerNode(l.owner(), l.name(), l.desc(), depth + 1);
         }
         if (v instanceof CodecV c) return c.n();
         return opaque("reader:" + v);

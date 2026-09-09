@@ -231,7 +231,7 @@ var registryBitsExpr = map[string]string{
 	"worldgen/biome": "biome.BitsPerBiome",
 }
 
-// primDefs are the definitions of gen/hand-crafted/prims.json: a primitive
+// primDefs are the definitions of the schema's "prims" section: a primitive
 // with no Go type of its own (CHUNK_SECTIONS) is rendered from its definition.
 var primDefs map[string]map[string]any
 
@@ -330,7 +330,7 @@ func genPackets(jsonDir, goMCRoot string) error {
 	if err := readJSON(filepath.Join(jsonDir, "packets.json"), &ids); err != nil {
 		return fmt.Errorf("genPackets: %w", err)
 	}
-	pdefs, err := prims.Load(filepath.Join(assetsDir, "hand-crafted", "prims.json"))
+	pdefs, err := prims.Load(filepath.Join(jsonDir, "packet_schema.json"))
 	if err != nil {
 		return fmt.Errorf("genPackets: %w", err)
 	}
@@ -975,7 +975,7 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 			return gt, "", nil
 		}
 		if def, ok := primDefs[t]; ok {
-			return gs.goType(schemaNode(def), owner) // no Go type of its own: what prims.json says it is
+			return gs.goType(schemaNode(def), owner) // no Go type of its own: what the schema's definition says it is
 		}
 		return "", "", fmt.Errorf("prim %s", t)
 	case "string":

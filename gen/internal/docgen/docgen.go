@@ -29,7 +29,7 @@ import (
 type Options struct {
 	Version  string // the Minecraft version id
 	DataDir  string // the version's extracted JSON
-	HandDir  string // gen/hand-crafted: prims.json, nodes.json
+	HandDir  string // gen/hand-crafted: nodes.json
 	Internal bool   // keep the <!-- mc26 internal --> blocks
 }
 

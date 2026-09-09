@@ -17,7 +17,7 @@ type schema struct {
 	packets      map[string]map[string]map[string]struct {
 		ProtocolID int64 `json:"protocol_id"`
 	}
-	prims        map[string]any // prims.json "prims"
+	prims        map[string]any // packet_schema.json "prims": what every named primitive is on the wire
 	nbtTags      map[string]any // the NBT definition's tags table
 	kinds        map[string]bool
 	byID         map[[2]string]map[int64]string // (state, flow) → id → packet name
@@ -38,7 +38,7 @@ func readJSON(path string, v any) error {
 	return nil
 }
 
-func loadSchema(dataDir, primsPath, nodesPath string) (*schema, error) {
+func loadSchema(dataDir, nodesPath string) (*schema, error) {
 	s := &schema{}
 	if err := readJSON(filepath.Join(dataDir, "packet_schema.json"), &s.packetSchema); err != nil {
 		return nil, err
@@ -70,13 +70,10 @@ func loadSchema(dataDir, primsPath, nodesPath string) (*schema, error) {
 	if err := readJSON(filepath.Join(dataDir, "biomes.json"), &biomes); err != nil {
 		return nil, err
 	}
-	var prims struct {
-		Prims map[string]any `json:"prims"`
+	s.prims, _ = s.packetSchema["prims"].(map[string]any)
+	if len(s.prims) == 0 {
+		return nil, fmt.Errorf("%s has no \"prims\" section", filepath.Join(dataDir, "packet_schema.json"))
 	}
-	if err := readJSON(primsPath, &prims); err != nil {
-		return nil, err
-	}
-	s.prims = prims.Prims
 	if nbt, ok := s.prims["NBT"].(node); ok {
 		if def, ok := nbt["def"].(node); ok {
 			s.nbtTags, _ = def["tags"].(node)
@@ -158,7 +155,7 @@ func (s *schema) packetNode(state, flow string, pid int64) (string, node, error)
 	return name, entry, nil
 }
 
-// resolvePrim follows prims.json until a native, bits or composed node is
+// resolvePrim follows the primitive definitions until a native, bits or composed node is
 // reached, gathering the parameters on the way.
 func (s *schema) resolvePrim(t string, params node) (node, node, error) {
 	seen := map[string]bool{}
@@ -169,7 +166,7 @@ func (s *schema) resolvePrim(t string, params node) (node, node, error) {
 		seen[t] = true
 		d, ok := s.prims[t].(node)
 		if !ok {
-			return nil, nil, hole("primitive %s is not defined in prims.json", t)
+			return nil, nil, hole("primitive %s is not defined in the schema", t)
 		}
 		def, _ := d["def"].(node)
 		if def["k"] == "prim" {

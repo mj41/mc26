@@ -4,10 +4,12 @@
 // packet_schema.json describes every packet as a tree whose leaves are named:
 // VAR_INT, ITEM_STACK, COMPONENT_PATCH. Those names are all the Go generator
 // needs, because the library has a type for each; a generator for another
-// language has nothing. gen/hand-crafted/prims.json says what each name is on
-// the wire, and this package is what keeps that file honest: a version that
-// introduces a primitive nobody has defined fails the build rather than
-// producing a binding with a hole in it.
+// language has nothing. The schema's own "prims" section says what each name
+// is on the wire: the natives as what the buffer does, everything else read
+// from the jar member gen/hand-crafted/prims.json names for it (four are still
+// written by hand there). This package is what keeps that section honest: a
+// version that introduces a primitive nobody has defined fails the build
+// rather than producing a binding with a hole in it.
 package prims
 
 import (
@@ -18,18 +20,21 @@ import (
 	"strings"
 )
 
-// Def is one entry: what the primitive is on the wire, and where that was read
-// from in Mojang's code.
+// Def is one entry: what the primitive is on the wire, the members of Mojang's
+// code it stands for, and which of them the definition was read from — or that
+// it was written by hand, and why.
 type Def struct {
-	Def  map[string]any `json:"def"`
-	Java string         `json:"java"`
-	Note string         `json:"note"`
+	Def     map[string]any `json:"def"`
+	Java    []string       `json:"java"`
+	Derived string         `json:"derived,omitempty"`
+	Hand    string         `json:"hand,omitempty"`
 }
 
 // Set is every definition, by primitive name.
 type Set map[string]Def
 
-// Load reads a definitions file.
+// Load reads the "prims" section of a schema file (or of the hand-crafted
+// file, whose natives and hand exceptions have the same shape).
 func Load(path string) (Set, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -72,7 +77,9 @@ func Kinds(schemaPath string) (map[string]int, error) {
 	}
 	out := map[string]int{}
 	walkNodes(doc, func(n map[string]any) {
-		if k, ok := n["k"].(string); ok {
+		// a native is where a primitive's definition bottoms out (what the
+		// buffer itself reads), described with the primitives, not a node kind
+		if k, ok := n["k"].(string); ok && k != "native" {
 			out[k]++
 		}
 	})
@@ -132,7 +139,7 @@ func (r Report) Err() error {
 	if len(r.Cycles) > 0 {
 		parts = append(parts, "circular: "+strings.Join(r.Cycles, ", "))
 	}
-	return fmt.Errorf("%s (see gen/hand-crafted/prims.json)", strings.Join(parts, "; "))
+	return fmt.Errorf("%s (see packet_schema.json \"prims\" and gen/hand-crafted/prims.json)", strings.Join(parts, "; "))
 }
 
 // Check compares a set of definitions with the primitives a schema uses.

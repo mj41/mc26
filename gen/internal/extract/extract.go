@@ -167,6 +167,9 @@ func containerArgs(runtime, version, cacheDir, jsonsDir, javaDir string) []strin
 		"-v", cacheDir + ":/cache",
 		"-v", jsonsDir + ":/jsons",
 		"-v", javaDir + ":/java:ro",
+		"-v", filepath.Clean(filepath.Join(javaDir, "..", "..", "gen", "hand-crafted")) + ":/hand:ro",
+		"-e", "MC_PRIMS_JSON=/hand/prims.json", // which Java members the schema's primitive names stand for
+		"-e", "MC26_TRACE=" + os.Getenv("MC26_TRACE"),
 	}
 	if runtime != "podman" { // docker: write the output as the host user
 		if uid := os.Getuid(); uid > 0 {

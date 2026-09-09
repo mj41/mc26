@@ -5,7 +5,7 @@ import (
 	"math"
 )
 
-// The natives prims.json names, and nothing else. Each is a decode and an
+// The natives the schema's primitive definitions bottom out in, and nothing else. Each is a decode and an
 // encode; params are the keys the prim node or its definition carries (len,
 // bits, max).
 type native struct {
