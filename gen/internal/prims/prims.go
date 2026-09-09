@@ -245,12 +245,10 @@ func readJSON(path string) (any, error) {
 	return doc, nil
 }
 
-// Nodes is the definition of each node kind, from the hand-crafted file.
+// Nodes lists the node kinds, from the hand-crafted file, each with a one-line
+// summary; what a kind is on the wire is written in gen/docs/protocol.mc26tmpl.md.
 type Nodes map[string]struct {
-	Wire   string `json:"wire"`
-	Fields string `json:"fields"`
-	From   string `json:"from"`
-	GoType string `json:"goType"`
+	Summary string `json:"summary"`
 }
 
 // LoadNodes reads the node kind definitions.

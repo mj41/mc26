@@ -15,5 +15,7 @@ Game data of Minecraft: Java Edition {{.Meta.ID}} (protocol {{.Meta.ProtocolVers
 | `components.json`, `component_schema.json` | item data component types and their wire schema |
 | `commands.json`, `datapack.json`, `version.json` | command tree, built-in datapack list, version facts |
 | `lang/*.json` | every language file |
+| `docs/*.md` | the same, for a reader: [protocol.md](docs/protocol.md) (the frame, the primitives, the node kinds), [packets.md](docs/packets.md), [components.md](docs/components.md), [registries.md](docs/registries.md) |
 
-JSON only; one branch per Minecraft version, tags `v0.<YYN>.<n>` pin an extraction.
+JSON and its documentation, no code; one branch per Minecraft version, tags `v0.<YYN>.<n>` pin an
+extraction. The README on `main` lists the branches.

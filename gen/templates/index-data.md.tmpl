@@ -1,0 +1,20 @@
+# mc26-data
+
+Minecraft: Java Edition game data as JSON, extracted from Mojang's unobfuscated server jars by
+[mc26](https://github.com/mj41/mc26): registries, packet ids and the typed wire schema of every
+packet, data components and their schema, the NBT schema of the registries a server sends its
+clients, items, blocks and block states, entities, block entities, biomes and the language
+files, with `_meta.json` (Minecraft version, data version, protocol, jar checksum, extractor
+commit). Each branch also carries `docs/`, the same as Markdown for a reader: the frame, the
+primitives and node kinds, every packet, every component, every registry element.
+
+- One branch per Minecraft release: `mc-26.1`, `mc-26.2`, … `main` holds only this README.
+- Tags `v0.<YYN>.<n>` pin an extraction (`v0.262.0` is Minecraft 26.2; `n` counts re-extractions
+  with a newer extractor).
+- JSON and its documentation, no code: fetch by tag, raw URL or submodule from any language.
+- Snapshots and pre-releases live in [mc26-data-pre](https://github.com/mj41/mc26-data-pre).
+
+| branch | Minecraft | protocol | data version | latest tag |
+|---|---|---|---|---|
+{{range .Branches}}| `{{.Branch}}` | {{.Version}} | {{.Protocol}} | {{.DataVersion}} | `{{.Tag}}` |
+{{end}}

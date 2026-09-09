@@ -5,6 +5,16 @@ something no Mojang output provides: a Go naming choice, or a decision about wha
 hand-written. They are small on purpose; whenever a jar-derived source of truth appears, the
 entry moves out of here.
 
+## What is here
+
+`prims.json` defines every named primitive of the schema (a node tree, a `bits` layout, or a
+native) with the Java member it was read from and a note; `nodes.json` lists the node kinds with
+a one-line summary and carries the frame as data (length, body, compression, encryption, the
+state transitions), which the recording proxy of `crosscheck` follows. What a node kind or the
+frame *is* on the wire is prose, and prose is written in Markdown: `gen/docs/protocol.mc26tmpl.md`,
+rendered by `mc26 docs` for a version into the data repository's `docs/`. The build checks that
+every kind here has its section there (2026-09-09; until then the prose sat in JSON strings).
+
 ## What is not here any more
 
 `naming_overrides.json` — Go names chosen by hand where the derived one read badly

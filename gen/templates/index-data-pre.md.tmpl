@@ -1,0 +1,11 @@
+# mc26-data-pre
+
+The same JSON and documentation as [mc26-data](https://github.com/mj41/mc26-data), for snapshots
+and pre-releases: one branch per Mojang version id (`mc-26.3-pre-3`, …), tags in Go pre-release
+form (`v0.263.0-pre3.0`). Used to preview the next release (`packetdiff`, `nbtdiff`, `mcmeta`)
+and to adapt the generators before it ships. `main` holds only this README.
+
+| branch | Minecraft | protocol | data version | latest tag |
+|---|---|---|---|---|
+{{range .Branches}}| `{{.Branch}}` | {{.Version}} | {{.Protocol}} | {{.DataVersion}} | `{{.Tag}}` |
+{{end}}

@@ -59,7 +59,8 @@ build, test harness, the recording proxy), 4,926 lines of Java in `data-gen/java
 two hand-crafted files that make the JSON a description rather than a hint (`prims.json`, 50
 primitives, and `nodes.json`, 33 node kinds and the frame; the naming overrides, hand lists and
 phase file of earlier snapshots are gone), one overlay of one file for 26.1 (`server/login.go`),
-and `gen/crosslang/decode.py`, the decoder in another language that checks all of it.
+and `gen/crosslang`, the reader written from the JSON alone that checks all of it (a Go module that
+imports nothing from the library; Python until 2026-09-09).
 
 The registry step (2026-09-06) added typed elements for all 29 synchronized registries where 3
 were typed before; it removed about 150 hand-written lines of structs and added about 270 of
@@ -149,7 +150,7 @@ of payoff:
    since been typed: no packet is skipped in 26.1, 26.2 or 26.3-pre-2;
 6. ~~the chunk section codec~~ — done 2026-09-08: its wire form is described in `prims.json`
    (`CHUNK_SECTIONS`, `PALETTED_BLOCK_STATES`, `PALETTED_BIOMES`, with the `rest` and `packed`
-   node kinds), `decode.py` reads chunks from that description alone, and the Go side does too:
+   node kinds), the cross-language reader reads chunks from that description alone, and the Go side does too:
    `level/section_gen.go` is generated from those definitions (the section, the two paletted
    containers, the width functions), and `level` converts between it and its own palettes and
    bit storage, which is the runtime logic that stays by hand;

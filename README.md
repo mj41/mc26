@@ -70,6 +70,8 @@ fixes; older branches are frozen.
 hand-written](docs/generated-vs-hand-written.md), [what is still hand-written and why](docs/hand-written.md), [a new Minecraft version](docs/new-version.md),
 [testing](docs/testing.md), [releasing](docs/release.md); [gen/README.md](gen/README.md) for the
 commands, generators and packet structs; [data-gen/README.md](data-gen/README.md) for the extractors.
+[wip/](wip/README.md) is the backlog: one task per file, in order, with the decisions that are
+still open and the records of what was done.
 
 Built with Claude Opus and Claude Fable. Carries code from
 [Tnze/go-mc](https://github.com/Tnze/go-mc) (MIT); `gen/src/COPIED` lists the origin of every

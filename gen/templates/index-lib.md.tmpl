@@ -1,0 +1,34 @@
+# go-mc26
+
+A Go library for Minecraft: Java Edition 26.x — the network protocol, game data and world
+formats as Go types, generated from Mojang's unobfuscated server jars.
+
+go-mc26 is another approach to a Minecraft library, not a fork: packets, data components,
+registries, block states, items, entities, biomes and translations are produced by generators
+from JSON extracted straight from the jar, and every Minecraft version is its own branch built
+from that data. The bot and the server framework use the generated types only, so a new
+Minecraft version means "extract, generate, build — and the compiler points at what changed".
+
+It was built with Claude Opus and Claude Fable. It carries code from
+[Tnze/go-mc](https://github.com/Tnze/go-mc) (MIT); see `LICENSE` here and the `COPIED`
+manifest in [mc26](https://github.com/mj41/mc26).
+
+## Versions
+
+- One branch per Minecraft version: `mc-26.1`, `mc-26.2`, … `main` holds only this README.
+- Releases are tags `v0.<YYN>.<patch>`: `v0.262.0` is Minecraft 26.2.
+  `go get github.com/mj41/go-mc26@v0.262.0`
+- The three newest Minecraft versions receive fixes; older branches are frozen, their tags stay.
+- No API compatibility promise (major version 0): every version is generated and may change shape.
+- Nothing before Minecraft 26.1.
+
+| branch | Minecraft | protocol | data version | latest tag |
+|---|---|---|---|---|
+{{range .Branches}}| `{{.Branch}}` | {{.Version}} | {{.Protocol}} | {{.DataVersion}} | `{{.Tag}}` |
+{{end}}
+## Repositories
+
+- **go-mc26** — this library (generated, templated or copied; never edited by hand).
+- **[mc26](https://github.com/mj41/mc26)** — the project: the extractors, the generators, the framework sources, the `build` and `release` commands.
+- **[mc26-data](https://github.com/mj41/mc26-data)** / **[mc26-data-pre](https://github.com/mj41/mc26-data-pre)** — the extracted JSON and its documentation per Minecraft version.
+- **[go-mc26-examples](https://github.com/mj41/go-mc26-examples)** — examples and bots built on this library.

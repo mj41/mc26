@@ -12,14 +12,15 @@ question that decides what a base package is and what another language would hav
 
 Code that a client or a server of the protocol cannot do without, in any language. The JSON
 describes most of it exactly; a binding implements the rest from `nodes.json` and
-`prims.json`, which is what `gen/crosslang/decode.py` (Python, one file, no Go) demonstrates.
+`prims.json`, which is what `gen/crosslang` demonstrates: a reader in a Go module of its own that
+imports nothing from the library or the generators (it was Python until 2026-09-09).
 
 | package | lines | what it is | for another language |
 |---|---:|---|---|
-| `net/packet` | 1,751 | the field types (`VarInt`, `String`, `UUID`, …), `Packet`, `Tuple`, `Option`, `Array` | the 18 natives `prims.json` names (`native` entries: bool, i8…f64be, varint, varlong, string, rest/fixed bytes, fixed bit set, optional var int, lp_vec3, nbt) — ~200 lines in decode.py |
-| `wire` | 560 | the generics behind the node kinds: `List`, `Map`, `Holder`, `HolderSet`, `Either`, `EnumSet`, `LenPrefixed`, `Counted`, `Box`, the packed positions, the NBT bridges | the 33 node kinds of `nodes.json`; decode.py's `d_*`/`e_*` methods are the reference (one per kind) |
+| `net/packet` | 1,751 | the field types (`VarInt`, `String`, `UUID`, …), `Packet`, `Tuple`, `Option`, `Array` | the 18 natives `prims.json` names (`native` entries: bool, i8…f64be, varint, varlong, string, rest/fixed bytes, fixed bit set, optional var int, lp_vec3, nbt) — ~200 lines in gen/crosslang |
+| `wire` | 560 | the generics behind the node kinds: `List`, `Map`, `Holder`, `HolderSet`, `Either`, `EnumSet`, `LenPrefixed`, `Counted`, `Box`, the packed positions, the NBT bridges | the 33 node kinds of `nodes.json`; `gen/crosslang`'s codec is the reference (one case per kind) |
 | `net` (conn, framing, CFB8) | 620 | the connection: length-prefixed frames, zlib compression once negotiated, AES/CFB8 encryption after login | the `frame` entry of `nodes.json`: prose in `wire`/`fields`, and since 2026-09-08 the same as data in `frame.data` (length, body, compression with its trigger packet and limits, encryption with its trigger packets and cipher, the states and every transition with the packet that causes it); the recording proxy of `crosscheck` follows the connection from `frame.data` alone |
-| `nbt`, `nbt/dynbt` | 5,053 | the NBT codec (struct tags, dynamic values, SNBT) | the tag table of `prims.json`'s `NBT` (every id, its payload) — ~150 lines in decode.py; SNBT and reflection-based struct mapping are a convenience, not a wire need |
+| `nbt`, `nbt/dynbt` | 5,053 | the NBT codec (struct tags, dynamic values, SNBT) | the tag table of `prims.json`'s `NBT` (every id, its payload) — ~150 lines in gen/crosslang; SNBT and reflection-based struct mapping are a convenience, not a wire need |
 | `registry` | 710 | the registry container the configuration phase fills, lookups by id and name, the NBT bridge types (`Holder`, `HolderSet`, `Either`, `Color`) | `registries.json` for the built-in ids, the generated `Registries` struct for the synchronised ones; the container itself is a map |
 | `protocol/types` (types.go) | 142 | the aliases from `wire` and the bridges to chat, level and components | nothing: naming |
 | `level/component/types.go` | 328 | the item stack bridges (`SlotData`, `Typed`, `Patch`, delimited forms) | described by `prims.json` (`ITEM_STACK`, `COMPONENT_PATCH`, `DELIMITED_COMPONENT_PATCH`, `TYPED_DATA_COMPONENT`); Go keeps hand types for the API |

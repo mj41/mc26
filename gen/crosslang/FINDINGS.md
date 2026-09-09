@@ -1,5 +1,12 @@
 # Can you write a codec from the JSON alone?
 
+> The codec described here was `decode.py`, Python, so that it could share nothing with the
+> Go library. On 2026-09-09 it became the Go module in this directory (`go run .`), a module of
+> its own that imports neither the library nor the generators, which keeps the same
+> independence; it reads the same three JSON files and the capture, and round-trips the same
+> sessions byte for byte. The findings below are the record of what the JSON did and did not
+> say when the Python reader was written; the other scripts named in the table are gone.
+
 Experiment: build a Minecraft 26.2 packet codec in Python from six JSON files and
 nothing else — no Go, no Java, no jar, no protocol knowledge pulled from memory —
 then decode a capture of real packets and re-encode each one, byte for byte.

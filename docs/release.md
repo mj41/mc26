@@ -6,7 +6,8 @@ For one Minecraft version:
 
 1. the extracted JSON, committed on branch `mc-<version>` of `mc26-data` (or `mc26-data-pre` for
    an id with a suffix), tagged `v0.<YYN>.<n>` — `n` counts extractions of the same version with a
-   newer extractor;
+   newer extractor — together with `docs/`, the version's documentation rendered from
+   `gen/docs/*.mc26tmpl.md` (`mc26 docs --version V` renders it alone, into `temp/docs/<version>`);
 2. the library built from exactly that data, committed on branch `mc-<version>` of `go-mc26`,
    tagged `v0.<YYN>.<patch>` — `patch` counts builds of the same version with a newer generator or
    fixed sources.
@@ -15,12 +16,18 @@ Both commits record their inputs: `_meta.json` names the jar checksum and the `m
 extracted; `data/version/version.go` (`DataSource`, `Generator`) and the commit message name the
 data tag and the `mc26` commit that built. A build is reproducible from those two commits.
 
+After a commit in a data or library repository, `release` rewrites the README of that repository's
+`main` from `gen/templates/index-<kind>.md.tmpl`: what the repository is, and the table of its
+`mc-*` branches with the protocol, the data version and the latest tag of each, read from the
+branches themselves. `main` never holds anything else.
+
 ## Locally
 
 ```bash
 go run ./gen/cmd/mc26 update  --version 26.2            # extract, check, build, verify, then the commits and tags in ../mc26-data and ../go-mc26
 go run ./gen/cmd/mc26 release --version 26.2            # the commits and tags alone (extract + build + smoke, no cross-check, no e2e)
 go run ./gen/cmd/mc26 release --version 26.2 --push     # and pushes branches and tags
+go run ./gen/cmd/mc26 index --repo ../go-mc26 --kind lib  # the README on main alone (release does it after each commit)
 ```
 
 Steps: extract (unless `--skip-extract` finds `temp/data/26.2`) → stage the data (JSON, README

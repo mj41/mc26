@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 
+	"github.com/mj41/mc26/gen/internal/docgen"
 	"github.com/mj41/mc26/gen/internal/generate"
 	"github.com/mj41/mc26/gen/internal/gitx"
 	"github.com/mj41/mc26/gen/internal/prims"
@@ -141,6 +143,17 @@ func Run(o Options) (*Info, error) {
 		return nil, fmt.Errorf("node kinds used by prims.json but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
 	}
 	o.Log("build %s: %d primitives and %d node kinds, all defined", v.ID, len(used), len(kinds))
+	// … and every kind has its section in the documentation template, whose
+	// directives all parse: the documentation cannot fall behind the schema.
+	var kindNames []string
+	for k := range nodes {
+		kindNames = append(kindNames, k)
+	}
+	sort.Strings(kindNames)
+	if problems := docgen.Check(filepath.Join(o.GenRoot, "docs"), filepath.Join(o.GenRoot, "hand-crafted"), kindNames); len(problems) > 0 {
+		return nil, fmt.Errorf("documentation templates: %s", strings.Join(problems, "; "))
+	}
+	o.Log("build %s: the documentation templates cover every node kind", v.ID)
 
 	// The schemas have to describe everything, or the library ships a raw field
 	// that only a reader of the JSON would notice. A version that opens a hole

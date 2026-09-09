@@ -15,13 +15,15 @@ gen/
 ├── internal/extract/    downloads (jar, language files) and the extraction container; _meta.json
 ├── internal/generate/   the generators (gen_*.go) and their helpers
 ├── internal/build/      copy src/ + generate + README/CI + go mod tidy, gofmt, build, vet, test
+├── internal/docgen/     renders docs/*.mc26tmpl.md for a version (HTML-comment directives; tables and trees from the JSON)
+├── docs/                the documentation templates: protocol (frame, primitives, node kinds), packets, components, registries
 ├── internal/schemacheck/ the schemas describe everything (no opaque node, no caseless dispatch, every ref resolves) — build stops on a hole
 ├── internal/smoke/      vanilla server + `go test ./bot -run TestSmoke`
 ├── internal/gitx/       branch, replace tree, commit, tag, push
 ├── internal/importsrc/  one-time import of the library sources and examples from a go-mc tree
 ├── internal/paths/      <root>/temp layout (data/<version>, cache, lib/<version>, smoke/<version>)
-├── hand-crafted/        inputs that are not in any Mojang output (see hand-crafted/hand-crafted.md)
-├── templates/           version.go, packetid.go, README.md, ci.yml, … (text/template)
+├── hand-crafted/        prims.json and nodes.json: what the schema's names mean, as data (see hand-crafted/hand-crafted.md)
+├── templates/           version.go, packetid.go, README.md, ci.yml, the data and index READMEs, … (text/template)
 ├── src/_versions/<v>/   files an older version needs different from src/ (same relative paths), applied by build; the underscore keeps them out of every ./... walk
 └── src/                 the hand-written library packages; module github.com/mj41/go-mc26, no generated files
 ```
@@ -174,7 +176,7 @@ on a node kind nobody has defined, as it does on a primitive.
 `crosscheck <version>` is the test of whether all that is true. It starts a vanilla server, puts
 a recording proxy between it and the traffic test's bot — so every state and both directions are
 on record, framed by the description in `nodes.json` rather than by this library — and hands the
-bytes to a decoder in another language that has only the JSON: `gen/crosslang/decode.py` reads the schema, the primitives and the node kinds, decodes
+bytes to a reader that has only the JSON: `gen/crosslang`, a Go module of its own that imports neither the library nor the generators (Python until 2026-09-09), reads the schema, the primitives and the node kinds, decodes
 each captured packet and encodes it again. It passes only when every packet comes back byte for
 byte. A description that is complete to a reader who already has this library, and no one else,
 fails there. The recording half checks the same packets in Go as it goes: every one must decode

@@ -17,6 +17,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -33,11 +34,13 @@ import (
 
 	"github.com/mj41/mc26/gen/internal/build"
 	"github.com/mj41/mc26/gen/internal/capture"
+	"github.com/mj41/mc26/gen/internal/docgen"
 	"github.com/mj41/mc26/gen/internal/e2e"
 	"github.com/mj41/mc26/gen/internal/extract"
 	"github.com/mj41/mc26/gen/internal/gitx"
 	"github.com/mj41/mc26/gen/internal/importsrc"
 	"github.com/mj41/mc26/gen/internal/limits"
+	"github.com/mj41/mc26/gen/internal/mcver"
 	"github.com/mj41/mc26/gen/internal/paths"
 	"github.com/mj41/mc26/gen/internal/report"
 	"github.com/mj41/mc26/gen/internal/schemacheck"
@@ -68,7 +71,7 @@ func main() {
 		"extract": cmdExtract, "build": cmdBuild, "commit": cmdCommit, "smoke": cmdSmoke, "e2e": cmdE2E,
 		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag, "report": cmdReport,
 		"import-src": cmdImportSrc, "import-examples": cmdImportExamples,
-		"crosscheck": cmdCrossCheck, "verify": cmdVerify, "update": cmdUpdate,
+		"crosscheck": cmdCrossCheck, "verify": cmdVerify, "update": cmdUpdate, "docs": cmdDocs, "index": cmdIndex,
 	}
 	fn, ok := commands[cmd]
 	if !ok {
@@ -94,6 +97,8 @@ func usage() {
   release   --version V [--data-repo DIR] [--data-pre-repo DIR] [--lib-repo DIR] [--skip-extract] [--no-smoke] [--e2e] [--push]
   commit    --repo DIR --branch B --from TREE --message M [--tag-base v0.262.] [--push]
   report    --version V | --lib DIR      generated vs hand-written lines of a built library
+  docs      --version V [--out DIR] [--internal]   render gen/docs/*.mc26tmpl.md for a version
+  index     --repo DIR --kind data|data-pre|lib     rewrite the README on main: the branch and tag table
   latest
   tag       --version V
   import-src        --from GOMC [--owner NAME]
@@ -230,6 +235,10 @@ func stageData(dataDir, repo string) (string, error) {
 	root := paths.MustRoot()
 	if err := render(filepath.Join(root, "gen", "templates", "data-README.md.tmpl"), filepath.Join(stage, "README.md"), map[string]any{"Meta": meta}); err != nil {
 		return "", err
+	}
+	// the documentation of this version, rendered from gen/docs for a reader of the data
+	if _, err := renderDocs(meta.ID, dataDir, filepath.Join(stage, "docs"), false); err != nil {
+		return "", fmt.Errorf("docs: %w", err)
 	}
 	if lic, err := gitx.Run(repo, "show", "main:LICENSE"); err == nil {
 		if err := os.WriteFile(filepath.Join(stage, "LICENSE"), []byte(lic+"\n"), 0o644); err != nil {
@@ -429,19 +438,29 @@ func runCrossCheck(version, data, lib, capturePath string, keep bool, port int, 
 			return fmt.Errorf("this library did not read every packet of the session: %w", err)
 		}
 	}
-	decoder := filepath.Join(root, "gen", "crosslang", "decode.py")
-	if _, err := os.Stat(decoder); err != nil {
-		return fmt.Errorf("%s not found: the cross-language decoder is what this command runs", decoder)
+	// The reader that has only the JSON: a Go module of its own under
+	// gen/crosslang, which imports neither the library nor the generators.
+	decoder := filepath.Join(root, "gen", "crosslang")
+	if _, err := os.Stat(filepath.Join(decoder, "go.mod")); err != nil {
+		return fmt.Errorf("%s is not a module: the cross-language reader is what this command runs", decoder)
 	}
-	logf("crosscheck: decoding %s with %s", capturePath, decoder)
-	cmd := exec.Command("python3", decoder,
+	logf("crosscheck: decoding %s with the JSON-only reader in %s", capturePath, decoder)
+	vet := exec.Command("go", "vet", ".")
+	vet.Dir = decoder
+	vet.Env = limits.GoEnv()
+	if out, err := vet.CombinedOutput(); err != nil {
+		return fmt.Errorf("gen/crosslang: go vet: %v\n%s", err, out)
+	}
+	cmd := exec.Command("go", "run", ".",
 		"--data", data,
 		"--prims", filepath.Join(root, "gen", "hand-crafted", "prims.json"),
 		"--nodes", filepath.Join(root, "gen", "hand-crafted", "nodes.json"),
 		"--capture", capturePath)
+	cmd.Dir = decoder
+	cmd.Env = limits.GoEnv()
 	cmd.Stdout, cmd.Stderr = logOut, logOut
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("the JSON-only decoder did not read what this library reads: %w", err)
+		return fmt.Errorf("the JSON-only reader did not read what this library reads: %w", err)
 	}
 	return nil
 }
@@ -487,34 +506,8 @@ func extractedVersions() ([]string, error) {
 	if len(vs) == 0 {
 		return nil, fmt.Errorf("no versions: extract one first")
 	}
-	sort.Slice(vs, func(i, j int) bool { return versionLess(vs[i], vs[j]) })
+	sort.Slice(vs, func(i, j int) bool { return mcver.Less(vs[i], vs[j]) })
 	return vs, nil
-}
-
-// versionLess orders Minecraft ids: 26.1 < 26.3-pre-1 < 26.3-pre-2 < 26.3 < 26.10.
-func versionLess(a, b string) bool {
-	ka, kb := versionKey(a), versionKey(b)
-	for i := range ka {
-		if ka[i] != kb[i] {
-			return ka[i] < kb[i]
-		}
-	}
-	return a < b
-}
-
-func versionKey(v string) [4]int {
-	m := regexp.MustCompile(`^(\d+)\.(\d+)(?:-([a-z]+)-?(\d+))?$`).FindStringSubmatch(v)
-	if m == nil {
-		return [4]int{}
-	}
-	yy, _ := strconv.Atoi(m[1])
-	n, _ := strconv.Atoi(m[2])
-	if m[3] == "" {
-		return [4]int{yy, n, 9, 0} // a release sorts after its pre-releases and release candidates
-	}
-	kind := map[string]int{"snapshot": 1, "pre": 2, "rc": 3}[m[3]]
-	k, _ := strconv.Atoi(m[4])
-	return [4]int{yy, n, kind, k}
 }
 
 // runVerify is verify's body: the steps for every version, then the table.
@@ -747,6 +740,9 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("%s: %w", dataName, err)
 	}
+	if err := updateIndex(repo, strings.TrimPrefix(dataName, "mc26-")); err != nil {
+		return "", "", fmt.Errorf("%s: README: %w", dataName, err)
+	}
 	if *dataOnly {
 		if *push {
 			if err := gitx.Push(repo, branch, dataTag); err != nil {
@@ -778,6 +774,9 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 	libTag, err = commitTree(*libRepo, branch, libOut, libMsg, base)
 	if err != nil {
 		return "", "", fmt.Errorf("go-mc26: %w", err)
+	}
+	if err := updateIndex(*libRepo, "lib"); err != nil {
+		return "", "", fmt.Errorf("go-mc26: README: %w", err)
 	}
 
 	// 3. push
@@ -856,7 +855,7 @@ func cmdUpdate(args []string) error {
 	}
 	prev := ""
 	for _, x := range all {
-		if x != v && versionLess(x, v) {
+		if x != v && mcver.Less(x, v) {
 			prev = x
 		}
 	}
@@ -906,6 +905,160 @@ func cmdUpdate(args []string) error {
 	logf("update %s: ok in %s — data %s, library %s, committed locally", v, time.Since(start).Round(time.Second), dataTag, libTag)
 	logf("to publish: mc26 release --version %s --skip-extract --no-smoke --push", v)
 	return nil
+}
+
+// cmdIndex rewrites the README of a generated repository's main branch: what
+// the repository is, and the table of its branches with their latest tags.
+func cmdIndex(args []string) error {
+	fs := flag.NewFlagSet("index", flag.ExitOnError)
+	repo := fs.String("repo", "", "checkout of mc26-data, mc26-data-pre or go-mc26")
+	kind := fs.String("kind", "", "data, data-pre or lib")
+	fs.Parse(args)
+	if *repo == "" || *kind == "" {
+		return fmt.Errorf("--repo and --kind are required")
+	}
+	return updateIndex(*repo, *kind)
+}
+
+// indexRow is one branch of a generated repository.
+type indexRow struct {
+	Branch, Version, Protocol, DataVersion, Tag string
+}
+
+// updateIndex renders gen/templates/index-<kind>.md.tmpl with the repository's
+// mc-* branches (newest first), the facts each records and its latest tag, and
+// commits it on main when it changed. The branch that was checked out stays so.
+func updateIndex(repo, kind string) error {
+	if clean, err := gitx.IsClean(repo); err != nil || !clean {
+		return fmt.Errorf("%s has uncommitted changes", repo)
+	}
+	out, err := gitx.Run(repo, "branch", "--list", "--format=%(refname:short)", "mc-*")
+	if err != nil {
+		return err
+	}
+	branches := strings.Fields(out)
+	sort.Slice(branches, func(i, j int) bool { return mcver.Less(branches[j][3:], branches[i][3:]) })
+	var rows []indexRow
+	for _, b := range branches {
+		row := indexRow{Branch: b, Version: b[3:], Tag: "—"}
+		if kind == "lib" {
+			src, err := gitx.Run(repo, "show", b+":data/version/version.go")
+			if err != nil {
+				return fmt.Errorf("%s %s: %w", repo, b, err)
+			}
+			for _, line := range strings.Split(src, "\n") {
+				line = strings.TrimSpace(line)
+				if v, ok := strings.CutPrefix(line, "ProtocolVersion = "); ok {
+					row.Protocol = v
+				}
+				if v, ok := strings.CutPrefix(line, "DataVersion = "); ok {
+					row.DataVersion = v
+				}
+			}
+		} else {
+			src, err := gitx.Run(repo, "show", b+":version.json")
+			if err != nil {
+				return fmt.Errorf("%s %s: %w", repo, b, err)
+			}
+			var v struct {
+				Protocol int `json:"protocol_version"`
+				World    int `json:"world_version"`
+			}
+			if err := json.Unmarshal([]byte(src), &v); err != nil {
+				return fmt.Errorf("%s %s: version.json: %w", repo, b, err)
+			}
+			row.Protocol, row.DataVersion = strconv.Itoa(v.Protocol), strconv.Itoa(v.World)
+		}
+		base, err := tagBase(row.Version)
+		if err == nil {
+			if tags, err := gitx.Run(repo, "tag", "--merged", b, "--list", base+"*"); err == nil && tags != "" {
+				ts := strings.Fields(tags)
+				sort.Slice(ts, func(i, j int) bool { return tagLess(ts[i], ts[j], base) })
+				row.Tag = ts[len(ts)-1]
+			}
+		}
+		rows = append(rows, row)
+	}
+	current, _ := gitx.Run(repo, "branch", "--show-current")
+	if err := gitx.Checkout(repo, "main", "main"); err != nil {
+		return err
+	}
+	root := paths.MustRoot()
+	if err := render(filepath.Join(root, "gen", "templates", "index-"+kind+".md.tmpl"), filepath.Join(repo, "README.md"), map[string]any{"Branches": rows}); err != nil {
+		return err
+	}
+	_, changed, err := gitx.Commit(repo, fmt.Sprintf("README: %d branches", len(rows)))
+	if err != nil {
+		return err
+	}
+	if changed {
+		logf("%s: README on main rewritten (%d branches)", filepath.Base(repo), len(rows))
+	}
+	if current != "" && current != "main" {
+		return gitx.Checkout(repo, current, "main")
+	}
+	return nil
+}
+
+// tagLess orders two tags of one base by their number.
+func tagLess(a, b, base string) bool {
+	n := func(t string) int {
+		rest := strings.TrimPrefix(t, base)
+		if i := strings.IndexAny(rest, "-+"); i >= 0 {
+			rest = rest[:i]
+		}
+		v, _ := strconv.Atoi(rest)
+		return v
+	}
+	return n(a) < n(b)
+}
+
+// cmdDocs renders the documentation templates for one version.
+func cmdDocs(args []string) error {
+	fs := flag.NewFlagSet("docs", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version id")
+	data := fs.String("data", "", "data directory (default temp/data/<version>)")
+	out := fs.String("out", "", "output directory (default temp/docs/<version>)")
+	internal := fs.Bool("internal", false, "keep the blocks meant for this repository's readers (where things live, the Go types)")
+	fs.Parse(args)
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	if *data == "" {
+		*data = paths.Data(*version)
+	}
+	if *out == "" {
+		*out = filepath.Join(paths.Temp(), "docs", *version)
+	}
+	n, err := renderDocs(*version, *data, *out, *internal)
+	if err != nil {
+		return err
+	}
+	logf("docs %s: %d documents in %s", *version, n, *out)
+	return nil
+}
+
+// renderDocs renders every template of gen/docs into outDir.
+func renderDocs(version, dataDir, outDir string, internal bool) (int, error) {
+	root := paths.MustRoot()
+	tmpls, err := filepath.Glob(filepath.Join(root, "gen", "docs", "*.mc26tmpl.md"))
+	if err != nil {
+		return 0, err
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return 0, err
+	}
+	o := docgen.Options{Version: version, DataDir: dataDir, HandDir: filepath.Join(root, "gen", "hand-crafted"), Internal: internal}
+	for _, t := range tmpls {
+		s, err := docgen.RenderFile(t, o)
+		if err != nil {
+			return 0, err
+		}
+		if err := os.WriteFile(filepath.Join(outDir, docgen.OutputName(t)), []byte(s), 0o644); err != nil {
+			return 0, err
+		}
+	}
+	return len(tmpls), nil
 }
 
 func cmdCommit(args []string) error {
