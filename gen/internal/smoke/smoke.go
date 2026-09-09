@@ -1,7 +1,8 @@
 // Package smoke runs a vanilla Minecraft server of one version — in a JDK 25
-// container by default, on the host's Java with Runtime "host" — and the
-// library's smoke test against it: `go test ./bot -run TestSmoke` with
-// MC26_SMOKE_ADDR, MC26_SMOKE_RCON, MC26_SMOKE_RCON_PASSWORD, MC26_SMOKE_MGMT and
+// container by default, on the host's Java with Runtime "host" — and the smoke
+// tests against it: the kit's `bot` and the library's `management`, run from
+// the assembled kit tree (`go test -run TestSmoke`) with MC26_SMOKE_ADDR,
+// MC26_SMOKE_RCON, MC26_SMOKE_RCON_PASSWORD, MC26_SMOKE_MGMT and
 // MC26_SMOKE_MGMT_SECRET set. Package e2e reuses the server for the example bots.
 package smoke
 
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mj41/mc26/gen/internal/extract"
+	"github.com/mj41/mc26/gen/internal/kit"
 )
 
 // Server is one vanilla server instance in a scratch directory (offline
@@ -223,7 +225,7 @@ func (s *Server) Stop() {
 // Options configures one smoke run.
 type Options struct {
 	Version string
-	LibDir  string // a built library tree
+	KitDir  string // the kit tree assembled against the built library of the same version
 	JarPath string // the vanilla server jar of the same version
 	WorkDir string // scratch directory for the server
 	Port    int
@@ -240,7 +242,7 @@ type Options struct {
 	ClientAddr string
 }
 
-// Run starts the server, runs the library's smoke test, stops the server.
+// Run starts the server, runs the smoke tests from the kit tree, stops the server.
 func Run(o Options) error {
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
@@ -260,14 +262,14 @@ func Run(o Options) error {
 	if run == "" {
 		run = "TestSmoke"
 	}
-	o.Log("smoke: server ready, running go test ./bot ./management -run %s", run)
-	test := exec.Command("go", "test", "./bot", "./management", "-run", run, "-count=1", "-v")
-	test.Dir = o.LibDir
+	o.Log("smoke: server ready, running go test ./bot %s/management -run %s in the kit tree", kit.LibModule, run)
+	test := exec.Command("go", "test", "./bot", kit.LibModule+"/management", "-run", run, "-count=1", "-v")
+	test.Dir = o.KitDir
 	addr := srv.Addr()
 	if o.ClientAddr != "" {
 		addr = o.ClientAddr
 	}
-	test.Env = limits.GoEnv(
+	test.Env = kit.Env(o.KitDir,
 		"MC26_SMOKE_ADDR="+addr,
 		"MC26_SMOKE_RCON="+srv.RCONAddr(),
 		"MC26_SMOKE_RCON_PASSWORD="+srv.RCONPassword,

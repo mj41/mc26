@@ -21,6 +21,17 @@ frame *is* on the wire is prose, and prose is written in Markdown: `gen/docs/pro
 rendered by `mc26 docs` for a version into the data repository's `docs/`. The build checks that
 every kind here has its section there (2026-09-09; until then the prose sat in JSON strings).
 
+## What is still by hand in the extractor
+
+`GenPacketSchema.java` keeps two small tables. `READER_RULES` gives four readers their node
+outright: the custom-query payload, whose wire form only the writer shows; the entity-data
+unpack (`ENTITY_DATA`, a loop terminated by a byte value with a dispatch per entry); and the two
+anonymous entity-data serializers named `OPTIONAL_VAR_INT`, one of which is loose
+(`OPTIONAL_BLOCK_STATE` writes the state id itself with 0 for absent, not `n - 1`; the note on
+`OPTIONAL_VAR_INT` in the protocol document says so). `FIELD_PRIMS` pins the chunk packet's
+byte buffer to `CHUNK_SECTIONS`, whose section count comes from outside the packet. Each is a
+case the bytecode of the reader cannot say.
+
 ## What is not here any more
 
 `naming_overrides.json` — Go names chosen by hand where the derived one read badly

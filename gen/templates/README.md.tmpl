@@ -20,17 +20,17 @@ go get {{.Module}}@mc-{{.V.ID}}
 | package | what |
 |---|---|
 | `protocol/{handshake,status,login,configuration,play}` | one struct per packet with `PacketID`, `ReadFrom`, `WriteTo`; `protocol/types` holds the shared wire types and enums |
-| `bot`, `bot/basic`, `bot/world`, `bot/msg`, `bot/playerlist`, `bot/screen` | a client: login, configuration, chunks, chat, tab list, inventories |
-| `server`, `server/auth`, `server/command` | a server framework: list ping, login, configuration, command graph |
 | `data/packetid`, `data/registryid`, `data/item`, `data/entity`, `data/soundid`, `data/lang`, `data/version` | packet ids, every registry, items, entities, sounds, translations, version constants |
 | `level`, `level/block`, `level/biome`, `level/component` | chunks and palettes, blocks and block states, biomes, item data components |
 | `nbt`, `nbt/dynbt`, `save`, `save/region` | NBT, dynamic NBT, level.dat and player data, region files |
 | `net`, `net/packet`, `net/queue` | the connection, packet framing and field types, RCON |
 | `management` | the server management protocol (JSON-RPC over a WebSocket): a typed client generated from the server's own API document, with its notifications |
 | `chat`, `chat/sign` | text components, translations, signed chat |
-| `yggdrasil`, `microsoft`, `offline` | Mojang session server, Microsoft login, offline uuids |
+| `yggdrasil/user` | a player's profile properties and public key, as they travel in packets |
 
-Examples and bots are in [go-mc26-examples](https://github.com/mj41/go-mc26-examples).
+A client (the bot), a server framework, the account flows (Mojang session server, Microsoft
+login, offline uuids) and the examples are in [go-mc26-kit](https://github.com/mj41/go-mc26-kit),
+a module of its own on top of this one that builds against every supported version of it.
 
 ## Notes
 

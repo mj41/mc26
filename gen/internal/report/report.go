@@ -21,6 +21,7 @@ import (
 type Options struct {
 	LibDir  string // a built library tree (has COPIED)
 	GenRoot string // the gen/ directory, for the machinery counts; "" skips them
+	KitSrc  string // a go-mc26-kit checkout, counted as the kit; "" skips it
 }
 
 type count struct{ files, lines int }
@@ -37,6 +38,7 @@ type Result struct {
 	Java      count                // data-gen/java
 	HandInput map[string]int       // hand-crafted input files → entries
 	Overlays  map[string]*count    // src/_versions/<v>
+	Kit       count                // the kit module (a go-mc26-kit checkout), hand-written, version independent
 }
 
 // Run measures o.LibDir.
@@ -103,7 +105,7 @@ func Run(o Options) (*Result, error) {
 		return nil, err
 	}
 	if o.GenRoot != "" {
-		if err := machinery(o.GenRoot, r); err != nil {
+		if err := machinery(o.GenRoot, o.KitSrc, r); err != nil {
 			return nil, err
 		}
 	}
@@ -158,7 +160,7 @@ func readCopied(path string) (map[string]string, error) {
 	return origins, nil
 }
 
-func machinery(genRoot string, r *Result) error {
+func machinery(genRoot, kitSrc string, r *Result) error {
 	countGo := func(dir string, into *count) error {
 		return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {
@@ -195,6 +197,13 @@ func machinery(genRoot string, r *Result) error {
 			}
 			// entries ≈ top-level keys of an object or elements of an array
 			r.HandInput[e.Name()] = topLevelEntries(data)
+		}
+	}
+	if kitSrc != "" {
+		if _, err := os.Stat(filepath.Join(kitSrc, "go.mod")); err == nil {
+			if err := countGo(kitSrc, &r.Kit); err != nil {
+				return err
+			}
 		}
 	}
 	versions, _ := os.ReadDir(filepath.Join(genRoot, "src", "_versions"))
@@ -294,6 +303,9 @@ func (r *Result) Print(w io.Writer, version string) {
 		fmt.Fprintf(tw, "machinery\tfiles\tlines\n")
 		fmt.Fprintf(tw, "gen (Go: commands, generators, build, tests harness)\t%d\t%d\n", r.GenGo.files, r.GenGo.lines)
 		fmt.Fprintf(tw, "data-gen/java (extractors)\t%d\t%d\n", r.Java.files, r.Java.lines)
+		if r.Kit.files > 0 {
+			fmt.Fprintf(tw, "go-mc26-kit (bot, server, accounts, examples; hand-written, version independent, its own repository)\t%d\t%d\n", r.Kit.files, r.Kit.lines)
+		}
 		for _, k := range sortedKeys(r.HandInput) {
 			fmt.Fprintf(tw, "hand-crafted/%s\t\t%d entries\n", k, r.HandInput[k])
 		}

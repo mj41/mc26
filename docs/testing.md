@@ -2,22 +2,27 @@
 
 Four layers, all runnable locally with Go and a container runtime; the workflows run the same.
 
-## Unit tests — inside the built library
+## Unit tests — inside the built library and the kit
 
 `mc26 build` runs `go vet ./...` and `go test ./...` in the result. The generated packet
 packages carry round-trip tests (encode, decode, compare) for every generated struct; the
-hand-written packages keep their own tests (NBT, region files, chat, the server framework
-against the bot on a random port, RCON on a random port).
+hand-written packages keep their own tests (NBT, region files, chat, RCON on a random port).
+Then it assembles the kit (the `../go-mc26-kit` checkout, `--kit-src` to point elsewhere)
+against the result under `temp/kit/<version>` — a workspace there points the library's import
+path at the built tree — and runs `go build`, `go vet` and `go test` in it (the server framework
+against the bot on a random port, the accounts). The kit is the pipeline's test client, which
+is why a build here needs its checkout.
 
-## Smoke test — the library against a vanilla server
+## Smoke test — the kit and the library against a vanilla server
 
 ```bash
-go run ./gen/cmd/mc26 smoke --version 26.2 [--lib temp/lib/26.2] [--runtime podman|docker|host]
+go run ./gen/cmd/mc26 smoke --version 26.2 [--kit temp/kit/26.2] [--runtime podman|docker|host]
 ```
 
 Starts Mojang's server of that version (the jar the extraction cached) in
 `eclipse-temurin:25-jdk`, offline mode, flat world, RCON on; waits for "Done"; runs `go test
-./bot -run TestSmoke` in the library with `MC26_SMOKE_ADDR` set. The test joins, waits for the
+./bot github.com/mj41/go-mc26/management -run TestSmoke` from the kit tree with
+`MC26_SMOKE_ADDR` set. The bot's test joins, waits for the
 login to complete, for 25 chunks and for its own chat message to come back, then disconnects.
 It also asks the registries what the server sent that the generated element types do not cover:
 the bot keeps the NBT of every registry entry (`Registries.KeepRaw(true)`) and re-reads it
@@ -42,11 +47,11 @@ cannot pass while checking nothing.
 ## End-to-end — the example bots against a vanilla server
 
 ```bash
-go run ./gen/cmd/mc26 e2e --version 26.2 [--examples ../go-mc26-examples]
+go run ./gen/cmd/mc26 e2e --version 26.2 [--kit temp/kit/26.2]
 ```
 
-Builds every example of the examples checkout (its single `main` branch; the harness builds it
-against the given library through a temporary `go.work`, whatever `go.mod` pins), starts a server as above, and runs:
+Builds every example of the kit tree (`examples/<name>`, against the library the tree was
+assembled with), starts a server as above, and runs:
 
 | scenario | what must happen |
 |---|---|
@@ -142,6 +147,7 @@ a `syncBuffer`) or `runFor` (run until every expected line appeared); drive the 
 
 ## Where the files are
 
-`temp/smoke/<version>/` and `temp/e2e/<version>/server/` hold the servers (world, `server.log`);
-`temp/e2e/<version>/bin/` the built examples; `temp/capture/<version>.jsonl` the last recorded
-session. `temp/` is ignored by git.
+`temp/lib/<version>/` is the built library and `temp/kit/<version>/` the kit assembled against
+it; `temp/smoke/<version>/` and `temp/e2e/<version>/server/` hold the servers (world,
+`server.log`); `temp/e2e/<version>/bin/` the built examples; `temp/capture/<version>.jsonl` the
+last recorded session. `temp/` is ignored by git.

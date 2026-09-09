@@ -4,13 +4,12 @@
 //	mc26 extract  --version 26.2                 # jar → temp/data/26.2 (JSON + _meta.json)
 //	mc26 build    --data temp/data/26.2 --out temp/lib/26.2   # data → library tree, built and tested
 //	mc26 smoke    --version 26.2 --lib temp/lib/26.2          # vanilla server (container) ↔ bot smoke test
-//	mc26 e2e      --version 26.2 --examples ../go-mc26-examples   # the example bots against a vanilla server
+//	mc26 e2e      --version 26.2                                  # the kit's example bots against a vanilla server
 //	mc26 pipeline --version 26.2 [--smoke] [--e2e]   # extract + build + test (+ smoke, + e2e), nothing committed
 //	mc26 release  --version 26.2 [--push]        # extract → mc26-data branch+tag → build → smoke → go-mc26 branch+tag
 //	mc26 commit   --repo DIR --branch B --from TREE --message M [--tag-base v0.262.]
 //	mc26 latest                                  # newest release and snapshot in Mojang's manifest
 //	mc26 import-src --from <go-mc tree>          # one-time: fill gen/src from the fork
-//	mc26 import-examples --from <go-mc tree> --to <examples checkout> --lib-version v0.262.0
 //
 // Scratch files live under <root>/temp (see internal/paths). Nothing is pushed
 // unless --push is given.
@@ -39,6 +38,7 @@ import (
 	"github.com/mj41/mc26/gen/internal/extract"
 	"github.com/mj41/mc26/gen/internal/gitx"
 	"github.com/mj41/mc26/gen/internal/importsrc"
+	"github.com/mj41/mc26/gen/internal/kit"
 	"github.com/mj41/mc26/gen/internal/limits"
 	"github.com/mj41/mc26/gen/internal/mcver"
 	"github.com/mj41/mc26/gen/internal/paths"
@@ -48,9 +48,9 @@ import (
 )
 
 const (
-	repoName       = "github.com/mj41/mc26"
-	libModule      = "github.com/mj41/go-mc26"
-	examplesModule = "github.com/mj41/go-mc26-examples"
+	repoName  = "github.com/mj41/mc26"
+	libModule = "github.com/mj41/go-mc26"
+	kitModule = "github.com/mj41/go-mc26-kit"
 	// upstreamRef is the Tnze/go-mc commit the copied sources descend from.
 	upstreamRef = "539b4a3"
 	smokePort   = 25599
@@ -70,7 +70,7 @@ func main() {
 	commands := map[string]func([]string) error{
 		"extract": cmdExtract, "build": cmdBuild, "commit": cmdCommit, "smoke": cmdSmoke, "e2e": cmdE2E,
 		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag, "report": cmdReport,
-		"import-src": cmdImportSrc, "import-examples": cmdImportExamples,
+		"import-src": cmdImportSrc,
 		"crosscheck": cmdCrossCheck, "verify": cmdVerify, "update": cmdUpdate, "docs": cmdDocs, "index": cmdIndex,
 	}
 	fn, ok := commands[cmd]
@@ -89,10 +89,10 @@ func usage() {
 
   extract   --version V [--runtime podman|docker] [--dry-run] [--only GenNbtSchema,…]
   build     --data DIR --out DIR [--version V] [--data-source S] [--no-test] [--allow-holes]
-  smoke     --version V [--lib DIR] [--port N] [--runtime podman|docker|host]
-  e2e       --version V [--lib DIR] [--examples DIR] [--port N] [--runtime …]
+  smoke     --version V [--kit DIR] [--port N] [--runtime podman|docker|host]
+  e2e       --version V [--kit DIR] [--port N] [--runtime …]
   pipeline  --version V [--data DIR] [--out DIR] [--smoke] [--e2e] [--skip-extract]
-  verify    [--versions 26.1,26.2] [--steps build,smoke,crosscheck,e2e] [--quiet] [--examples DIR] [--runtime …]
+  verify    [--versions 26.1,26.2] [--steps build,smoke,crosscheck,e2e] [--quiet] [--runtime …]
   update    [--version V | --pre] [--skip-extract] [--allow-holes] [--no-verify] [--no-commit] [--runtime …]
   release   --version V [--data-repo DIR] [--data-pre-repo DIR] [--lib-repo DIR] [--skip-extract] [--no-smoke] [--e2e] [--push]
   commit    --repo DIR --branch B --from TREE --message M [--tag-base v0.262.] [--push]
@@ -102,9 +102,11 @@ func usage() {
   latest
   tag       --version V
   import-src        --from GOMC [--owner NAME]
-  import-examples   --from GOMC --to DIR --lib-version vX.Y.Z
 
-Scratch: <root>/temp (data/<version>, cache, lib/<version>, smoke/<version>).`)
+The kit (bot, server, accounts, examples) is a checkout of go-mc26-kit next to this repository
+(--kit-src DIR to point elsewhere): the pipeline builds and tests it against every library it
+builds, since its bot is the test client; it does not own or release it.
+Scratch: <root>/temp (data/<version>, cache, lib/<version>, kit/<version>, smoke/<version>).`)
 }
 
 // ---- pieces shared by the commands --------------------------------------------
@@ -142,36 +144,50 @@ func extractVersion(version, runtime string, dryRun bool, only ...string) (strin
 // other command builds strictly.
 var allowHoles bool
 
-// buildLib builds the library from dataDir into outDir.
+// kitSrc is the go-mc26-kit checkout every build assembles and tests against
+// the library it produced (--kit-src on the commands that build).
+var kitSrc string
+
+func kitSrcFlag(fs *flag.FlagSet) {
+	fs.StringVar(&kitSrc, "kit-src", sibling("go-mc26-kit"), "checkout of go-mc26-kit, built and tested against the library")
+}
+
+// buildLib builds the library from dataDir into outDir, and the kit against
+// it into temp/kit/<version>.
 func buildLib(dataDir, outDir, version, dataSource string, test bool) (*build.Info, error) {
 	root := paths.MustRoot()
+	v, err := build.ReadVersion(dataDir)
+	if err != nil {
+		return nil, err
+	}
 	return build.Run(build.Options{
-		GenRoot: filepath.Join(root, "gen"), DataDir: dataDir, OutDir: outDir, Version: version,
+		GenRoot: filepath.Join(root, "gen"), DataDir: dataDir, OutDir: outDir, KitSrc: kitSrc, KitOut: paths.Kit(v.ID), Version: version,
 		DataSource: dataSource, Generator: "mc26 " + gitx.ShortHead(root), Test: test, AllowHoles: allowHoles, Log: logf,
 	})
 }
 
-// runSmoke starts a vanilla server of version and runs the library's smoke test.
-func runSmoke(version, libDir string, port int, runtime string) error {
+// runSmoke starts a vanilla server of version and runs the smoke tests from
+// the kit tree assembled against that version's library.
+func runSmoke(version, kitDir string, port int, runtime string) error {
 	jar, err := extract.ServerJar(paths.Cache(), version, logf)
 	if err != nil {
 		return err
 	}
 	return smoke.Run(smoke.Options{
-		Version: version, LibDir: libDir, JarPath: jar, WorkDir: filepath.Join(paths.Temp(), "smoke", version),
+		Version: version, KitDir: kitDir, JarPath: jar, WorkDir: filepath.Join(paths.Temp(), "smoke", version),
 		Port: port, Runtime: runtime, Log: logf,
 	})
 }
 
-// runE2E builds the example bots against libDir and drives them against a
-// vanilla server of version.
-func runE2E(version, dataDir, libDir, examplesDir string, port int, runtime string) error {
+// runE2E builds the kit's example bots and drives them against a vanilla
+// server of version.
+func runE2E(version, dataDir, kitDir string, port int, runtime string) error {
 	jar, err := extract.ServerJar(paths.Cache(), version, logf)
 	if err != nil {
 		return err
 	}
 	return e2e.Run(e2e.Options{
-		Version: version, DataDir: dataDir, LibDir: libDir, ExamplesDir: examplesDir, JarPath: jar,
+		Version: version, DataDir: dataDir, KitDir: kitDir, JarPath: jar,
 		WorkDir: filepath.Join(paths.Temp(), "e2e", version), Port: port, Runtime: runtime, Log: logf,
 	})
 }
@@ -261,6 +277,9 @@ func render(tmplPath, out string, data any) error {
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return err
+	}
 	f, err := os.Create(out)
 	if err != nil {
 		return err
@@ -305,6 +324,7 @@ func cmdBuild(args []string) error {
 	source := fs.String("data-source", "", "recorded in version.go (default: the data path)")
 	noTest := fs.Bool("no-test", false, "skip go test")
 	holes := fs.Bool("allow-holes", false, "build although a schema has a hole (while the extractor is being fixed)")
+	kitSrcFlag(fs)
 	fs.Parse(args)
 	allowHoles = *holes
 	if *data == "" {
@@ -331,17 +351,17 @@ func cmdBuild(args []string) error {
 func cmdSmoke(args []string) error {
 	fs := flag.NewFlagSet("smoke", flag.ExitOnError)
 	version := fs.String("version", "", "Minecraft version of the server jar")
-	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
+	kitDir := fs.String("kit", "", "kit tree assembled against the built library (default temp/kit/<version>)")
 	port := fs.Int("port", smokePort, "server port")
 	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
 	fs.Parse(args)
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
-	if *lib == "" {
-		*lib = filepath.Join(paths.Temp(), "lib", *version)
+	if *kitDir == "" {
+		*kitDir = paths.Kit(*version)
 	}
-	return runSmoke(*version, *lib, *port, *runtime)
+	return runSmoke(*version, *kitDir, *port, *runtime)
 }
 
 // cmdCrossCheck records a real session with a vanilla server and reads it back
@@ -358,7 +378,7 @@ func cmdCrossCheck(args []string) error {
 	fs := flag.NewFlagSet("crosscheck", flag.ExitOnError)
 	version := fs.String("version", "", "Minecraft version of the server jar")
 	data := fs.String("data", "", "data directory (default temp/data/<version>)")
-	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
+	kitDir := fs.String("kit", "", "kit tree assembled against the built library (default temp/kit/<version>)")
 	capturePath := fs.String("capture", "", "capture file (default temp/capture/<version>.jsonl)")
 	keep := fs.Bool("keep", false, "decode the capture that is already there, without starting a server")
 	port := fs.Int("port", smokePort, "server port")
@@ -367,8 +387,8 @@ func cmdCrossCheck(args []string) error {
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
-	if *lib == "" {
-		*lib = filepath.Join(paths.Temp(), "lib", *version)
+	if *kitDir == "" {
+		*kitDir = paths.Kit(*version)
 	}
 	if *data == "" {
 		*data = paths.Data(*version)
@@ -376,12 +396,12 @@ func cmdCrossCheck(args []string) error {
 	if *capturePath == "" {
 		*capturePath = filepath.Join(paths.Temp(), "capture", *version+".jsonl")
 	}
-	return runCrossCheck(*version, *data, *lib, *capturePath, *keep, *port, *runtime)
+	return runCrossCheck(*version, *data, *kitDir, *capturePath, *keep, *port, *runtime)
 }
 
 // runCrossCheck records a traffic session through the proxy (unless keep), checks
 // this library reads every packet of it, and hands it to the JSON-only decoder.
-func runCrossCheck(version, data, lib, capturePath string, keep bool, port int, runtime string) error {
+func runCrossCheck(version, data, kitDir, capturePath string, keep bool, port int, runtime string) error {
 	root := paths.MustRoot()
 	if !keep {
 		jar, err := extract.ServerJar(paths.Cache(), version, logf)
@@ -400,7 +420,7 @@ func runCrossCheck(version, data, lib, capturePath string, keep bool, port int, 
 		go proxy.Serve(l)
 		logf("crosscheck: recording through %s to the server on %d", l.Addr(), port)
 		err = smoke.Run(smoke.Options{
-			Version: version, LibDir: lib, JarPath: jar,
+			Version: version, KitDir: kitDir, JarPath: jar,
 			WorkDir: filepath.Join(paths.Temp(), "smoke", version),
 			Port:    port, Runtime: runtime, Log: logf,
 			TestRun:    "TestSmokeTraffic",
@@ -430,8 +450,8 @@ func runCrossCheck(version, data, lib, capturePath string, keep bool, port int, 
 		// different question from whether the JSON describes them: a type short of
 		// a field reads without complaint, so this checks each is read to its end.
 		check := exec.Command("go", "test", "./bot", "-run", "TestCaptureCheck", "-v", "-count=1")
-		check.Dir = lib
-		check.Env = limits.GoEnv("MC26_CHECK_CAPTURE=" + capturePath)
+		check.Dir = kitDir
+		check.Env = kit.Env(kitDir, "MC26_CHECK_CAPTURE="+capturePath)
 		out, err := check.CombinedOutput()
 		logf("%s", strings.TrimSpace(string(out)))
 		if err != nil {
@@ -472,11 +492,11 @@ func cmdVerify(args []string) error {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	versions := fs.String("versions", "", "comma-separated Minecraft versions (default: every extracted one under temp/data)")
 	steps := fs.String("steps", "build,smoke,crosscheck,e2e", "comma-separated steps to run, in this order")
-	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout for e2e")
 	port := fs.Int("port", smokePort, "server port")
 	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
 	quiet := fs.Bool("quiet", false, "progress goes to the log files only, not to stderr")
 	logDir := fs.String("log-dir", filepath.Join(paths.Temp(), "verify"), "one log file per version and step")
+	kitSrcFlag(fs)
 	fs.Parse(args)
 	var vs []string
 	if *versions != "" {
@@ -487,7 +507,7 @@ func cmdVerify(args []string) error {
 			return err
 		}
 	}
-	return runVerify(vs, strings.Split(*steps, ","), *examples, *port, *runtime, *quiet, *logDir)
+	return runVerify(vs, strings.Split(*steps, ","), *port, *runtime, *quiet, *logDir)
 }
 
 // extractedVersions lists the versions under temp/data, oldest first.
@@ -510,7 +530,7 @@ func extractedVersions() ([]string, error) {
 }
 
 // runVerify is verify's body: the steps for every version, then the table.
-func runVerify(vs, wanted []string, examples string, port int, runtime string, quiet bool, logDir string) error {
+func runVerify(vs, wanted []string, port int, runtime string, quiet bool, logDir string) error {
 	type result struct {
 		status string // ok, FAIL, skipped
 		took   time.Duration
@@ -523,7 +543,7 @@ func runVerify(vs, wanted []string, examples string, port int, runtime string, q
 	for _, v := range vs {
 		results[v] = map[string]result{}
 		data := paths.Data(v)
-		lib := filepath.Join(paths.Temp(), "lib", v)
+		lib, kitDir := paths.Lib(v), paths.Kit(v)
 		built := true
 		for _, step := range wanted {
 			logPath := filepath.Join(logDir, v, step+".log")
@@ -549,11 +569,11 @@ func runVerify(vs, wanted []string, examples string, port int, runtime string, q
 			case "build":
 				_, err = buildLib(data, lib, v, "", true)
 			case "smoke":
-				err = runSmoke(v, lib, port, runtime)
+				err = runSmoke(v, kitDir, port, runtime)
 			case "crosscheck":
-				err = runCrossCheck(v, data, lib, filepath.Join(paths.Temp(), "capture", v+".jsonl"), false, port, runtime)
+				err = runCrossCheck(v, data, kitDir, filepath.Join(paths.Temp(), "capture", v+".jsonl"), false, port, runtime)
 			case "e2e":
-				err = runE2E(v, data, lib, examples, port, runtime)
+				err = runE2E(v, data, kitDir, port, runtime)
 			default:
 				err = fmt.Errorf("unknown step %q (build, smoke, crosscheck, e2e)", step)
 			}
@@ -603,8 +623,7 @@ func cmdE2E(args []string) error {
 	fs := flag.NewFlagSet("e2e", flag.ExitOnError)
 	version := fs.String("version", "", "Minecraft version of the server jar")
 	data := fs.String("data", "", "data directory (default temp/data/<version>)")
-	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
-	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout")
+	kitDir := fs.String("kit", "", "kit tree assembled against the built library (default temp/kit/<version>)")
 	port := fs.Int("port", smokePort, "server port")
 	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
 	fs.Parse(args)
@@ -614,10 +633,10 @@ func cmdE2E(args []string) error {
 	if *data == "" {
 		*data = filepath.Join(paths.DataRoot(), *version)
 	}
-	if *lib == "" {
-		*lib = filepath.Join(paths.Temp(), "lib", *version)
+	if *kitDir == "" {
+		*kitDir = paths.Kit(*version)
 	}
-	return runE2E(*version, *data, *lib, *examples, *port, *runtime)
+	return runE2E(*version, *data, *kitDir, *port, *runtime)
 }
 
 func cmdPipeline(args []string) error {
@@ -627,9 +646,9 @@ func cmdPipeline(args []string) error {
 	out := fs.String("out", "", "library tree to produce (default temp/lib/<version>)")
 	doSmoke := fs.Bool("smoke", false, "run the vanilla-server smoke test after the build")
 	doE2E := fs.Bool("e2e", false, "run the example bots against a vanilla server after the build")
-	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout for --e2e")
 	skipExtract := fs.Bool("skip-extract", false, "reuse temp/data/<version> when it exists")
 	runtime := fs.String("runtime", "", "podman or docker (detected); host runs the server on the host's java")
+	kitSrcFlag(fs)
 	fs.Parse(args)
 	if *version == "" {
 		return fmt.Errorf("--version is required")
@@ -653,12 +672,12 @@ func cmdPipeline(args []string) error {
 		return err
 	}
 	if *doSmoke {
-		if err := runSmoke(*version, *out, smokePort, containerRuntime(*runtime)); err != nil {
+		if err := runSmoke(*version, paths.Kit(*version), smokePort, containerRuntime(*runtime)); err != nil {
 			return err
 		}
 	}
 	if *doE2E {
-		if err := runE2E(*version, dataDir, *out, *examples, smokePort, containerRuntime(*runtime)); err != nil {
+		if err := runE2E(*version, dataDir, paths.Kit(*version), smokePort, containerRuntime(*runtime)); err != nil {
 			return err
 		}
 	}
@@ -672,8 +691,8 @@ func containerRuntime(r string) string { return r }
 
 // releaseOpts are release's flags; update fills them in too.
 type releaseOpts struct {
-	version, dataRepo, dataPreRepo, libRepo, examples, runtime string
-	skipExtract, noSmoke, dataOnly, e2e, push                  bool
+	version, dataRepo, dataPreRepo, libRepo, runtime string
+	skipExtract, noSmoke, dataOnly, e2e, push        bool
 }
 
 func releaseFlags(fs *flag.FlagSet, o *releaseOpts) {
@@ -681,8 +700,8 @@ func releaseFlags(fs *flag.FlagSet, o *releaseOpts) {
 	fs.StringVar(&o.dataRepo, "data-repo", sibling("mc26-data"), "checkout of mc26-data")
 	fs.StringVar(&o.dataPreRepo, "data-pre-repo", sibling("mc26-data-pre"), "checkout of mc26-data-pre (pre-releases and snapshots)")
 	fs.StringVar(&o.libRepo, "lib-repo", sibling("go-mc26"), "checkout of go-mc26")
-	fs.StringVar(&o.examples, "examples", sibling("go-mc26-examples"), "go-mc26-examples checkout for --e2e")
 	fs.StringVar(&o.runtime, "runtime", "", "podman or docker (detected)")
+	kitSrcFlag(fs)
 }
 
 func cmdRelease(args []string) error {
@@ -706,7 +725,7 @@ func cmdRelease(args []string) error {
 // that data and tested, its commit and tag, and the push when asked. It
 // returns the two tags.
 func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
-	version, dataRepo, dataPreRepo, libRepo, examples, runtime := &o.version, &o.dataRepo, &o.dataPreRepo, &o.libRepo, &o.examples, &o.runtime
+	version, dataRepo, dataPreRepo, libRepo, runtime := &o.version, &o.dataRepo, &o.dataPreRepo, &o.libRepo, &o.runtime
 	skipExtract, noSmoke, dataOnly, doE2E, push := &o.skipExtract, &o.noSmoke, &o.dataOnly, &o.e2e, &o.push
 	base, err := tagBase(*version)
 	if err != nil {
@@ -760,12 +779,12 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 		return "", "", err
 	}
 	if !*noSmoke {
-		if err := runSmoke(*version, libOut, smokePort, *runtime); err != nil {
+		if err := runSmoke(*version, paths.Kit(*version), smokePort, *runtime); err != nil {
 			return "", "", err
 		}
 	}
 	if *doE2E {
-		if err := runE2E(*version, repo, libOut, *examples, smokePort, *runtime); err != nil {
+		if err := runE2E(*version, repo, paths.Kit(*version), smokePort, *runtime); err != nil {
 			return "", "", err
 		}
 	}
@@ -886,7 +905,7 @@ func cmdUpdate(args []string) error {
 
 	// 5. every extracted version against a real server: the sources changed for all of them
 	if !*noVerify {
-		if err := runVerify(all, []string{"build", "smoke", "crosscheck", "e2e"}, o.examples, smokePort, o.runtime, true, filepath.Join(paths.Temp(), "verify")); err != nil {
+		if err := runVerify(all, []string{"build", "smoke", "crosscheck", "e2e"}, smokePort, o.runtime, true, filepath.Join(paths.Temp(), "verify")); err != nil {
 			return err
 		}
 	}
@@ -1089,6 +1108,7 @@ func cmdReport(args []string) error {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
 	version := fs.String("version", "", "Minecraft version, to find the default tree")
+	kitSrcFlag(fs)
 	fs.Parse(args)
 	if *lib == "" {
 		if *version == "" {
@@ -1096,7 +1116,7 @@ func cmdReport(args []string) error {
 		}
 		*lib = filepath.Join(paths.Temp(), "lib", *version)
 	}
-	r, err := report.Run(report.Options{LibDir: *lib, GenRoot: filepath.Join(paths.MustRoot(), "gen")})
+	r, err := report.Run(report.Options{LibDir: *lib, GenRoot: filepath.Join(paths.MustRoot(), "gen"), KitSrc: kitSrc})
 	if err != nil {
 		return err
 	}
@@ -1156,31 +1176,6 @@ func cmdImportSrc(args []string) error {
 		From: *from, To: filepath.Join(paths.MustRoot(), "gen", "src"), Module: libModule,
 		UpstreamRef: upstreamRef, Owner: *owner, Log: logf,
 	})
-}
-
-func cmdImportExamples(args []string) error {
-	fs := flag.NewFlagSet("import-examples", flag.ExitOnError)
-	from := fs.String("from", "", "go-mc working tree")
-	to := fs.String("to", "", "examples checkout, on the branch to fill")
-	libVersion := fs.String("lib-version", "", "go-mc26 version to require, e.g. v0.262.0")
-	fs.Parse(args)
-	if *from == "" || *to == "" || *libVersion == "" {
-		return fmt.Errorf("--from, --to and --lib-version are required")
-	}
-	if err := importsrc.ImportExamples(importsrc.ExamplesOptions{
-		From: *from, To: *to, Module: examplesModule, LibModule: libModule, LibVersion: *libVersion, Log: logf,
-	}); err != nil {
-		return err
-	}
-	ci, err := os.ReadFile(filepath.Join(paths.MustRoot(), "gen", "templates", "examples-ci.yml"))
-	if err != nil {
-		return err
-	}
-	wf := filepath.Join(*to, ".github", "workflows")
-	if err := os.MkdirAll(wf, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(wf, "ci.yml"), ci, 0o644)
 }
 
 var _ = strconv.Itoa

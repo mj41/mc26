@@ -11,9 +11,9 @@ go run ./gen/cmd/mc26 update                  # picks the newest release, 26.3
 `update` extracts, checks both schemas, prints the wire and registry diffs against 26.3-pre-3,
 builds, verifies every extracted version against a vanilla server and commits data and library
 locally (`docs/new-version.md`). It stops on a schema hole (the extractor's work) or a compile
-error (`gen/src`'s work), then `update --version 26.3 --skip-extract` goes on. After it:
-`mc26 release --version 26.3 --skip-extract --no-smoke --push` (the owner), and the examples'
-`go.mod` bumped to `v0.263.0` (one `main` branch; the examples were identical across versions).
+error (`gen/src`'s or the kit's work), then `update --version 26.3 --skip-extract` goes on. After it:
+`mc26 release --version 26.3 --skip-extract --no-smoke --push` (the owner), then `v0.263.0`
+added to the matrix of the kit's `ci.yml` in `../go-mc26-kit`, committed there.
 
 ## Rehearsed
 

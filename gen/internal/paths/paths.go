@@ -73,3 +73,9 @@ func Data(versionOrDir string) string {
 
 // Cache holds the downloaded server jars.
 func Cache() string { return filepath.Join(Temp(), "cache") }
+
+// Lib is the built library tree of a version.
+func Lib(version string) string { return filepath.Join(Temp(), "lib", version) }
+
+// Kit is the kit tree assembled against the built library of a version.
+func Kit(version string) string { return filepath.Join(Temp(), "kit", version) }

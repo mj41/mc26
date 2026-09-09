@@ -1,5 +1,6 @@
-// Package e2e builds the example bots of go-mc26-examples against a built
-// library and drives them against a vanilla server of the same version: the
+// Package e2e builds the example bots of the kit (its examples/ directory, assembled
+// against a built library) and drives them against a vanilla server of the
+// same version: the
 // server-list ping, the daze bot reacting to RCON-driven chat, items and
 // teleports, the minimal bot, the auto-fisher and a small pressure test; then
 // mcadump over a region file the server wrote.
@@ -9,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/mj41/mc26/gen/internal/limits"
 	"io"
 	"os"
 	"os/exec"
@@ -19,20 +19,20 @@ import (
 	"time"
 
 	"github.com/mj41/mc26/gen/internal/build"
+	"github.com/mj41/mc26/gen/internal/kit"
 	"github.com/mj41/mc26/gen/internal/smoke"
 )
 
 // Options configures one run.
 type Options struct {
-	Version     string
-	DataDir     string // for the expected protocol number
-	LibDir      string // a built library tree
-	ExamplesDir string // a go-mc26-examples checkout
-	JarPath     string
-	WorkDir     string
-	Port        int
-	Runtime     string // see smoke.Server
-	Log         func(format string, args ...any)
+	Version string
+	DataDir string // for the expected protocol number
+	KitDir  string // the kit tree assembled against the built library of the same version
+	JarPath string
+	WorkDir string
+	Port    int
+	Runtime string // see smoke.Server
+	Log     func(format string, args ...any)
 }
 
 // Run builds the bots, runs the scenarios and returns the first failure.
@@ -97,27 +97,19 @@ func Run(o Options) error {
 	return nil
 }
 
-// buildExamples compiles every example against o.LibDir through a temporary
-// go.work and returns the bin directory.
+// buildExamples compiles every example of the kit tree (whose workspace
+// points at the built library) and returns the bin directory.
 func buildExamples(o Options) (string, error) {
-	examples, err := filepath.Abs(o.ExamplesDir)
+	kitDir, err := filepath.Abs(o.KitDir)
 	if err != nil {
 		return "", err
 	}
-	lib, err := filepath.Abs(o.LibDir)
-	if err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(filepath.Join(examples, "go.mod")); err != nil {
-		return "", fmt.Errorf("no examples module in %s", examples)
+	examples := filepath.Join(kitDir, "examples")
+	if _, err := os.Stat(kit.WorkFile(kitDir)); err != nil {
+		return "", fmt.Errorf("%s is not an assembled kit tree (build first)", kitDir)
 	}
 	bin := filepath.Join(o.WorkDir, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
-		return "", err
-	}
-	work := filepath.Join(o.WorkDir, "go.work")
-	content := fmt.Sprintf("go 1.25\n\nuse %s\n\nreplace github.com/mj41/go-mc26 => %s\n", examples, lib)
-	if err := os.WriteFile(work, []byte(content), 0o644); err != nil {
 		return "", err
 	}
 	entries, err := os.ReadDir(examples)
@@ -129,20 +121,18 @@ func buildExamples(o Options) (string, error) {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(examples, e.Name(), "main.go")); err != nil {
-			if m, _ := filepath.Glob(filepath.Join(examples, e.Name(), "*.go")); len(m) == 0 {
-				continue
-			}
+		if m, _ := filepath.Glob(filepath.Join(examples, e.Name(), "*.go")); len(m) == 0 {
+			continue
 		}
-		cmd := exec.Command("go", "build", "-o", filepath.Join(bin, e.Name()), "./"+e.Name())
-		cmd.Dir = examples
-		cmd.Env = limits.GoEnv("GOWORK=" + work)
+		cmd := exec.Command("go", "build", "-o", filepath.Join(bin, e.Name()), "./examples/"+e.Name())
+		cmd.Dir = kitDir
+		cmd.Env = kit.Env(kitDir)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("building example %s: %v\n%s", e.Name(), err, out)
 		}
 		n++
 	}
-	o.Log("e2e: %d examples built against %s", n, lib)
+	o.Log("e2e: %d examples built from %s", n, kitDir)
 	return bin, nil
 }
 

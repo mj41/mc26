@@ -53,6 +53,15 @@ published lines; a laptop release with `--push` is for bootstrapping.
 
 `pipeline.yml` never tags and never pushes.
 
+## The kit
+
+`go-mc26-kit` is not released by this repository: it is hand-written source with its own
+history, committed and tagged there (`v0.1.<n>`, its own line). What this repository does is
+test it: `verify` builds and runs it against every extracted version, so run `verify` before
+tagging the kit. When a new library version is published, add its tag to the matrix in the
+kit's `.github/workflows/ci.yml` (three lines, maintained by hand) and tag the kit if its
+sources changed.
+
 ## A fix for an older line
 
 The three newest Minecraft versions receive fixes. Commit the fix in `mc26` (in `gen/src`, or in

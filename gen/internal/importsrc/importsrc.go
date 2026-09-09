@@ -1,7 +1,6 @@
 // Package importsrc copies the hand-written parts of a go-mc working tree
-// into gen/src (the library sources) or an examples checkout, rewriting the
-// module path. It is the one-time bridge from the fork; afterwards gen/src is
-// maintained by hand.
+// into gen/src (the library sources), rewriting the module path. It was the
+// one-time bridge from the fork; gen/src is maintained by hand (the kit in its own repository).
 package importsrc
 
 import (
@@ -127,76 +126,4 @@ func writeCopied(o Options, files []string) error {
 	}
 	o.Log("import-src: upstream %d, modified %d, new %d", counts["upstream"], counts["modified"], counts["new"])
 	return os.WriteFile(filepath.Join(o.To, "COPIED"), []byte(b.String()), 0o644)
-}
-
-// ExamplesOptions for ImportExamples.
-type ExamplesOptions struct {
-	From       string // a go-mc working tree
-	To         string // the examples checkout (branch already selected)
-	Module     string // module path of the examples repo
-	LibModule  string
-	LibVersion string // required library version, e.g. v0.262.0
-	Log        func(format string, args ...any)
-}
-
-// ImportExamples copies examples/* into a checkout, rewriting imports and
-// writing go.mod. README.md and LICENSE of the checkout are kept.
-func ImportExamples(o ExamplesOptions) error {
-	if o.Log == nil {
-		o.Log = func(string, ...any) {}
-	}
-	src := filepath.Join(o.From, "examples")
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	// Remove old example directories (keep README, LICENSE, .git, .github).
-	old, _ := os.ReadDir(o.To)
-	for _, e := range old {
-		if e.IsDir() && e.Name() != ".git" && e.Name() != ".github" {
-			if err := os.RemoveAll(filepath.Join(o.To, e.Name())); err != nil {
-				return err
-			}
-		}
-	}
-	n := 0
-	for _, e := range entries {
-		if !e.IsDir() || e.Name() == "test" {
-			continue
-		}
-		dir := filepath.Join(src, e.Name())
-		files, err := os.ReadDir(dir)
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			if f.IsDir() {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(dir, f.Name()))
-			if err != nil {
-				return err
-			}
-			if strings.HasSuffix(f.Name(), ".go") {
-				data = bytes.ReplaceAll(data, []byte(oldModule), []byte(o.LibModule))
-			}
-			target := filepath.Join(o.To, e.Name(), f.Name())
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(target, data, 0o644); err != nil {
-				return err
-			}
-			n++
-		}
-	}
-	// Direct dependencies of the examples themselves; the library's own are
-	// resolved through it. go.sum is completed by `go mod tidy` once the
-	// library version is published.
-	gomod := fmt.Sprintf("module %s\n\ngo 1.25\n\nrequire (\n\t%s %s\n\tgithub.com/google/uuid v1.3.0\n)\n", o.Module, o.LibModule, o.LibVersion)
-	if err := os.WriteFile(filepath.Join(o.To, "go.mod"), []byte(gomod), 0o644); err != nil {
-		return err
-	}
-	o.Log("import-examples: %d files into %s", n, o.To)
-	return nil
 }

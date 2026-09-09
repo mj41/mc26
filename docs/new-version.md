@@ -1,7 +1,7 @@
 # A new Minecraft version
 
 Mojang ships 26.3. Everything below runs from the `mc26` checkout; the sibling checkouts
-`../mc26-data`, `../mc26-data-pre`, `../go-mc26` and `../go-mc26-examples` are where releases land.
+`../mc26-data`, `../mc26-data-pre`, `../go-mc26` and `../go-mc26-kit` are where releases land.
 
 ## One command
 
@@ -23,12 +23,14 @@ go run ./gen/cmd/mc26 update --pre            # the newest snapshot or pre-relea
    added and removed, ids that moved, a token diff for every layout that changed) and `nbtdiff`
    (registries added and removed, and for each element the keys that appeared, disappeared or
    changed type);
-4. **build** the library strictly: every field a packet gained or lost surfaces as a compile
-   error in the hand-written code (`bot/`, `server/`) and the command stops. Fix `gen/src` for
-   the new version; if an older, still-maintained version needs the old shape, put its copy of
-   the file under `gen/src/_versions/<old version>/`, checking the packet in both versions
-   first (`schemacov -show clientbound/minecraft:login 26.2`). A struct literal that omits a
-   field compiles, so only *reads* of a vanished field are reported. Then
+4. **build** the library strictly, then the kit against it: every field a packet gained or
+   lost surfaces as a compile error in the hand-written code (the kit's `bot/` and `server/`)
+   and the command stops. Fix the kit (a commit in `../go-mc26-kit`) so that it builds against
+   the new version *and* the older supported ones: the kit has one source for all of them, so a shape that differs
+   between versions is written field by field under a check of `version.ProtocolVersion`
+   (see the login finished packet in `server/login.go`), never as two copies. Check the packet
+   in both versions first (`schemacov -show clientbound/minecraft:login 26.2`). A struct literal
+   that omits a field compiles, so only *reads* of a vanished field are reported. Then
    `update --version 26.3 --skip-extract` to go on;
 5. **verify** every extracted version — build, smoke, cross-check, e2e — since the sources
    changed for all of them (one table, logs under `temp/verify/`);
@@ -36,9 +38,9 @@ go run ./gen/cmd/mc26 update --pre            # the newest snapshot or pre-relea
    into `../go-mc26` (the same branch and tag), locally; it never pushes. `--no-commit` stops
    after verify.
 
-Then the examples (one `main` branch): bump the library version in `go.mod`, build through the
-`go.work`, commit. Publishing is a separate, deliberate step:
-`mc26 release --version 26.3 --skip-extract --no-smoke --push`, or the release workflow.
+Publishing is a separate, deliberate step: `mc26 release --version 26.3 --skip-extract
+--no-smoke --push`, or the release workflow. Then, in the kit's repository, add the new library
+tag to the matrix of its `ci.yml`, commit, and tag the kit if the bump changed its sources.
 
 ## The same, by hand
 
@@ -66,6 +68,12 @@ with a suffix to `mc26-data-pre` and tags them `v0.264.0-pre1.<n>`. The library 
 pre-release data for early adaptation; it is not part of the normal release chain.
 
 ## When the extractors need work
+
+The observed rate is one or two rules per release, found by the pipeline rather than by a
+reader of the code: 26.3 moved the registry codec classes and renamed a lookup, 26.1 still had
+`MutableObject` recursion in a codec, 26.3-pre-3 needed nothing. Every hole so far was closed
+by a rule read from the bytecode, never by a hand table; the schema check in every build keeps
+it that way.
 
 - A registry or report renamed: `GenBiomes`/`GenItems` resolve lookups reflectively; follow the
   pattern.

@@ -6,6 +6,9 @@ handshake come from the JSON, and the only hand-crafted inputs of the generators
 `nodes.json` (the node kinds and the frame) and `prims.json` (which Java members the named
 primitives stand for). What remains by hand is behaviour: a runtime kernel that does not mirror
 any data, a client and a server built on the generated types, and the tests the harness runs.
+The kernel is part of the library (`gen/src`, module `go-mc26`); the client, the server and the
+account flows are the kit (the `go-mc26-kit` repository), one source that builds against every
+supported version of the library, which this repository tests against but does not own.
 
 `go run ./gen/cmd/mc26 report --version <version>` measures it. On 26.3-pre-3: 408 generated
 files against 150 hand-written ones of 21,465 lines (tests included), of which 10,865 lines are
@@ -31,6 +34,8 @@ recorded packet byte for byte.
 | `level/component/types.go` | 277 | the item stack bridges (`SlotData`, `Typed`, `Patch`, the delimited forms) | the primitive definitions `ITEM_STACK`, `COMPONENT_PATCH`, `DELIMITED_COMPONENT_PATCH`, `TYPED_DATA_COMPONENT`, read from the jar; Go keeps hand types for the API |
 | `chat` (message, nbtmessage, jsonmessage, decoration, events) | 712 | the text component: its NBT and JSON forms, translation, formatting; the style, click and hover events are generated (`style_gen.go`) | `nbt_schema.json` carries `ComponentSerialization.CODEC` in full: a recursive `Component` that is a string, a non-empty list of components, or a compound of the contents (a dispatch on `type`: text, translatable, keybind, score, selector, nbt, object), `extra` and the style. The Go `Message` stays by hand for its behaviour; a binding can generate the struct |
 | `chat/sign` | 178 | the signature cache, the session and its verification, the unpacking of a signed body against the cache; the wire types are generated | logic on top of generated types |
+| `yggdrasil/user` | 300 | a player's profile properties and public key as they travel in packets, and the validator with Mojang's session key | the wire form is in the schema (`GAME_PROFILE_PROPERTIES`, the chat session's public key); the validator is a binding's own |
+| `save`, `save/region` | 797 | level.dat, player data, region files | the world formats are part of the library's promise; NBT-shaped, read with the NBT codec |
 | `level` (chunk, palette, bitstorage, chunkstatus) | 996 | palettes and bit storage: get, set, palette growth; the chunk's wire form is generated (`section_gen.go`, from `CHUNK_SECTIONS` and `PALETTED_*`, the definitions still written by hand in `prims.json`) and converted from and to | the container logic is a binding's own; the wire form is in the JSON (`rest`, `packed`) |
 | `level/block` (block.go, properties.go) | 163 | block-state helpers on the generated tables | `blocks.json` |
 
@@ -39,27 +44,34 @@ everything else, which is what the Go tree does. Nothing in it needs the Java so
 frame is data, the text component's codec is in `nbt_schema.json`, and the primitives are read
 from the jar by the extractor.
 
-## Tier B — application: a client, a server, world files, accounts
+## Tier B — application: a client, a server, accounts, examples
 
-Not the protocol: what a program built on it does. Tnze/go-mc kept these in one module and
-the examples use them.
+Not the protocol: what a program built on it does. This is the kit, module
+`github.com/mj41/go-mc26-kit` in its own repository, with the examples as `examples/<name>`.
 
 | package | lines | what it is |
 |---|---:|---|
 | `bot`, `bot/basic`, `bot/world`, `bot/msg`, `bot/playerlist`, `bot/screen` | 2,475 (+1,190 tests) | a client: login, configuration, the event model, chunks, chat, tab list, inventories |
 | `server`, `server/auth`, `server/command`, `server/internal/bvh` | 1,801 | a server framework: list ping, login, configuration, command graph, player list |
-| `save`, `save/region` | 797 | level.dat, player data, region files |
-| `microsoft`, `yggdrasil`, `offline` | 1,227 | Microsoft login, Mojang session server, offline uuids |
-| `management/client.go` | 491 | the WebSocket and JSON-RPC transport under the generated management API |
-| `net/rcon`, `net/queue` | 84 | RCON, a packet queue |
+| `microsoft`, `yggdrasil`, `offline` | 927 | Microsoft login, Mojang session server, offline uuids |
+| `examples/*` | 1,292 | nine small programs: a bot with a console, an auto-fisher, a server-list ping, a region-file dumper, a player-data converter, a pressure test, a Microsoft login, a minimal bot |
 
-The `_versions/26.1` overlay (one file, `server/login.go`) is in this tier: only the server
-framework differs between the versions the library builds for.
+Two pieces that read like application code stay in the library because the library needs
+them: `management/client.go` (491 lines, the WebSocket and JSON-RPC transport in the same
+package as the generated management API) and RCON with the packet queue (`net`, `net/queue`,
+84 lines).
+
+The kit has no per-version copies of anything. Where a Minecraft version differs in what the
+kit does (the login finished packet gained a session id in 26.2), the code follows
+`version.ProtocolVersion` of the library it is built with and writes the packet field by
+field, so one source builds against every supported library version; the kit's workflow
+checks that with a matrix.
 
 ## Tier C — the tests the harness runs
 
-`bot/*_smoke_test.go`, `bot/capture_check_test.go` and `management/smoke_test.go` (about 1,100
-lines) are not library code. They exist for `mc26 smoke` and `mc26 crosscheck`, and they are
+`bot/*_smoke_test.go` and `bot/capture_check_test.go` in the kit and `management/smoke_test.go`
+in the library (about 1,100 lines) are not library code. They exist for `mc26 smoke` and
+`mc26 crosscheck`, and they are
 the reason the generated code is trusted: the smoke test reads every synchronised registry with
 its generated type and fails on a tag it does not know, and the capture check decodes every
 recorded packet into its generated type and requires the body to be consumed exactly.

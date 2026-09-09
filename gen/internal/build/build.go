@@ -1,7 +1,9 @@
 // Package build assembles the go-mc26 library for one Minecraft version: the
 // hand-written sources of gen/src plus the packages generated from a data
 // directory, the rendered README and CI workflow, then gofmt, go build, go vet
-// and go test inside the result.
+// and go test inside the result; and, when asked, the kit (a go-mc26-kit
+// checkout, which this repository tests against but does not own) against
+// that result, checked the same way.
 package build
 
 import (
@@ -19,6 +21,7 @@ import (
 	"github.com/mj41/mc26/gen/internal/docgen"
 	"github.com/mj41/mc26/gen/internal/generate"
 	"github.com/mj41/mc26/gen/internal/gitx"
+	"github.com/mj41/mc26/gen/internal/kit"
 	"github.com/mj41/mc26/gen/internal/prims"
 	"github.com/mj41/mc26/gen/internal/schemacheck"
 )
@@ -28,6 +31,8 @@ type Options struct {
 	GenRoot    string // the gen/ directory: src/, templates/, hand-crafted/
 	DataDir    string // extracted JSON of one version (an mc26-data branch checkout works)
 	OutDir     string // the library tree to produce; a .git inside is kept
+	KitSrc     string // a go-mc26-kit checkout, the kit's sources
+	KitOut     string // the kit tree to assemble from KitSrc against the result, built and tested there; "" skips it
 	Version    string // expected version id; "" accepts whatever the data says
 	DataSource string // recorded in version.go and the README, e.g. "mc26-data v0.262.0"
 	Generator  string // recorded likewise, e.g. "mc26 1a2b3c4d5e6f"
@@ -210,6 +215,14 @@ func Run(o Options) (*Info, error) {
 	}
 	if o.Test {
 		if err := goRun(o.OutDir, "test", "./..."); err != nil {
+			return nil, err
+		}
+	}
+	if o.KitOut != "" {
+		o.Log("build %s: the kit against the library", v.ID)
+		if err := kit.Assemble(kit.Options{
+			SrcDir: o.KitSrc, LibDir: o.OutDir, OutDir: o.KitOut, Test: o.Test, Log: o.Log,
+		}); err != nil {
 			return nil, err
 		}
 	}

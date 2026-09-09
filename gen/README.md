@@ -7,7 +7,7 @@ Java itself.
 
 ```
 gen/
-├── cmd/mc26/            extract · build · smoke · crosscheck · e2e · verify · update · pipeline · release · report · commit · latest · tag · import-src · import-examples
+├── cmd/mc26/            extract · build · smoke · crosscheck · e2e · verify · update · pipeline · release · report · commit · latest · tag · import-src
 ├── cmd/packetdiff/      wire-layout diff of two versions (packet_schema.json + packets.json)
 ├── cmd/nbtdiff/         what the registry elements and shared NBT types gained, lost or changed between two versions (nbt_schema.json)
 ├── cmd/protodefdiff/    our packet schema against another description of the same version (docs/minecraft-data.md)
@@ -15,17 +15,18 @@ gen/
 ├── cmd/schemacov/       how much of packet_schema.json is fully typed, and why the rest is not
 ├── internal/extract/    downloads (jar, language files) and the extraction container; _meta.json
 ├── internal/generate/   the generators (gen_*.go) and their helpers
-├── internal/build/      copy src/ + generate + README/CI + go mod tidy, gofmt, build, vet, test
+├── internal/build/      copy src/ + generate + README/CI + go mod tidy, gofmt, build, vet, test; then the kit against the result
+├── internal/kit/        assembles the go-mc26-kit checkout (../go-mc26-kit, --kit-src) against a built library under temp/kit/<version> (a workspace) and builds, vets, tests it there
 ├── internal/docgen/     renders docs/*.mc26tmpl.md for a version (HTML-comment directives; tables and trees from the JSON)
 ├── docs/                the documentation templates: protocol (frame, primitives, node kinds), packets, components, registries
 ├── internal/schemacheck/ the schemas describe everything (no opaque node, no caseless dispatch, every ref resolves) — build stops on a hole
-├── internal/smoke/      vanilla server + `go test ./bot -run TestSmoke`
+├── internal/smoke/      vanilla server + `go test ./bot go-mc26/management -run TestSmoke` from the kit tree
 ├── internal/gitx/       branch, replace tree, commit, tag, push
-├── internal/importsrc/  one-time import of the library sources and examples from a go-mc tree
-├── internal/paths/      <root>/temp layout (data/<version>, cache, lib/<version>, smoke/<version>)
+├── internal/importsrc/  one-time import of the library sources from a go-mc tree
+├── internal/paths/      <root>/temp layout (data/<version>, cache, lib/<version>, kit/<version>, smoke/<version>)
 ├── hand-crafted/        prims.json (which jar members the primitives stand for) and nodes.json (the node kinds, the frame), see hand-crafted/hand-crafted.md)
 ├── templates/           version.go, packetid.go, README.md, ci.yml, the data and index READMEs, … (text/template)
-├── src/_versions/<v>/   files an older version needs different from src/ (same relative paths), applied by build; the underscore keeps them out of every ./... walk
+├── src/_versions/<v>/   files an older version needs different from src/ (same relative paths), applied by build; none at present
 └── src/                 the hand-written library packages; module github.com/mj41/go-mc26, no generated files
 ```
 
@@ -204,8 +205,8 @@ use := play.UseItem{Hand: types.InteractionHandMainHand}
 err := conn.WritePacket(pk.Marshal(use.PacketID(), use))
 ```
 
-`bot/`, `server/` and the examples use these structs only; after a version bump the compiler
-points at every field a packet gained or lost.
+The kit's `bot/`, `server/` and examples use these structs only; after a version bump the
+compiler points at every field a packet gained or lost.
 
 ### Data components
 
