@@ -21,6 +21,7 @@ below is the order to do them. A finished task is removed: what is worth keeping
 
 | task | what is asked |
 |---|---|
+| [zero-hand-written.md](zero-hand-written.md) | what of the library's 14,230 hand-written lines can still be generated, and what 0 takes: ~780 have data behind them (300 done, the save formats are the rest), ~1,900 would only move into the generator, 7,500 are runtime for a module of its own |
 | [exports.md](exports.md) | exports of the schema to other ecosystems' formats, and the errors a comparison with one found (docs/minecraft-data.md) |
 
 Conventions for these files: public text — no private repositories, hosts or infrastructure of

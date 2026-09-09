@@ -65,7 +65,29 @@ func genRegistryID(jsonDir, goMCRoot string) error {
 		totalEntries += len(entries)
 	}
 
-	logf("genRegistryID: wrote %d registry files (%d total entries)", len(keys), totalEntries)
+	// The glue that fills a registry container from those tables: both sides of
+	// it are generated, so it is too.
+	bootstrapTmpl, err := loadTemplate(goMCRoot, "registryid-bootstrap.go.tmpl")
+	if err != nil {
+		return fmt.Errorf("genRegistryID: %w", err)
+	}
+	out, err := executeTemplate(bootstrapTmpl, struct {
+		Header     string
+		Version    string
+		BlockCount int
+	}{
+		Header:     generatedHeader("gen_registryid.go", "registries.json"),
+		Version:    jsonVersion,
+		BlockCount: len(registries["minecraft:block"].Entries),
+	})
+	if err != nil {
+		return fmt.Errorf("genRegistryID: bootstrap: %w", err)
+	}
+	if err := writeFile(filepath.Join(outDir, "bootstrap", "builtinregistries_gen.go"), out); err != nil {
+		return fmt.Errorf("genRegistryID: bootstrap: %w", err)
+	}
+
+	logf("genRegistryID: wrote %d registry files (%d total entries) and the bootstrap", len(keys), totalEntries)
 	return nil
 }
 

@@ -16,7 +16,6 @@ chat/sign/cache_test.go	upstream
 chat/sign/session.go	upstream
 chat/sign/sign.go	modified
 data/README.md	modified
-data/registryid/bootstrap/builtinregistries.go	upstream
 go.mod	upstream
 go.sum	upstream
 level/bitstorage.go	upstream
@@ -28,9 +27,7 @@ level/block/properties.go	modified
 level/block/utilfuncs.go	upstream
 level/chunk.go	modified
 level/chunkpos_test.go	new
-level/chunkstatus.go	upstream
 level/component/delimited_test.go	new
-level/component/types.go	new
 level/palette.go	modified
 level/palette_test.go	upstream
 nbt/README.md	upstream
@@ -124,3 +121,4 @@ yggdrasil/user/pubkey.go	modified
 yggdrasil/user/user.go	upstream
 yggdrasil/user/validator.go	upstream
 yggdrasil/user/yggdrasil_session_pubkey.der	upstream
+level/component/types.go	new

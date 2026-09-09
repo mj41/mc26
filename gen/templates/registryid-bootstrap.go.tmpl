@@ -1,0 +1,30 @@
+{{.Header}}
+// Package bootstrap fills a registry container with a built-in registry of this
+// Minecraft version: the ids of data/registryid with the values of the typed
+// package that registry has.
+package bootstrap
+
+import (
+	"github.com/mj41/go-mc26/data/registryid"
+	"github.com/mj41/go-mc26/level/block"
+	"github.com/mj41/go-mc26/registry"
+)
+
+// Blocks is how many blocks {{.Version}} has; RegisterBlocks registers exactly
+// that many, and panics when the generated tables disagree.
+const Blocks = {{.BlockCount}}
+
+// RegisterBlocks fills reg with every block of this version, in id order, so a
+// lookup by id or by name answers without a server having sent the registry.
+func RegisterBlocks(reg *registry.Registry[block.Block]) {
+	reg.Clear()
+	for i, key := range registryid.Block {
+		id, val := reg.Put(key, block.FromID[key])
+		if int32(i) != id || val == nil || *val == nil {
+			panic("register blocks failed")
+		}
+	}
+	if len(registryid.Block) != Blocks {
+		panic("register blocks: unexpected block count")
+	}
+}

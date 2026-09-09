@@ -45,8 +45,18 @@ type genState struct {
 	unions     map[string]*unionDef     // Go name -> def
 	whiles     map[string]*whileListDef // Go name -> def
 	whileOrder []string
-	bits       map[string]*bitsDef // Go name -> def
-	bitsOrder  []string
+	bits         map[string]*bitsDef // Go name -> def
+	bitsOrder    []string
+	factories    map[string]*factoryDef // Go name -> def
+	factoryOrder []string
+	// primRename is the Go name the next struct registered takes, instead of
+	// the one its Java class would give it: a primitive's definition is named
+	// after the primitive, since two primitives can be the same Java class in
+	// different shapes (COMPONENT_PATCH and DELIMITED_COMPONENT_PATCH are both
+	// DataComponentPatch, ITEM_STACK and UNTRUSTED_ITEM_STACK both ItemStack).
+	primRename string
+	// primNames is the Go name a primitive's definition takes, by primitive.
+	primNames map[string]string
 	order      []string // struct emission order (dependencies first)
 	unionOrder []string
 	fixedBits  map[int]bool // sizes of fixed bit sets seen (readFixedBitSet(n))
@@ -129,6 +139,26 @@ type structDef struct {
 	GoName string
 	Java   string
 	Fields []goField
+}
+
+// factoryDef is a struct whose value is a dispatch whose cases live in another
+// section of the schema (`casesFrom`), so the generator cannot inline them: the
+// key is read, a factory made from that section produces the value, and the
+// value reads itself. TypedDataComponent — a data component type id and the
+// component that type selects — is the one such shape.
+type factoryDef struct {
+	GoName    string
+	Java      string
+	KeyName   string // Go name of the key field
+	KeyType   string // its Go type (pk.VarInt)
+	KeyDoc    string
+	ValueName string // Go name of the value field
+	Iface     string // the interface every case satisfies (DataComponent)
+	New       string // the factory: New(int32(key)) or nil
+	What      string // what the key names, for the error message ("component")
+	// Delimited: the value carries its length in bytes in front of it, so a
+	// reader can step over one it does not know; such a value keeps its bytes.
+	Delimited bool
 }
 
 // unionDef is a dispatch on a registry whose elements carry their own codec
@@ -975,7 +1005,11 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 			return gt, "", nil
 		}
 		if def, ok := primDefs[t]; ok {
-			return gs.goType(schemaNode(def), owner) // no Go type of its own: what the schema's definition says it is
+			// no Go type of its own: what the schema's definition says it is,
+			// named after the primitive when that name is asked for (two
+			// primitives can be one Java class in two shapes)
+			gs.primRename = gs.primNames[t]
+			return gs.goType(schemaNode(def), owner)
 		}
 		return "", "", fmt.Errorf("prim %s", t)
 	case "string":
@@ -1455,8 +1489,13 @@ func (gs *genState) renderWhileLists(sb *strings.Builder) {
 
 func (gs *genState) structType(n schemaNode, owner string) (string, error) {
 	java := str(n["name"])
+	if name, ok := gs.externalDispatchStruct(n, java); ok {
+		return name, nil
+	}
 	goName := goTypeName(java)
-	if gs.reserved[goName] {
+	if gs.primRename != "" {
+		goName, gs.primRename = gs.primRename, ""
+	} else if gs.reserved[goName] {
 		goName += "Record"
 	}
 	fields, err := gs.fieldsOf(n, java)
@@ -1492,6 +1531,160 @@ func (gs *genState) structType(n schemaNode, owner string) (string, error) {
 	gs.structs[goName] = &structDef{GoName: goName, Java: java, Fields: fields}
 	gs.order = append(gs.order, goName)
 	return goName, nil
+}
+
+// externalDispatches are the sections a dispatch's `casesFrom` may point at,
+// with the interface and the factory the generator for that section wrote.
+var externalDispatches = map[string]struct{ iface, new, what, pkg string }{
+	"packet_schema.json#components": {"DataComponent", "NewComponent", "component", "component"},
+}
+
+// externalDispatchStruct registers a struct of the shape {key, value} whose
+// value is a dispatch with `casesFrom`: the cases are a whole section of the
+// schema, generated as its own package, so the value is that section's
+// interface and the factory turns the key into one. Reports false for every
+// other struct.
+func (gs *genState) externalDispatchStruct(n schemaNode, java string) (string, bool) {
+	fields, _ := n["fields"].([]any)
+	if len(fields) != 2 {
+		return "", false
+	}
+	key, _ := fields[0].(map[string]any)
+	val, _ := fields[1].(map[string]any)
+	if key == nil || val == nil {
+		return "", false
+	}
+	vt, _ := val["type"].(map[string]any)
+	delimited := false
+	if vt != nil && vt["k"] == "lenprefixed" {
+		if inner, ok := vt["elem"].(map[string]any); ok {
+			vt, delimited = inner, true
+		}
+	}
+	if vt == nil || vt["k"] != "dispatch" {
+		return "", false
+	}
+	target, ok := externalDispatches[str(vt["casesFrom"])]
+	if !ok || gs.pkg != target.pkg {
+		return "", false
+	}
+	// the dispatch reads no key of its own: it is keyed by the field in front of it
+	dk, _ := vt["key"].(map[string]any)
+	if str(dk["field"]) != str(key["name"]) {
+		return "", false
+	}
+	kt, _ := key["type"].(map[string]any)
+	keyType, keyDoc, err := gs.goType(schemaNode(kt), java)
+	if err != nil {
+		return "", false
+	}
+	goName := "Typed"
+	if delimited {
+		goName = "Delimited" + goName
+	}
+	if f, ok := gs.factories[goName]; ok {
+		return f.GoName, true
+	}
+	if gs.factories == nil {
+		gs.factories = map[string]*factoryDef{}
+	}
+	f := &factoryDef{
+		GoName: goName, Java: java, KeyName: goFieldName(str(key["name"])), KeyType: keyType, KeyDoc: keyDoc,
+		ValueName: goFieldName(str(val["name"])), Iface: target.iface, New: target.new, What: target.what,
+		Delimited: delimited,
+	}
+	gs.factories[goName] = f
+	gs.factoryOrder = append(gs.factoryOrder, goName)
+	return goName, true
+}
+
+// renderFactories writes the {key, value} types whose value comes from a
+// factory: the plain one, and the delimited one that keeps the bytes of a case
+// this version does not know so writing it back reproduces what arrived.
+func (gs *genState) renderFactories(sb *strings.Builder) {
+	for _, name := range gs.factoryOrder {
+		f := gs.factories[name]
+		fmt.Fprintf(sb, "// %s is Java %s: a %s type id and the value that type selects,\n// which %s makes.", f.GoName, f.Java, f.What, f.New)
+		if f.Delimited {
+			fmt.Fprintf(sb, " The value carries its length in bytes, so a reader can\n// step over a %s it does not know; such a value keeps its bytes in Raw and is\n// written back unchanged.", f.What)
+		}
+		fmt.Fprintf(sb, "\ntype %s struct {\n\t%s %s // %s\n\t%s %s\n", f.GoName, f.KeyName, f.KeyType, f.KeyDoc, f.ValueName, f.Iface)
+		if f.Delimited {
+			fmt.Fprintf(sb, "\tRaw []byte // set when %s is nil: a %s this version does not know\n", f.ValueName, f.What)
+		}
+		sb.WriteString("}\n\n")
+		if !f.Delimited {
+			fmt.Fprintf(sb, `func (v *%[1]s) ReadFrom(r io.Reader) (n int64, err error) {
+	if n, err = v.%[2]s.ReadFrom(r); err != nil {
+		return
+	}
+	if v.%[3]s = %[4]s(int32(v.%[2]s)); v.%[3]s == nil {
+		return n, fmt.Errorf("%[5]s %%d: this version has no such type", v.%[2]s)
+	}
+	m, err := v.%[3]s.ReadFrom(r)
+	return n + m, err
+}
+
+func (v %[1]s) WriteTo(w io.Writer) (n int64, err error) {
+	if n, err = v.%[2]s.WriteTo(w); err != nil {
+		return
+	}
+	value := v.%[3]s
+	if value == nil {
+		if value = %[4]s(int32(v.%[2]s)); value == nil {
+			return n, fmt.Errorf("%[5]s %%d: this version has no such type", v.%[2]s)
+		}
+	}
+	m, err := value.WriteTo(w)
+	return n + m, err
+}
+
+`, f.GoName, f.KeyName, f.ValueName, f.New, f.What)
+			continue
+		}
+		fmt.Fprintf(sb, `func (v *%[1]s) ReadFrom(r io.Reader) (n int64, err error) {
+	var size pk.VarInt
+	if n, err = (pk.Tuple{&v.%[2]s, &size}).ReadFrom(r); err != nil {
+		return
+	}
+	if size < 0 {
+		return n, fmt.Errorf("%[5]s %%d: negative length %%d", v.%[2]s, size)
+	}
+	body := make([]byte, int(size))
+	m, err := io.ReadFull(r, body)
+	n += int64(m)
+	if err != nil {
+		return n, err
+	}
+	v.%[3]s, v.Raw = %[4]s(int32(v.%[2]s)), nil
+	if v.%[3]s == nil {
+		v.Raw = body
+		return n, nil
+	}
+	if _, err := v.%[3]s.ReadFrom(bytes.NewReader(body)); err != nil {
+		return n, fmt.Errorf("%[5]s %%d: %%w", v.%[2]s, err)
+	}
+	return n, nil
+}
+
+func (v %[1]s) WriteTo(w io.Writer) (n int64, err error) {
+	body := v.Raw
+	if v.%[3]s != nil {
+		var buf bytes.Buffer
+		if _, err = v.%[3]s.WriteTo(&buf); err != nil {
+			return 0, err
+		}
+		body = buf.Bytes()
+	}
+	if n, err = (pk.Tuple{v.%[2]s, pk.VarInt(len(body))}).WriteTo(w); err != nil {
+		return
+	}
+	m, err := w.Write(body)
+	return n + int64(m), err
+}
+
+`, f.GoName, f.KeyName, f.ValueName, f.New, f.What)
+	}
 }
 
 // unionType registers a dispatch on a registry as one struct: the key, then
@@ -2097,6 +2290,9 @@ func (gs *genState) packageImports(body string) string {
 	if usesPackage(body, "pk") {
 		imports = append(imports, "\tpk \"github.com/mj41/go-mc26/net/packet\"")
 	}
+	if strings.Contains(body, "bytes.") {
+		std = "\t\"bytes\"\n" + std
+	}
 	for _, p := range []struct{ prefix, path string }{
 		{"wire", "\t\"github.com/mj41/go-mc26/wire\""},
 		{"chat", "\t\"github.com/mj41/go-mc26/chat\""},
@@ -2223,6 +2419,7 @@ func goEnumConst(v string) string {
 
 func (gs *genState) renderStructs() string {
 	var sb strings.Builder
+	gs.renderFactories(&sb)
 	gs.renderUnions(&sb)
 	gs.renderBits(&sb)
 	gs.renderWhileLists(&sb)
