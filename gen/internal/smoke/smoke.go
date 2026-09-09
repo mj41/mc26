@@ -7,6 +7,7 @@ package smoke
 
 import (
 	"fmt"
+	"github.com/mj41/mc26/gen/internal/limits"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -150,6 +151,7 @@ sync-chunk-writes=false
 		work, _ := filepath.Abs(s.WorkDir)
 		args := []string{
 			"run", "--rm", "--name", s.container,
+			"--memory", limits.ServerContainerMemory,
 			"--security-opt", "label=disable",
 			"-p", fmt.Sprintf("127.0.0.1:%d:25565", s.Port),
 			"-p", fmt.Sprintf("127.0.0.1:%d:25575", s.RCONPort),
@@ -265,7 +267,7 @@ func Run(o Options) error {
 	if o.ClientAddr != "" {
 		addr = o.ClientAddr
 	}
-	test.Env = append(os.Environ(),
+	test.Env = limits.GoEnv(
 		"MC26_SMOKE_ADDR="+addr,
 		"MC26_SMOKE_RCON="+srv.RCONAddr(),
 		"MC26_SMOKE_RCON_PASSWORD="+srv.RCONPassword,

@@ -1,0 +1,7 @@
+{
+  // temp/ holds one built copy of the library per Minecraft version, 1.2 M lines of
+  // translation tables each, rewritten by every build: gopls indexing them took 14 GB.
+  "gopls": {
+    "build.directoryFilters": ["-temp", "-node_modules"]
+  }
+}

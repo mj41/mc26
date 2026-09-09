@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/mj41/mc26/gen/internal/limits"
 	"io"
 	"net/http"
 	"os"
@@ -160,6 +161,8 @@ func DetectRuntime() string {
 func containerArgs(runtime, version, cacheDir, jsonsDir, javaDir string) []string {
 	args := []string{
 		"run", "--rm",
+		"--memory", limits.ExtractContainerMemory,
+		"-e", "JAVA_TOOL_OPTIONS=" + limits.ExtractJavaHeap, // every JVM in it: the data generator and the extractors
 		"--security-opt", "label=disable", // SELinux: allow the bind mounts
 		"-v", cacheDir + ":/cache",
 		"-v", jsonsDir + ":/jsons",

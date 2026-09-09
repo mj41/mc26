@@ -86,10 +86,9 @@ type propInfo struct {
 // enumDef describes a property enum type with its canonical value order.
 // The value order matches MC's internal ordinals (important for iota constants).
 type enumDef struct {
-	TypeName   string   // Go type name, e.g. "Direction"
-	Values     []string // Ordered MC values, e.g. ["down", "up", "north", "south", "west", "east"]
+	TypeName string   // Go type name, e.g. "Direction"
+	Values   []string // Ordered MC values, e.g. ["down", "up", "north", "south", "west", "east"]
 }
-
 
 // ---------------------------------------------------------------------------
 // NBT output model
@@ -159,7 +158,6 @@ func genBlocks(jsonDir, goMCRoot string) error {
 	blocksOut := filepath.Join(goMCRoot, "level", "block", "blocks.go")
 	statesOut := filepath.Join(goMCRoot, "level", "block", "block_states.nbt")
 	propsOut := filepath.Join(goMCRoot, "level", "block", "properties_enum.go")
-
 
 	// Load block_properties.json — property type metadata extracted from MC runtime.
 	enumLookup, enumDefs, err := loadPropsJSON(propsJSONPath)
@@ -399,8 +397,8 @@ func loadPropsJSON(path string) (enumLookup map[string]string, defs []enumDef, e
 	defs = make([]enumDef, 0, len(pd.Enums))
 	for name, values := range pd.Enums {
 		defs = append(defs, enumDef{
-			TypeName:   name,
-			Values:     values,
+			TypeName: name,
+			Values:   values,
 		})
 	}
 	sort.Slice(defs, func(i, j int) bool {

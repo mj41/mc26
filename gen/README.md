@@ -49,7 +49,7 @@ rather than copying its fields avoids most overlays.
 | registryid | `registries.json` | `data/registryid/*.go` |
 | biome | `biomes.json` | `level/biome/list.go` |
 | lang | `lang/*.json` | `data/lang/<locale>/<locale>.go` |
-| packets | `packet_schema.json` + `packets.json` | `protocol/<state>/{clientbound,serverbound}_gen.go` (+ round-trip tests), `protocol/types/{enums,structs}_gen.go` |
+| packets | `packet_schema.json` + `packets.json` + `prims.json` (a primitive with no Go type of its own, `CHUNK_SECTIONS`, is rendered from its definition) | `protocol/<state>/{clientbound,serverbound}_gen.go` (+ round-trip tests), `protocol/types/{enums,structs}_gen.go`, `level/section_gen.go` (the chunk section and its paletted containers, with the width function of each packed run) |
 | entity data (inside packets) | `entity_data.json` | `protocol/types/entitydata_gen.go` (serializer names, `NewEntityDataValue`), `data/entitydata/entitydata_gen.go` (field index constants per class, the fields of every entity type) |
 | constants | `constants.json` | `data/constants/constants_gen.go` — the compile-time constants of a few classes (inventory slot layout, section geometry, level limits, living-entity NBT keys) |
 | nbt | `nbt_schema.json` | `registry/elements_gen.go` (the registry elements sent in the configuration phase, their enums and records, a decode test), `registry/registries_gen.go` (the `Registries` struct), `chat/style_gen.go` (`Style`, `ClickEvent`, `HoverEvent`, `Decoration`) |
@@ -70,14 +70,12 @@ hand-written in `src/protocol/types/types.go`. The plain records every package s
 `GlobalPos`, `GameProfile`, `BlockHitResult`, listed in `wireStructs`) are generated once into
 package `wire` (`wire/structs_gen.go`, with the enums they use in `wire/enums_gen.go`) from
 wherever the schema first shows them, and `protocol/types/wire_gen.go` aliases them for the
-packets. A structure another package implements by hand
-with the same wire form (the signed-chat types of `chat/sign`, `level.BlockEntity`) is a leaf:
-`externalHandTypes` in `gen_packets.go` maps its schema name to the Go type, and nothing inside it
-counts as a hole. A packet whose entries carry only the parts an `EnumSet` field selects
+packets; the chunk's block entity is one of them, since `level` reads it out of the chunk
+packet and cannot import `protocol/types`. A packet whose entries carry only the parts an `EnumSet` field selects
 (`player_info_update`) gets an entry type with a `fields(guard)` selector and a custom
 `ReadFrom`/`WriteTo`. A dispatch on a registry whose elements carry their own codec (particle
 types, recipe and slot displays, number formats, position sources, debug subscriptions:
-registered with it in a bootstrap class listed in `REGISTRY_BOOTSTRAP` in the extractor — in its
+registered with it in the bootstrap class `BuiltInRegistries.<clinit>` names for the registry — in its
 `bootstrap(Registry)` method or its `<clinit>`, through any `register…` helper, either as a codec
 factory, a `TYPE` record holding the codec, or an object whose `streamCodec()` returns it; a
 one-argument static factory passed to `dispatch` wraps every case, which is how a debug
@@ -236,9 +234,13 @@ listing them, which the bot decodes the `registry_data` packets into. A `MapCode
 becomes an embedded struct (its keys sit at the parent's level), a `StringRepresentable` enum a
 string type with constants, a `RegistryFileCodec` a `Holder[T]` (id or inline element), a
 `HolderSet` a tag, an id or a list of ids, and a dispatch whose cases the walker can enumerate
-(the click and hover events) one struct with the fields of every case. What it cannot type — an
-`IntProvider` (`either`), a dispatch on a registry (`Dialog`) — stays a raw field and is listed
-in the header of `elements_gen.go`, so the rest of the element is still typed. The chat side
+one struct with the fields of every case — the cases of a dispatch on an enum come from the
+constants, those of a dispatch on a registry (the dialog types, the int providers, the dialog
+bodies) from the registry's bootstrap class, which `BuiltInRegistries.<clinit>` names. What it
+cannot type — an `either` (an int provider is a number or a provider), a `ref` to an enclosing
+type, a dispatch whose registrations a `forEach` drives (the dialog actions), the world-gen block
+state providers — stays a raw field and is listed in the header of `elements_gen.go`, so the
+rest of the element is still typed; 28 of the 32 registries of 26.3-pre-2 are typed in full. The chat side
 (`chat.Style`, `chat.ClickEvent`, `chat.HoverEvent`, `chat.ChatTypeDecoration`) comes from the same
 schema, with `json` tags for text components.
 

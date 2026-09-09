@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/mj41/mc26/gen/internal/limits"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -182,6 +183,7 @@ func Run(o Options) (*Info, error) {
 func goRun(dir string, args ...string) error {
 	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
+	cmd.Env = limits.GoEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("go %s: %v\n%s", strings.Join(args, " "), err, out)

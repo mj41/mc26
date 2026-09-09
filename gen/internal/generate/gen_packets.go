@@ -5,10 +5,12 @@ package generate
 
 import (
 	"fmt"
+	"github.com/mj41/mc26/gen/internal/prims"
 	"go/format"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -50,12 +52,13 @@ type genState struct {
 	fixedBits  map[int]bool // sizes of fixed bit sets seen (readFixedBitSet(n))
 	fixedBytes map[int]bool // sizes of fixed byte blocks seen (readBytes(n))
 
-	pkg      string            // package the enums and shared structs are written into
-	q        string            // how other packages refer to them ("types." or "")
-	wire     string            // how the wire generics are referred to ("types." or "wire.")
-	prims    map[string]string // schema primitive -> Go type
-	hand     map[string]string // Java short name of a struct kept by hand -> Go type
-	reserved map[string]bool   // Go names taken by the package's own types (components); records get a suffix
+	pkg      string              // package the enums and shared structs are written into
+	q        string              // how other packages refer to them ("types." or "")
+	wire     string              // how the wire generics are referred to ("types." or "wire.")
+	prims    map[string]string   // schema primitive -> Go type
+	widthFns map[string]*widthFn // the width functions of the packed runs this package holds
+	hand     map[string]string   // Java short name of a struct kept by hand -> Go type
+	reserved map[string]bool     // Go names taken by the package's own types (components); records get a suffix
 
 	guardHook   func(elem schemaNode) (string, error) // set while typing a packet: the Go type of a guarded entry list
 	registryIDs registriesJSON                        // registries.json, for the numeric ids of a union's cases
@@ -68,9 +71,6 @@ func newPacketGenState() *genState {
 	for name := range handWrittenTypes {
 		hand[name] = "types." + name
 	}
-	for name, typ := range externalHandTypes {
-		hand[name] = typ
-	}
 	// the names protocol/types already has by hand: a generated struct may not take one
 	reserved := map[string]bool{}
 	for name := range handWrittenTypes {
@@ -79,7 +79,7 @@ func newPacketGenState() *genState {
 	return &genState{
 		enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, unions: map[string]*unionDef{}, whiles: map[string]*whileListDef{}, bits: map[string]*bitsDef{},
 		fixedBits: map[int]bool{}, fixedBytes: map[int]bool{},
-		pkg: "types", q: "types.", wire: "types.", prims: primTypes, hand: hand, reserved: reserved,
+		pkg: "types", q: "types.", wire: "types.", prims: primTypes, hand: hand, reserved: reserved, widthFns: map[string]*widthFn{},
 	}
 }
 
@@ -213,6 +213,53 @@ var handWrittenTypes = map[string]bool{
 // wire.X.
 var wireStructs = map[string]bool{
 	"Vec3": true, "Vector3f": true, "Quaternionf": true, "GlobalPos": true, "BlockHitResult": true, "GameProfile": true,
+	// the chunk's block entities: level reads them out of the chunk packet and cannot import protocol/types
+	"LevelChunkPacketDataBlockEntityInfo": true,
+}
+
+// levelStructs are the chunk section and its palettes: generated into
+// package level (level/section_gen.go), which reads them out of the chunk
+// packet and cannot import protocol/types; the packets see them as level.X.
+var levelStructs = map[string]bool{
+	"LevelChunkSection": true, "PalettedContainerBlockStates": true, "PalettedContainerBiomes": true,
+}
+
+// registryBitsExpr is the Go expression for the width of a global palette,
+// ceillog2 of the size of an id space (nodes.json `packed`, registryBits).
+var registryBitsExpr = map[string]string{
+	"block_state":    "block.BitsPerBlock",
+	"worldgen/biome": "biome.BitsPerBiome",
+}
+
+// primDefs are the definitions of gen/hand-crafted/prims.json: a primitive
+// with no Go type of its own (CHUNK_SECTIONS) is rendered from its definition.
+var primDefs map[string]map[string]any
+
+// widthFn is the storage width of a packed run as a function of the palette
+// byte that selected it (nodes.json `packed`, `width`).
+type widthFn struct {
+	Name    string
+	Struct  string
+	Field   string
+	Cases   map[int]string // byte value → width expression
+	Default string         // for every other value
+}
+
+var levelGS *genState
+
+func levelState() *genState {
+	if levelGS == nil {
+		prims := map[string]string{}
+		for k, v := range primTypes {
+			prims[k] = strings.ReplaceAll(v, "types.", "")
+		}
+		levelGS = &genState{
+			enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, unions: map[string]*unionDef{}, whiles: map[string]*whileListDef{}, bits: map[string]*bitsDef{},
+			fixedBits: map[int]bool{}, fixedBytes: map[int]bool{},
+			pkg: "level", q: "", wire: "wire.", prims: prims, hand: map[string]string{}, widthFns: map[string]*widthFn{},
+		}
+	}
+	return levelGS
 }
 
 // wireGS collects the wire structs across the generators that run in one
@@ -228,21 +275,10 @@ func wireState() *genState {
 		wireGS = &genState{
 			enums: map[string]*pktEnumDef{}, structs: map[string]*structDef{}, unions: map[string]*unionDef{}, whiles: map[string]*whileListDef{}, bits: map[string]*bitsDef{},
 			fixedBits: map[int]bool{}, fixedBytes: map[int]bool{},
-			pkg: "wire", q: "", wire: "", prims: prims, hand: map[string]string{},
+			pkg: "wire", q: "", wire: "", prims: prims, hand: map[string]string{}, widthFns: map[string]*widthFn{},
 		}
 	}
 	return wireGS
-}
-
-// externalHandTypes are structures the schema describes but which other
-// packages implement by hand with the same wire form (their Go name is the
-// schema's struct name through goTypeName); a subtree under one of them is
-// never a hole, whatever the walker could not type inside it.
-var externalHandTypes = map[string]string{
-	"SignedMessageBodyPacked":             "sign.PackedMessageBody",
-	"MessageSignaturePacked":              "sign.PackedSignature",
-	"FilterMask":                          "sign.FilterMask",
-	"LevelChunkPacketDataBlockEntityInfo": "level.BlockEntity",
 }
 
 // primGoTypes are the Go types a schema primitive maps to. A hand-written type
@@ -275,7 +311,6 @@ var primTypes = map[string]string{
 	"COMPONENT_PATCH": "types.ComponentPatch", "GAME_PROFILE": "types.GameProfile", "PUBLIC_KEY": "types.PublicKey",
 	"MESSAGE_SIGNATURE": "types.MessageSignature", "JSON_TEXT": "pk.String", "JSON": "pk.String",
 	"RAW_BYTES": "types.RestBytes", "REST_BYTES": "types.RestBytes", "CONTAINER_ID": "pk.VarInt",
-	"CHUNK_SECTIONS":   "pk.ByteArray", // level.Chunk.PutData reads the sections out of it with the dimension's height
 	"OPTIONAL_VAR_INT": "types.OptionalVarInt", "VAR_INT_LIST": "types.List[pk.VarInt, *pk.VarInt]",
 	"VAR_INT_ARRAY": "types.List[pk.VarInt, *pk.VarInt]", "LONG_ARRAY": "types.List[pk.Long, *pk.Long]",
 	"ROTATION_BYTE": "pk.Angle", "CHAR": "pk.UnsignedShort", "BLOCK_HIT_RESULT": "types.BlockHitResult",
@@ -294,6 +329,14 @@ func genPackets(jsonDir, goMCRoot string) error {
 	var ids packetsReport
 	if err := readJSON(filepath.Join(jsonDir, "packets.json"), &ids); err != nil {
 		return fmt.Errorf("genPackets: %w", err)
+	}
+	pdefs, err := prims.Load(filepath.Join(assetsDir, "hand-crafted", "prims.json"))
+	if err != nil {
+		return fmt.Errorf("genPackets: %w", err)
+	}
+	primDefs = map[string]map[string]any{}
+	for name, d := range pdefs {
+		primDefs[name] = d.Def
 	}
 	gs := newPacketGenState()
 	var regs registriesJSON
@@ -367,6 +410,11 @@ func genPackets(jsonDir, goMCRoot string) error {
 	if err := writeGo(filepath.Join(goMCRoot, "wire", "enums_gen.go"), ws.renderEnums()); err != nil {
 		return fmt.Errorf("genPackets: %w", err)
 	}
+	ls := levelState()
+	if err := writeGo(filepath.Join(goMCRoot, "level", "section_gen.go"), ls.renderStructs()); err != nil {
+		return fmt.Errorf("genPackets: %w", err)
+	}
+	levelGS = nil
 	var aliases strings.Builder
 	aliases.WriteString(generatedHeader("gen_packets.go", "packet_schema.json"))
 	aliases.WriteString("package types\n\nimport \"github.com/mj41/go-mc26/wire\"\n\n// The shared structures and enums generated into package wire, under the names the packets use.\ntype (\n")
@@ -566,10 +614,91 @@ func (gs *genState) fieldsOf(n schemaNode, owner string) ([]goField, error) {
 			g.Ref = fmt.Sprintf("%sCountedOf(&$.%s, int($.%s))", gs.wire, name, c.Name)
 			g.Comment = "as many entries as " + c.Name + " says"
 		}
+		if ft["k"] == "packed" {
+			b, err := gs.fieldRef(byName, str(ft["bits"]))
+			if err != nil {
+				return nil, fmt.Errorf("%s is packed by %q: %w", name, ft["bits"], err)
+			}
+			entries := int(ft["entries"].(float64))
+			fn, err := gs.widthFunction(owner, name, ft)
+			if err != nil {
+				return nil, err
+			}
+			g.Ref = fmt.Sprintf("%sPackedOf(&$.%s, %d, %s(int($.%s)))", gs.wire, name, entries, fn, b.Name)
+			g.Comment = fmt.Sprintf("%d values of the width %s selects, in big-endian longs", entries, b.Name)
+		}
 		byName[schemaName] = g
 		out = append(out, g)
 	}
 	return out, nil
+}
+
+// widthFunction registers the width function of a packed field and returns its
+// name: the storage width for every value of the palette byte (nodes.json
+// `packed`, `width`), a global palette's being ceillog2 of an id space's size.
+func (gs *genState) widthFunction(owner, field string, ft map[string]any) (string, error) {
+	name := goTypeName(shortJava(owner)) + field + "Width"
+	if _, ok := gs.widthFns[name]; ok {
+		return name, nil
+	}
+	w := &widthFn{Name: name, Struct: goTypeName(shortJava(owner)), Field: field, Cases: map[int]string{}}
+	widths, _ := ft["width"].(map[string]any)
+	for k, v := range widths {
+		var expr string
+		switch vv := v.(type) {
+		case float64:
+			expr = fmt.Sprintf("%d", int(vv))
+		case map[string]any:
+			space := str(vv["registryBits"])
+			e, ok := registryBitsExpr[space]
+			if !ok {
+				return "", fmt.Errorf("packed %s.%s: no Go expression for the size of the id space %q", owner, field, space)
+			}
+			expr = e
+		default:
+			return "", fmt.Errorf("packed %s.%s: width %v", owner, field, v)
+		}
+		if k == "*" {
+			w.Default = expr
+			continue
+		}
+		n, err := strconv.Atoi(k)
+		if err != nil {
+			return "", fmt.Errorf("packed %s.%s: width key %q", owner, field, k)
+		}
+		w.Cases[n] = expr
+	}
+	if w.Default == "" {
+		return "", fmt.Errorf("packed %s.%s: no width for the other values (\"*\")", owner, field)
+	}
+	gs.widthFns[name] = w
+	return name, nil
+}
+
+// renderWidthFns writes the width functions of the package's packed runs.
+func (gs *genState) renderWidthFns(sb *strings.Builder) {
+	for _, name := range sortedKeys(gs.widthFns) {
+		w := gs.widthFns[name]
+		fmt.Fprintf(sb, "// %s is the storage width, in bits per value, that the palette byte of\n// %s.%s selects: what prims.json says of the run, the width of a global palette\n// being the bits of the id space's size.\nfunc %s(bits int) int {\n\tswitch bits {\n", name, w.Struct, w.Field, name)
+		byExpr := map[string][]int{}
+		for k, e := range w.Cases {
+			byExpr[e] = append(byExpr[e], k)
+		}
+		var exprs []string
+		for e := range byExpr {
+			sort.Ints(byExpr[e])
+			exprs = append(exprs, e)
+		}
+		sort.Slice(exprs, func(i, j int) bool { return byExpr[exprs[i]][0] < byExpr[exprs[j]][0] })
+		for _, e := range exprs {
+			parts := make([]string, len(byExpr[e]))
+			for i, k := range byExpr[e] {
+				parts[i] = strconv.Itoa(k)
+			}
+			fmt.Fprintf(sb, "\tcase %s:\n\t\treturn %s\n", strings.Join(parts, ", "), e)
+		}
+		fmt.Fprintf(sb, "\t}\n\treturn %s\n}\n\n", w.Default)
+	}
 }
 
 // guardExpr renders a field's "when" (alternatives of tests on earlier fields,
@@ -753,9 +882,9 @@ func uniqueField(name string, used map[string]int) string {
 }
 
 // untyped reports what keeps a packet from being generated: holes outside the
-// subtrees that a hand-written type covers (externalHandTypes, the wire
-// primitives of protocol/types) and outside guarded entries. Empty when the
-// packet can be generated.
+// subtrees that a hand-written type covers (the wire primitives of
+// protocol/types) and outside guarded entries. Empty when the packet can be
+// generated.
 func (gs *genState) untyped(n schemaNode) string {
 	var holes []string
 	var walk func(n map[string]any)
@@ -844,6 +973,9 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 		}
 		if gt, ok := gs.prims[t]; ok {
 			return gt, "", nil
+		}
+		if def, ok := primDefs[t]; ok {
+			return gs.goType(schemaNode(def), owner) // no Go type of its own: what prims.json says it is
 		}
 		return "", "", fmt.Errorf("prim %s", t)
 	case "string":
@@ -940,6 +1072,17 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 			return "", "", err
 		}
 		return fmt.Sprintf("pk.Option[%s, *%s]", et, et), "", nil
+	case "rest":
+		// the element again and again until the enclosing window has no bytes left
+		et, _, err := gs.goType(schemaNode(n["elem"].(map[string]any)), owner)
+		if err != nil {
+			return "", "", err
+		}
+		return fmt.Sprintf("%sRest[%s, *%s]", gs.wire, et, et), "", nil
+	case "packed":
+		// values of a width the palette byte selects, in big-endian longs with no count;
+		// the width and the count are handed over where the field is read (fieldsOf)
+		return gs.wire + "Packed", "", nil
 	case "lenprefixed":
 		// a var int of bytes, then the value inside exactly those bytes
 		et, comment, err := gs.goType(schemaNode(n["elem"].(map[string]any)), owner)
@@ -1024,6 +1167,13 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 				return "", "", err
 			}
 			return gs.wire + name, "", nil
+		}
+		if levelStructs[goTypeName(str(n["name"]))] && gs.pkg != "level" {
+			name, err := levelState().structType(n, owner)
+			if err != nil {
+				return "", "", err
+			}
+			return "level." + name, "", nil
 		}
 		name, err := gs.structType(n, owner)
 		if err != nil {
@@ -1739,6 +1889,8 @@ func renderPacketFile(state, flow string, pkts []packetDef, skipped []string) st
 	for _, p := range []struct{ prefix, path string }{
 		{"sign", "\t\"github.com/mj41/go-mc26/chat/sign\""},
 		{"level", "\t\"github.com/mj41/go-mc26/level\""},
+		{"block", "\t\"github.com/mj41/go-mc26/level/block\""},
+		{"biome", "\t\"github.com/mj41/go-mc26/level/biome\""},
 		{"chat", "\t\"github.com/mj41/go-mc26/chat\""},
 		{"user", "\t\"github.com/mj41/go-mc26/yggdrasil/user\""},
 	} {
@@ -1950,6 +2102,8 @@ func (gs *genState) packageImports(body string) string {
 		{"chat", "\t\"github.com/mj41/go-mc26/chat\""},
 		{"sign", "\t\"github.com/mj41/go-mc26/chat/sign\""},
 		{"level", "\t\"github.com/mj41/go-mc26/level\""},
+		{"block", "\t\"github.com/mj41/go-mc26/level/block\""},
+		{"biome", "\t\"github.com/mj41/go-mc26/level/biome\""},
 		{"user", "\t\"github.com/mj41/go-mc26/yggdrasil/user\""},
 	} {
 		if usesPackage(body, p.prefix) {
@@ -2072,6 +2226,7 @@ func (gs *genState) renderStructs() string {
 	gs.renderUnions(&sb)
 	gs.renderBits(&sb)
 	gs.renderWhileLists(&sb)
+	gs.renderWidthFns(&sb)
 	for _, name := range gs.order {
 		s := gs.structs[name]
 		fmt.Fprintf(&sb, "// %s is Java %s.\ntype %s struct {\n", name, s.Java, name)

@@ -75,7 +75,7 @@ func (m *Manager) handlePlayerChat(packet pk.Packet) error {
 	sender, index, signature, body := pc.Sender, pc.Index, pc.Signature, pc.Body
 	unsignedContent, filter, chatType := pc.UnsignedContent, pc.FilterMask, pc.ChatType
 
-	unpackedMsg, err := body.Unpack(&m.SignatureCache)
+	unpackedMsg, err := sign.Unpack(&body, &m.SignatureCache)
 	if err != nil {
 		return InvalidChatPacket{err}
 	}
@@ -121,7 +121,7 @@ func (m *Manager) handlePlayerChat(packet pk.Packet) error {
 	if unsignedContent.Has {
 		content = unsignedContent.Val
 	} else {
-		content = chat.Text(body.PlainMsg)
+		content = chat.Text(string(body.Content))
 	}
 	msg := chatType.Decorate(content, decoration)
 	return m.events.PlayerChatMessage(msg, validated)

@@ -42,46 +42,105 @@ type Packet struct {
 	Data  string `json:"data"` // hex of everything after the packet id
 }
 
-// IDs are the packets that change the state or the framing. They are read from
-// packets.json rather than written down here, since their numbers move between
-// versions like every other packet's.
+// IDs are the packets that change the state or the framing: what the frame
+// section of nodes.json names (frame.data), with the numbers packets.json gives
+// them in this version.
 type IDs struct {
-	Compression       int32 // login/clientbound minecraft:login_compression
-	EncryptionRequest int32 // login/clientbound minecraft:hello
-	LoginAck          int32 // login/serverbound minecraft:login_acknowledged
-	FinishConfig      int32 // configuration/serverbound minecraft:finish_configuration
-	ConfigAck         int32 // play/serverbound minecraft:configuration_acknowledged
+	Compression       int32 // frame.data.compression.enabledBy
+	EncryptionRequest int32 // frame.data.encryption.requestedBy
+	Transitions       []Transition
 }
 
-// LoadIDs reads the state-changing packet ids from a packets.json.
-func LoadIDs(path string) (IDs, error) {
+// Transition is one state change: after a packet of State/Flow/ID the
+// connection is in To, or, when the packet carries the choice (the handshake's
+// intention), in the state its first var int selects in Values.
+type Transition struct {
+	State, Flow string
+	ID          int32
+	To          string
+	Values      map[int32]string
+}
+
+type packetRef struct {
+	State  string `json:"state"`
+	Flow   string `json:"flow"`
+	Packet string `json:"packet"`
+}
+
+// LoadIDs reads what changes the state or the framing from the frame section
+// of nodes.json, and the ids of those packets from a packets.json.
+func LoadIDs(packetsPath, nodesPath string) (IDs, error) {
 	var report map[string]map[string]map[string]struct {
 		ProtocolID int32 `json:"protocol_id"`
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(packetsPath)
 	if err != nil {
 		return IDs{}, err
 	}
 	if err := json.Unmarshal(b, &report); err != nil {
-		return IDs{}, fmt.Errorf("%s: %w", path, err)
+		return IDs{}, fmt.Errorf("%s: %w", packetsPath, err)
+	}
+	var nodes struct {
+		Frame struct {
+			Data struct {
+				Compression struct {
+					EnabledBy packetRef `json:"enabledBy"`
+				} `json:"compression"`
+				Encryption struct {
+					RequestedBy packetRef `json:"requestedBy"`
+				} `json:"encryption"`
+				States struct {
+					Transitions []struct {
+						After  packetRef         `json:"after"`
+						To     string            `json:"to"`
+						Values map[string]string `json:"values"`
+					} `json:"transitions"`
+				} `json:"states"`
+			} `json:"data"`
+		} `json:"frame"`
+	}
+	b, err = os.ReadFile(nodesPath)
+	if err != nil {
+		return IDs{}, err
+	}
+	if err := json.Unmarshal(b, &nodes); err != nil {
+		return IDs{}, fmt.Errorf("%s: %w", nodesPath, err)
+	}
+	idOf := func(ref packetRef) (int32, error) {
+		p, ok := report[ref.State][ref.Flow][ref.Packet]
+		if !ok {
+			return 0, fmt.Errorf("%s has no %s/%s %s, which nodes.json's frame names", packetsPath, ref.State, ref.Flow, ref.Packet)
+		}
+		return p.ProtocolID, nil
 	}
 	var ids IDs
-	for _, want := range []struct {
-		state, flow, name string
-		into              *int32
-	}{
-		{"login", "clientbound", "minecraft:login_compression", &ids.Compression},
-		{"login", "clientbound", "minecraft:hello", &ids.EncryptionRequest},
-		{"login", "serverbound", "minecraft:login_acknowledged", &ids.LoginAck},
-		{"configuration", "serverbound", "minecraft:finish_configuration", &ids.FinishConfig},
-		{"play", "serverbound", "minecraft:configuration_acknowledged", &ids.ConfigAck},
-	} {
-		p, ok := report[want.state][want.flow][want.name]
-		if !ok {
-			return IDs{}, fmt.Errorf("%s has no %s/%s %s, which says when the state changes",
-				path, want.state, want.flow, want.name)
+	d := nodes.Frame.Data
+	if ids.Compression, err = idOf(d.Compression.EnabledBy); err != nil {
+		return IDs{}, err
+	}
+	if ids.EncryptionRequest, err = idOf(d.Encryption.RequestedBy); err != nil {
+		return IDs{}, err
+	}
+	if len(d.States.Transitions) == 0 {
+		return IDs{}, fmt.Errorf("%s: frame.data.states has no transitions", nodesPath)
+	}
+	for _, t := range d.States.Transitions {
+		id, err := idOf(t.After)
+		if err != nil {
+			return IDs{}, err
 		}
-		*want.into = p.ProtocolID
+		tr := Transition{State: t.After.State, Flow: t.After.Flow, ID: id, To: t.To}
+		if len(t.Values) > 0 {
+			tr.Values = map[int32]string{}
+			for k, v := range t.Values {
+				var n int32
+				if _, err := fmt.Sscanf(k, "%d", &n); err != nil {
+					return IDs{}, fmt.Errorf("%s: transition value %q", nodesPath, k)
+				}
+				tr.Values[n] = v
+			}
+		}
+		ids.Transitions = append(ids.Transitions, tr)
 	}
 	return ids, nil
 }
@@ -284,36 +343,37 @@ func (s *session) body(frame []byte) ([]byte, error) {
 // or the framing they arrive in.
 func (s *session) advance(state, flow string, id int32, data []byte) error {
 	ids := s.p.IDs
-	switch {
-	case state == "handshake" && flow == "serverbound":
-		// ClientIntentionPacket: protocol var int, host string, port, intent.
-		// The intent is what says whether login or status follows.
-		intent, err := intentOf(data)
-		if err != nil {
-			return fmt.Errorf("the handshake: %w", err)
-		}
-		switch intent {
-		case 1:
-			s.state = "status"
-		case 2, 3: // login, transfer
-			s.state = "login"
-		default:
-			return fmt.Errorf("the handshake asked for intent %d, which is neither status nor login", intent)
-		}
-	case state == "login" && flow == "clientbound" && id == ids.EncryptionRequest:
+	if state == "login" && flow == "clientbound" && id == ids.EncryptionRequest {
 		return fmt.Errorf("the server asked for encryption; this records plain frames only")
-	case state == "login" && flow == "clientbound" && id == ids.Compression:
+	}
+	if state == "login" && flow == "clientbound" && id == ids.Compression {
 		n, _, err := readVarInt(data)
 		if err != nil {
 			return fmt.Errorf("the compression threshold: %w", err)
 		}
 		s.threshold = int(n)
-	case state == "login" && flow == "serverbound" && id == ids.LoginAck:
-		s.state = "configuration"
-	case state == "configuration" && flow == "serverbound" && id == ids.FinishConfig:
-		s.state = "play"
-	case state == "play" && flow == "serverbound" && id == ids.ConfigAck:
-		s.state = "configuration"
+		return nil
+	}
+	for _, t := range ids.Transitions {
+		if state != t.State || flow != t.Flow || id != t.ID {
+			continue
+		}
+		if t.Values == nil {
+			s.state = t.To
+			return nil
+		}
+		// the packet carries the choice: the handshake's intention (protocol var int,
+		// host string, port, then the intent) says whether status or login follows
+		intent, err := intentOf(data)
+		if err != nil {
+			return fmt.Errorf("the handshake: %w", err)
+		}
+		to, ok := t.Values[intent]
+		if !ok {
+			return fmt.Errorf("the handshake asked for intent %d, which nodes.json's frame does not name", intent)
+		}
+		s.state = to
+		return nil
 	}
 	return nil
 }

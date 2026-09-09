@@ -81,7 +81,7 @@ func (w *World) handleLevelChunkWithLightPacket(packet pk.Packet) error {
 		heightmaps[int32(e.Key)] = longs
 	}
 	chunk.SetHeightmapData(heightmaps)
-	if err := chunk.PutData(p.ChunkData.Buffer); err != nil {
+	if err := chunk.PutSections(p.ChunkData.Buffer.V); err != nil {
 		return err
 	}
 	chunk.BlockEntity = []level.BlockEntity(p.ChunkData.BlockEntitiesData)

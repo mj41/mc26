@@ -1,7 +1,8 @@
 package level
 
 import (
-	"io"
+	"fmt"
+	"github.com/mj41/go-mc26/wire"
 	"strconv"
 
 	"github.com/mj41/go-mc26/level/biome"
@@ -127,60 +128,6 @@ func (p *PaletteContainer[T]) Set(i int, v T) {
 	}
 }
 
-func (p *PaletteContainer[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	var nBits pk.UnsignedByte
-	n, err = nBits.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	p.bits = p.config.bits(int(nBits))
-	p.palette = p.config.create(int(nBits))
-
-	nn, err := p.palette.ReadFrom(r)
-	n += nn
-	if err != nil {
-		return n, err
-	}
-
-	// Protocol 770+ (MC 1.21.5+): data array has no VarInt length prefix.
-	// Compute expected long count from bits and container capacity.
-	dataLen := calcBitStorageSize(p.bits, p.data.length)
-	if cap(p.data.data) >= dataLen {
-		p.data.data = p.data.data[:dataLen]
-	} else {
-		p.data.data = make([]uint64, dataLen)
-	}
-	var v pk.Long
-	for i := range p.data.data {
-		nn, err = v.ReadFrom(r)
-		n += nn
-		if err != nil {
-			return n, err
-		}
-		p.data.data[i] = uint64(v)
-	}
-	return n, p.data.Fix(p.bits)
-}
-
-func (p *PaletteContainer[T]) WriteTo(w io.Writer) (n int64, err error) {
-	n, err = pk.Tuple{
-		pk.UnsignedByte(p.bits),
-		p.palette,
-	}.WriteTo(w)
-	if err != nil {
-		return n, err
-	}
-	// Protocol 770+ (MC 1.21.5+): write data longs without VarInt length prefix.
-	for _, v := range p.data.Raw() {
-		nn, err := pk.Long(v).WriteTo(w)
-		n += nn
-		if err != nil {
-			return n, err
-		}
-	}
-	return n, nil
-}
-
 // Palette export the raw palette values for @maxsupermanhd.
 // Others shouldn't call this because this might be removed
 // after max doesn't need it anymore.
@@ -195,18 +142,9 @@ type paletteCfg[T State] interface {
 
 type statesCfg struct{}
 
-func (s statesCfg) bits(bits int) int {
-	switch bits {
-	case 0:
-		return 0
-	case 1, 2, 3, 4:
-		return 4
-	case 5, 6, 7, 8:
-		return bits
-	default:
-		return block.BitsPerBlock
-	}
-}
+// bits is the storage width for a palette byte: the table prims.json gives the
+// chunk packet, generated into section_gen.go.
+func (s statesCfg) bits(bits int) int { return PalettedContainerBlockStatesDataWidth(bits) }
 
 func (s statesCfg) create(bits int) palette[BlocksState] {
 	switch bits {
@@ -227,16 +165,7 @@ func (s statesCfg) create(bits int) palette[BlocksState] {
 
 type biomesCfg struct{}
 
-func (b biomesCfg) bits(bits int) int {
-	switch bits {
-	case 0:
-		return 0
-	case 1, 2, 3:
-		return bits
-	default:
-		return biome.BitsPerBiome
-	}
-}
+func (b biomesCfg) bits(bits int) int { return PalettedContainerBiomesDataWidth(bits) }
 
 func (b biomesCfg) create(bits int) palette[BiomesState] {
 	switch bits {
@@ -250,7 +179,6 @@ func (b biomesCfg) create(bits int) palette[BiomesState] {
 }
 
 type palette[T State] interface {
-	pk.Field
 	// id return the index of state v in the palette and true if existed.
 	// otherwise return the new bits for resize and false.
 	id(v T) (int, bool)
@@ -279,20 +207,6 @@ func (s *singleValuePalette[T]) value(i int) T {
 
 func (s *singleValuePalette[T]) export() []T {
 	return []T{s.v}
-}
-
-func (s *singleValuePalette[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	var i pk.VarInt
-	n, err = i.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	s.v = T(i)
-	return
-}
-
-func (s *singleValuePalette[T]) WriteTo(w io.Writer) (n int64, err error) {
-	return pk.VarInt(s.v).WriteTo(w)
 }
 
 type linearPalette[T State] struct {
@@ -324,41 +238,6 @@ func (l *linearPalette[T]) export() []T {
 	return l.values
 }
 
-func (l *linearPalette[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	var size, value pk.VarInt
-	if n, err = size.ReadFrom(r); err != nil {
-		return
-	}
-	if int(size) > cap(l.values) {
-		l.values = make([]T, size)
-	} else {
-		l.values = l.values[:size]
-	}
-	for i := 0; i < int(size); i++ {
-		if nn, err := value.ReadFrom(r); err != nil {
-			return n + nn, err
-		} else {
-			n += nn
-		}
-		l.values[i] = T(value)
-	}
-	return
-}
-
-func (l *linearPalette[T]) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = pk.VarInt(len(l.values)).WriteTo(w); err != nil {
-		return
-	}
-	for _, v := range l.values {
-		if nn, err := pk.VarInt(v).WriteTo(w); err != nil {
-			return n + nn, err
-		} else {
-			n += nn
-		}
-	}
-	return
-}
-
 type hashPalette[T State] struct {
 	ids    map[T]int
 	values []T
@@ -388,42 +267,6 @@ func (h *hashPalette[T]) export() []T {
 	return h.values
 }
 
-func (h *hashPalette[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	var size, value pk.VarInt
-	if n, err = size.ReadFrom(r); err != nil {
-		return
-	}
-	if int(size) > cap(h.values) {
-		h.values = make([]T, size)
-	} else {
-		h.values = h.values[:size]
-	}
-	for i := 0; i < int(size); i++ {
-		if nn, err := value.ReadFrom(r); err != nil {
-			return n + nn, err
-		} else {
-			n += nn
-		}
-		h.values[i] = T(value)
-		h.ids[T(value)] = i
-	}
-	return
-}
-
-func (h *hashPalette[T]) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = pk.VarInt(len(h.values)).WriteTo(w); err != nil {
-		return
-	}
-	for _, v := range h.values {
-		if nn, err := pk.VarInt(v).WriteTo(w); err != nil {
-			return n + nn, err
-		} else {
-			n += nn
-		}
-	}
-	return
-}
-
 type globalPalette[T State] struct{}
 
 func (g *globalPalette[T]) id(v T) (int, bool) {
@@ -438,10 +281,96 @@ func (g *globalPalette[T]) export() []T {
 	return []T{}
 }
 
-func (g *globalPalette[T]) ReadFrom(_ io.Reader) (int64, error) {
-	return 0, nil
+// The chunk packet's form of a container is generated from prims.json into
+// section_gen.go (PalettedContainerBlockStates, PalettedContainerBiomes): the
+// palette byte, the single value or the palette it selects, and the packed
+// longs. A container is built from it and written back as it.
+
+// StatesFromWire builds a block state container from the packet's form.
+func StatesFromWire(w *PalettedContainerBlockStates) (*PaletteContainer[BlocksState], error) {
+	bits := int(w.Bits)
+	var p palette[BlocksState]
+	switch {
+	case bits == 0:
+		p = &singleValuePalette[BlocksState]{v: BlocksState(w.Single)}
+	case bits <= 4:
+		p = &linearPalette[BlocksState]{bits: 4, values: statesOf(w.Palette)}
+	case bits <= 8:
+		values := statesOf(w.Palette)
+		ids := make(map[BlocksState]int, len(values))
+		for i, v := range values {
+			ids[v] = i
+		}
+		p = &hashPalette[BlocksState]{bits: bits, ids: ids, values: values}
+	default:
+		p = &globalPalette[BlocksState]{}
+	}
+	return containerFromWire[BlocksState](statesCfg{}, p, PalettedContainerBlockStatesDataWidth(bits), 16*16*16, w.Data)
 }
 
-func (g *globalPalette[T]) WriteTo(_ io.Writer) (int64, error) {
-	return 0, nil
+// BiomesFromWire builds a biome container from the packet's form.
+func BiomesFromWire(w *PalettedContainerBiomes) (*PaletteContainer[BiomesState], error) {
+	bits := int(w.Bits)
+	var p palette[BiomesState]
+	switch {
+	case bits == 0:
+		p = &singleValuePalette[BiomesState]{v: BiomesState(w.Single)}
+	case bits <= 3:
+		p = &linearPalette[BiomesState]{bits: bits, values: biomesOf(w.Palette)}
+	default:
+		p = &globalPalette[BiomesState]{}
+	}
+	return containerFromWire[BiomesState](biomesCfg{}, p, PalettedContainerBiomesDataWidth(bits), 4*4*4, w.Data)
+}
+
+func containerFromWire[T State](cfg paletteCfg[T], p palette[T], width, length int, data wire.Packed) (*PaletteContainer[T], error) {
+	if want := wire.PackedLongs(length, width); len(data) != want {
+		return nil, fmt.Errorf("a container of %d values at %d bits has %d longs, not %d", length, width, want, len(data))
+	}
+	c := &PaletteContainer[T]{bits: width, config: cfg, palette: p, data: NewBitStorage(width, length, data)}
+	return c, c.data.Fix(width)
+}
+
+// StatesToWire is the packet's form of a block state container.
+func StatesToWire(p *PaletteContainer[BlocksState]) PalettedContainerBlockStates {
+	w := PalettedContainerBlockStates{Bits: pk.Byte(p.bits), Data: p.data.Raw()}
+	switch p.palette.(type) {
+	case *singleValuePalette[BlocksState]:
+		w.Single = pk.VarInt(p.palette.export()[0])
+	case *linearPalette[BlocksState], *hashPalette[BlocksState]:
+		for _, v := range p.palette.export() {
+			w.Palette = append(w.Palette, pk.VarInt(v))
+		}
+	}
+	return w
+}
+
+// BiomesToWire is the packet's form of a biome container.
+func BiomesToWire(p *PaletteContainer[BiomesState]) PalettedContainerBiomes {
+	w := PalettedContainerBiomes{Bits: pk.Byte(p.bits), Data: p.data.Raw()}
+	switch p.palette.(type) {
+	case *singleValuePalette[BiomesState]:
+		w.Single = pk.VarInt(p.palette.export()[0])
+	case *linearPalette[BiomesState]:
+		for _, v := range p.palette.export() {
+			w.Palette = append(w.Palette, pk.VarInt(v))
+		}
+	}
+	return w
+}
+
+func statesOf(ids wire.List[pk.VarInt, *pk.VarInt]) []BlocksState {
+	out := make([]BlocksState, len(ids))
+	for i, v := range ids {
+		out[i] = BlocksState(v)
+	}
+	return out
+}
+
+func biomesOf(ids wire.List[pk.VarInt, *pk.VarInt]) []BiomesState {
+	out := make([]BiomesState, len(ids))
+	for i, v := range ids {
+		out[i] = BiomesState(v)
+	}
+	return out
 }

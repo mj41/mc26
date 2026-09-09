@@ -27,6 +27,7 @@ kept by hand because the schema could not type them — are gone (2026-09-08): e
 component of 26.1, 26.2 and 26.3-pre-2 is generated, and a schema that cannot type one is
 reported in the generated files themselves (`skipped_gen.go` for components, the header
 comment of each `*_gen.go` packet file) rather than papered over by a hand-written type. The
-leaf types other packages implement with the same wire form (`externalHandTypes` in
-`gen_packets.go`: the signed-chat structures of `chat/sign`, the block entity of `level`) are
-the last hand-kept pieces of a packet.
+last hand-kept pieces of a packet (the signed-chat structures of `chat/sign`, the block entity
+of `level`, which the generator substituted for the schema's structs) are generated too since
+2026-09-08; `chat/sign` resolves the generated packed body against its cache and `level`
+aliases the generated block entity.

@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/mj41/mc26/gen/internal/limits"
 	"net"
 	"os"
 	"os/exec"
@@ -358,7 +359,7 @@ func cmdCrossCheck(args []string) error {
 		if err != nil {
 			return err
 		}
-		ids, err := capture.LoadIDs(filepath.Join(*data, "packets.json"))
+		ids, err := capture.LoadIDs(filepath.Join(*data, "packets.json"), filepath.Join(root, "gen", "hand-crafted", "nodes.json"))
 		if err != nil {
 			return err
 		}
@@ -401,7 +402,7 @@ func cmdCrossCheck(args []string) error {
 		// a field reads without complaint, so this checks each is read to its end.
 		check := exec.Command("go", "test", "./bot", "-run", "TestCaptureCheck", "-v", "-count=1")
 		check.Dir = *lib
-		check.Env = append(os.Environ(), "MC26_CHECK_CAPTURE="+*capturePath)
+		check.Env = limits.GoEnv("MC26_CHECK_CAPTURE=" + *capturePath)
 		out, err := check.CombinedOutput()
 		logf("%s", strings.TrimSpace(string(out)))
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/mj41/mc26/gen/internal/limits"
 	"io"
 	"os"
 	"os/exec"
@@ -135,7 +136,7 @@ func buildExamples(o Options) (string, error) {
 		}
 		cmd := exec.Command("go", "build", "-o", filepath.Join(bin, e.Name()), "./"+e.Name())
 		cmd.Dir = examples
-		cmd.Env = append(os.Environ(), "GOWORK="+work)
+		cmd.Env = limits.GoEnv("GOWORK=" + work)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("building example %s: %v\n%s", e.Name(), err, out)
 		}

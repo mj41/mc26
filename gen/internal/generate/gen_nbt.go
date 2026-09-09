@@ -17,6 +17,7 @@
 package generate
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -44,7 +45,11 @@ type regField struct{ ID, Name, Elem, Comment string }
 type nbtGen struct {
 	pkgs   map[string]*nbtPkg
 	byJava map[string]string // Java internal name → "pkg.GoName" of an emitted type
+	byName map[string]string // schema name + "|" + kind (struct, dispatch, recursive) → "pkg.GoName", what a ref points at
 	pin    string            // Java name of a registry element: stays in registry even when it is a chat class (ChatType)
+	// generic: Java class → the indexes of the fields whose type differs between the
+	// record's uses (Weighted<T>: data), which become type parameters
+	generic map[string][]int
 }
 
 type nbtPkg struct {
@@ -56,7 +61,8 @@ type nbtPkg struct {
 type nbtType struct {
 	GoName string
 	Java   string // internal name
-	Kind   string // struct, enum, union
+	Kind   string // struct, enum, union, wrapper (a recursive codec: one embedded field)
+	Params int    // struct: type parameters T0..Tn-1 (a generic record)
 	Doc    string
 	Fields []nbtField
 	Values []string // enum: constant names
@@ -81,10 +87,11 @@ func genNBT(jsonDir, outRoot string) error {
 	if err := readJSON(filepath.Join(jsonDir, "nbt_schema.json"), &schema); err != nil {
 		return fmt.Errorf("genNBT: %w (re-run extraction; the data must include GenNbtSchema's output)", err)
 	}
-	g := &nbtGen{pkgs: map[string]*nbtPkg{}, byJava: map[string]string{}}
+	g := &nbtGen{pkgs: map[string]*nbtPkg{}, byJava: map[string]string{}, byName: map[string]string{}}
 	for _, p := range []string{"chat", "registry"} {
 		g.pkgs[p] = &nbtPkg{name: p, taken: map[string]*nbtType{}}
 	}
+	g.findGenerics(&schema)
 
 	// The chat structures first: a record reached from both a chat root and a
 	// registry root lands in chat (registry imports chat, never the reverse).
@@ -93,6 +100,9 @@ func genNBT(jsonDir, outRoot string) error {
 		e := schema.Types[key]
 		if !strings.HasPrefix(e.Class, "net.minecraft.network.chat.") {
 			continue // save-format shapes: recorded in the schema, not consumed yet
+		}
+		if e.Type["k"] == "recursive" {
+			continue // the text component: described in full for other bindings, chat.Message by hand here
 		}
 		if _, _, err := g.typeOf(e.Type, "chat", "chat structure "+e.Class); err != nil {
 			return fmt.Errorf("genNBT: %s: %w", key, err)
@@ -127,6 +137,13 @@ func genNBT(jsonDir, outRoot string) error {
 			t := g.newType("registry", java, "struct")
 			t.Doc = fmt.Sprintf("%s is an element of the registry %s: Java %s, a codec without fields.", t.GoName, id, shortJava(e.Class))
 			f.Elem = "registry." + t.GoName
+		}
+		if f.Elem == "" && e.Type["k"] != "unit" {
+			// anything else (an either, a recursive codec, a list of records) by its Go type
+			if t, c := g.goType(e.Type, "registry"); t != g.raw("registry") {
+				f.Elem = "registry." + t
+				f.Comment = c
+			}
 		}
 		g.pin = ""
 		if f.Elem == "" {
@@ -210,15 +227,19 @@ func (g *nbtGen) renderElementsTest(regs []regField) string {
 	var sb strings.Builder
 	sb.WriteString(generatedHeader("gen_nbt.go", "nbt_schema.json"))
 	sb.WriteString("package registry\n\nimport (\n\t\"testing\"\n\n\t\"github.com/mj41/go-mc26/nbt\"\n)\n\n")
-	sb.WriteString("// emptyCompound is {} as an unnamed root tag.\nvar emptyCompound = []byte{nbt.TagCompound, 0, 0, nbt.TagEnd}\n\n")
-	sb.WriteString("func decodeElement[T any](t *testing.T, name string) {\n\tt.Helper()\n\tvar v T\n")
-	sb.WriteString("\tif err := nbt.Unmarshal(emptyCompound, &v); err != nil {\n\t\tt.Fatalf(\"%s: %v\", name, err)\n\t}\n}\n\n")
+	sb.WriteString("// emptyCompound is {} as an unnamed root tag; emptyList is [] (of ends).\nvar (\n\temptyCompound = []byte{nbt.TagCompound, 0, 0, nbt.TagEnd}\n\temptyList     = []byte{nbt.TagList, 0, 0, nbt.TagEnd, 0, 0, 0, 0}\n)\n\n")
+	sb.WriteString("func decodeElement[T any](t *testing.T, name string, data []byte) {\n\tt.Helper()\n\tvar v T\n")
+	sb.WriteString("\tif err := nbt.Unmarshal(data, &v); err != nil {\n\t\tt.Fatalf(\"%s: %v\", name, err)\n\t}\n}\n\n")
 	sb.WriteString("func TestElementsDecode(t *testing.T) {\n")
 	for _, r := range regs {
 		if r.Elem == "nbt.RawMessage" {
 			continue
 		}
-		fmt.Fprintf(&sb, "\tdecodeElement[%s](t, %q)\n", g.local("registry", r.Elem), r.ID)
+		data := "emptyCompound"
+		if strings.HasPrefix(g.local("registry", r.Elem), "[]") {
+			data = "emptyList"
+		}
+		fmt.Fprintf(&sb, "\tdecodeElement[%s](t, %q, %s)\n", g.local("registry", r.Elem), r.ID, data)
 	}
 	sb.WriteString("}\n")
 	return sb.String()
@@ -294,14 +315,147 @@ func nbtTypeName(short string) string {
 
 func (g *nbtGen) structType(n schemaNode, pkg, doc string) string {
 	java := str(n["java"])
+	params := g.generic[java]
 	if t, ok := g.byJava[java]; ok {
-		return t
+		return g.instantiate(t, n, params, pkg)
 	}
 	p := g.placement(java, pkg)
 	t := g.newType(p, java, "struct")
+	g.byName[str(n["name"])+"|struct"] = p + "." + t.GoName
 	t.Doc = fmt.Sprintf("%s is Java %s (%s).", t.GoName, shortJava(java), doc)
 	t.Fields = g.fields(n, p, t.GoName)
-	return p + "." + t.GoName
+	if len(params) > 0 {
+		// a generic record: the differing fields are its type parameters
+		t.Params = len(params)
+		t.Doc += fmt.Sprintf(" A generic record: %s stand for the element types its uses give.", paramList(len(params)))
+		for k, i := range params {
+			f := &t.Fields[i]
+			f.Type = strings.Repeat("*", strings.Count(f.Type, "*")) + fmt.Sprintf("T%d", k)
+			f.Comment = strings.TrimSpace("the type parameter " + f.Comment)
+		}
+	}
+	return g.instantiate(p+"."+t.GoName, n, params, pkg)
+}
+
+// instantiate is the use-site type of a struct: its name, with the Go types of
+// this use's parameter fields when the record is generic.
+func (g *nbtGen) instantiate(t string, n schemaNode, params []int, pkg string) string {
+	if len(params) == 0 {
+		return t
+	}
+	p := t[:strings.Index(t, ".")]
+	fs, _ := n["fields"].([]any)
+	var args []string
+	for _, i := range params {
+		f, _ := fs[i].(map[string]any)
+		ft, _ := f["type"].(map[string]any)
+		at, _ := g.goType(ft, p)
+		args = append(args, at)
+	}
+	_ = pkg
+	return t + "[" + strings.Join(args, ", ") + "]"
+}
+
+// typeSig identifies a type node the way its Go type does: a named node and a
+// ref to it are the same type, so a record whose uses differ only in that is
+// not generic.
+func typeSig(n map[string]any) string {
+	switch n["k"] {
+	case "struct", "dispatch", "recursive", "enum":
+		return str(n["k"]) + ":" + str(n["name"])
+	case "ref":
+		return str(n["of"]) + ":" + str(n["name"])
+	case "list":
+		e, _ := n["elem"].(map[string]any)
+		return "list(" + typeSig(e) + ")"
+	case "map":
+		k, _ := n["key"].(map[string]any)
+		v, _ := n["val"].(map[string]any)
+		return "map(" + typeSig(k) + "," + typeSig(v) + ")"
+	case "either":
+		l, _ := n["left"].(map[string]any)
+		r, _ := n["right"].(map[string]any)
+		return "either(" + typeSig(l) + "," + typeSig(r) + ")"
+	case "holder":
+		if d, ok := n["direct"].(map[string]any); ok {
+			return "holder(" + str(n["registry"]) + "," + typeSig(d) + ")"
+		}
+	}
+	b, _ := json.Marshal(n)
+	return string(b)
+}
+
+func paramList(n int) string {
+	var ps []string
+	for k := 0; k < n; k++ {
+		ps = append(ps, fmt.Sprintf("T%d", k))
+	}
+	return strings.Join(ps, ", ")
+}
+
+// findGenerics looks at every struct node of the schema: a Java record whose
+// uses give a field different types (Weighted<T>'s data: a block state here,
+// an int provider there) is a generic record, and those fields become type
+// parameters instead of the first use's type standing for all.
+func (g *nbtGen) findGenerics(schema *nbtSchemaFile) {
+	g.generic = map[string][]int{}
+	sigs := map[string][][]string{} // java → per use, per field, the type node as JSON
+	var walk func(n map[string]any)
+	walk = func(n map[string]any) {
+		if n["k"] == "struct" && n["java"] != nil {
+			var sig []string
+			fs, _ := n["fields"].([]any)
+			for _, fa := range fs {
+				f, _ := fa.(map[string]any)
+				ft, _ := f["type"].(map[string]any)
+				sig = append(sig, str(f["key"])+"="+typeSig(ft))
+			}
+			sigs[str(n["java"])] = append(sigs[str(n["java"])], sig)
+		}
+		for _, v := range n {
+			switch x := v.(type) {
+			case map[string]any:
+				walk(x)
+			case []any:
+				for _, e := range x {
+					if m, ok := e.(map[string]any); ok {
+						walk(m)
+					}
+				}
+			}
+		}
+	}
+	for _, e := range schema.Registries {
+		walk(e.Type)
+	}
+	for _, e := range schema.Types {
+		walk(e.Type)
+	}
+	for java, uses := range sigs {
+		first := uses[0]
+		var differ []int
+		sameShape := true
+		for _, u := range uses[1:] {
+			if len(u) != len(first) {
+				sameShape = false
+				break
+			}
+		}
+		if !sameShape {
+			continue
+		}
+		for i := range first {
+			for _, u := range uses[1:] {
+				if u[i] != first[i] {
+					differ = append(differ, i)
+					break
+				}
+			}
+		}
+		if len(differ) > 0 {
+			g.generic[java] = differ
+		}
+	}
 }
 
 // fields renders the fields of a struct node for code in package p.
@@ -332,7 +486,7 @@ func (g *nbtGen) fields(n schemaNode, p, owner string) []nbtField {
 		seen[name] = true
 		typ, comment := g.goType(ft, p)
 		optional := f["optional"] == true
-		if optional && pointerKind(ft) && typ != g.raw(p) {
+		if optional && (pointerKind(ft) || f["xor"] == true) && typ != g.raw(p) {
 			typ = "*" + typ
 		}
 		omit := ""
@@ -351,7 +505,7 @@ func (g *nbtGen) fields(n schemaNode, p, owner string) []nbtField {
 // absent) rather than a value with omitempty.
 func pointerKind(n map[string]any) bool {
 	switch n["k"] {
-	case "struct", "text":
+	case "struct", "text", "either", "recursive":
 		return true
 	case "dispatch":
 		return n["cases"] != nil
@@ -396,6 +550,7 @@ func (g *nbtGen) unionType(n schemaNode, pkg, doc string) string {
 	}
 	p := g.placement(java, pkg)
 	t := g.newType(p, java, "union")
+	g.byName[str(n["name"])+"|dispatch"] = p + "." + t.GoName
 	key := str(n["key"])
 	keyType := "string"
 	if kt, ok := n["keyType"].(map[string]any); ok && kt["k"] == "enum" {
@@ -439,11 +594,16 @@ func (g *nbtGen) unionType(n schemaNode, pkg, doc string) string {
 			}
 			if i, ok := index[l.key]; ok {
 				f := &t.Fields[i]
-				if f.Type != typ {
+				switch {
+				case f.Type == typ:
+					f.Comment += ", " + id
+				case strings.TrimPrefix(f.Type, "*") == strings.TrimPrefix(typ, "*"):
+					// the same type, optional in one case and not in another: the pointer form
+					f.Type = "*" + strings.TrimPrefix(typ, "*")
+					f.Comment += ", " + id
+				default:
 					f.Type = g.raw(p)
 					f.Comment += "; " + id + ": " + typ + " (differs per case)"
-				} else {
-					f.Comment += ", " + id
 				}
 				continue
 			}
@@ -515,7 +675,30 @@ func (g *nbtGen) goType(n map[string]any, p string) (string, string) {
 		dt, _ := g.goType(d, p)
 		return "Holder[" + dt + "]", "an id in " + str(n["registry"]) + " or the inline element"
 	case "either":
-		return g.raw(p), "either " + nodeSummary(n["left"].(map[string]any)) + " or " + nodeSummary(n["right"].(map[string]any))
+		l, r := n["left"].(map[string]any), n["right"].(map[string]any)
+		c := "either " + nodeSummary(l) + " or " + nodeSummary(r)
+		if p != "registry" {
+			return g.raw(p), c
+		}
+		if fs := eitherFields(n); fs != nil && n["java"] != nil {
+			// an xor of keyed fields (VerticalAnchor: absolute, above_bottom or below_top):
+			// one compound with one of the keys, a struct with each optional
+			return g.local(p, g.structType(map[string]any{"k": "struct", "name": shortJava(str(n["java"])), "java": n["java"], "fields": fs}, p, "one of its keys is present")), c
+		}
+		lt, _ := g.goType(l, p)
+		rt, _ := g.goType(r, p)
+		if lt == g.raw(p) || rt == g.raw(p) {
+			return g.raw(p), c
+		}
+		return "Either[" + lt + ", " + rt + "]", c
+	case "ref":
+		// what is being defined, inside itself: a pointer to it
+		if t, ok := g.byName[str(n["name"])+"|"+str(n["of"])]; ok {
+			return "*" + g.local(p, t), "the enclosing " + str(n["name"]) + " again"
+		}
+		return g.raw(p), "ref to " + str(n["name"]) + " (" + str(n["of"]) + "), which has no type here"
+	case "recursive":
+		return g.recursiveType(n, p)
 	case "dispatch":
 		if n["cases"] == nil {
 			return g.raw(p), fmt.Sprintf("a %s (dispatch on %q, not typed)", str(n["name"]), str(n["key"]))
@@ -527,6 +710,95 @@ func (g *nbtGen) goType(n map[string]any, p string) (string, string) {
 		return g.raw(p), "opaque: " + str(n["java"])
 	}
 	return g.raw(p), "unknown node " + str(n["k"])
+}
+
+// recursiveType is the Go type of a recursive node: its body's own type when
+// that is a named struct or union (a ref inside points at it), the body's
+// type when nothing inside refers back, and otherwise a wrapper type with the
+// body embedded, so a ref can be a pointer to something named.
+func (g *nbtGen) recursiveType(n map[string]any, p string) (string, string) {
+	name := str(n["name"])
+	body := n["type"].(map[string]any)
+	if p != "registry" {
+		return g.raw(p), "recursive " + name
+	}
+	key := name + "|recursive"
+	if t, ok := g.byName[key]; ok {
+		return g.local(p, t), ""
+	}
+	if !hasRef(body, name) {
+		return g.goType(body, p)
+	}
+	switch body["k"] {
+	case "struct", "dispatch":
+		// the body registers itself under its own kind; the recursion's name is the same node
+		t, c := g.goType(body, p)
+		if bt, ok := g.byName[name+"|"+str(body["k"])]; ok {
+			g.byName[key] = bt
+		}
+		return t, c
+	}
+	suffix := "Recursive"
+	if body["k"] == "holder" {
+		suffix = "Holder" // BlockStateProviderHolder: an id or an inline provider, which holds providers
+	}
+	t := g.newType(p, "recursive/"+name+suffix, "wrapper")
+	g.byName[key] = p + "." + t.GoName
+	bt, c := g.goType(body, p)
+	t.Doc = fmt.Sprintf("%s is the recursive codec %s: %s; a reference to it from inside is a *%s.", t.GoName, name, nodeSummary(body), t.GoName)
+	t.Fields = []nbtField{{Type: bt, Embedded: true, Comment: strings.TrimSpace("the codec itself " + c)}}
+	return g.local(p, p+"."+t.GoName), ""
+}
+
+// eitherFields flattens an either whose sides are all keyed fields (or such
+// eithers) into those fields, each optional; nil when a side is anything else.
+func eitherFields(n map[string]any) []any {
+	var out []any
+	for _, side := range []string{"left", "right"} {
+		m, _ := n[side].(map[string]any)
+		switch m["k"] {
+		case "field":
+			f := map[string]any{}
+			for k, v := range m {
+				f[k] = v
+			}
+			delete(f, "k")
+			f["optional"] = true
+			f["xor"] = true // exactly one of the keys is present: a pointer, nil when it is another
+			out = append(out, f)
+		case "either":
+			sub := eitherFields(m)
+			if sub == nil {
+				return nil
+			}
+			out = append(out, sub...)
+		default:
+			return nil
+		}
+	}
+	return out
+}
+
+// hasRef says whether a ref to name (of any kind) occurs inside n.
+func hasRef(n map[string]any, name string) bool {
+	if n["k"] == "ref" {
+		return str(n["name"]) == name
+	}
+	for _, v := range n {
+		switch x := v.(type) {
+		case map[string]any:
+			if hasRef(x, name) {
+				return true
+			}
+		case []any:
+			for _, e := range x {
+				if m, ok := e.(map[string]any); ok && hasRef(m, name) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // raw is the catch-all type of a package: nbt.RawMessage keeps the bytes for
@@ -549,6 +821,10 @@ func nodeSummary(n map[string]any) string {
 		return str(n["t"])
 	case "struct", "enum", "dispatch":
 		return str(n["k"]) + " " + str(n["name"])
+	case "recursive":
+		return "recursive " + str(n["name"]) + ": " + nodeSummary(n["type"].(map[string]any))
+	case "ref":
+		return "a " + str(n["name"]) + " again"
 	case "list":
 		return "list of " + nodeSummary(n["elem"].(map[string]any))
 	}
@@ -572,6 +848,12 @@ func nbtFieldName(key string) string {
 		sb.WriteString(strings.ToUpper(w[:1]) + w[1:])
 	}
 	name := sb.String()
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, name)
 	if name == "" || !unicode.IsLetter(rune(name[0])) {
 		name = "F" + name
 	}
@@ -620,7 +902,7 @@ func holePaths(n schemaNode, root string) []string {
 				walk(f["type"].(map[string]any), path+"."+k)
 			}
 		}
-		for _, k := range []string{"elem", "val", "direct"} {
+		for _, k := range []string{"elem", "val", "direct", "type"} { // type: a recursive node's body
 			if sub, ok := n[k].(map[string]any); ok {
 				walk(sub, path+"/"+k)
 			}
@@ -665,7 +947,15 @@ func (g *nbtGen) render(p *nbtPkg, doc string) string {
 			}
 			sb.WriteString("}\n\n")
 		default:
-			fmt.Fprintf(&sb, "// %s\ntype %s struct {\n", t.Doc, t.GoName)
+			params := ""
+			if t.Params > 0 {
+				var ps []string
+				for k := 0; k < t.Params; k++ {
+					ps = append(ps, fmt.Sprintf("T%d any", k))
+				}
+				params = "[" + strings.Join(ps, ", ") + "]"
+			}
+			fmt.Fprintf(&sb, "// %s\ntype %s%s struct {\n", t.Doc, t.GoName, params)
 			for _, f := range t.Fields {
 				if f.Embedded {
 					fmt.Fprintf(&sb, "\t%s // %s\n", f.Type, f.Comment)

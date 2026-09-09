@@ -111,6 +111,57 @@ func (s *HolderSet) UnmarshalNBT(tagType byte, r nbt.DecoderReader) error {
 	return fmt.Errorf("registry: holder set must be a string or a list, got tag %d", tagType)
 }
 
+// Either is a value one of two codecs reads (Codec.either): the first side
+// that decodes it. Left is taken when the tag decodes as L without an unknown
+// key (a string for a string side, a compound with only L's keys for a record),
+// Right otherwise; exactly one of the two is set.
+type Either[L, R any] struct {
+	Left  *L
+	Right *R
+}
+
+func (e Either[L, R]) side() any {
+	if e.Left != nil {
+		return e.Left
+	}
+	return e.Right
+}
+
+func (e Either[L, R]) TagType() byte {
+	t, _, err := marshalPayload(e.side())
+	if err != nil {
+		return nbt.TagCompound
+	}
+	return t
+}
+
+func (e Either[L, R]) MarshalNBT(w io.Writer) error {
+	_, payload, err := marshalPayload(e.side())
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(payload)
+	return err
+}
+
+func (e *Either[L, R]) UnmarshalNBT(tagType byte, r nbt.DecoderReader) error {
+	var raw nbt.RawMessage
+	if err := raw.UnmarshalNBT(tagType, r); err != nil {
+		return err
+	}
+	l := new(L)
+	if err := raw.UnmarshalDisallowUnknownField(l); err == nil {
+		e.Left, e.Right = l, nil
+		return nil
+	}
+	rv := new(R)
+	if err := raw.Unmarshal(rv); err != nil {
+		return fmt.Errorf("registry: either %T: neither side reads the tag: %w", e, err)
+	}
+	e.Left, e.Right = nil, rv
+	return nil
+}
+
 // Color is an RGB colour (ExtraCodecs.STRING_RGB_COLOR): written as "#rrggbb",
 // read from that or from an int.
 type Color int32

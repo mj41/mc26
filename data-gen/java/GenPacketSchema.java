@@ -910,23 +910,99 @@ public class GenPacketSchema {
     }
 
     /**
-     * Registries whose elements carry their own stream codec, given at registration in a bootstrap
-     * class: register("block", …, BlockParticleOption::streamCodec) — a dispatch on such a registry
-     * has one case per element, its codec interpreted with the element type bound.
+     * The class that registers a registry's elements — where register("block", …,
+     * BlockParticleOption::streamCodec) is — read from BuiltInRegistries.<clinit>: every
+     * registry is created there as registerSimple(Registries.X, bootstrap) (or a defaulted
+     * variant), and the bootstrap is either Class::bootstrap, whose owner is the class, or a
+     * lambda of BuiltInRegistries whose body touches the class's first constant
+     * (registry -> ParticleTypes.BLOCK). A dispatch on such a registry has one case per
+     * element, its codec interpreted with the element type bound.
      */
-    static final Map<String, String> REGISTRY_BOOTSTRAP = Map.of(
-        "particle_type", "net/minecraft/core/particles/ParticleTypes",
-        "recipe_display", "net/minecraft/world/item/crafting/display/RecipeDisplays",
-        "slot_display", "net/minecraft/world/item/crafting/display/SlotDisplays",
-        "number_format_type", "net/minecraft/network/chat/numbers/NumberFormatTypes",
-        "position_source_type", "net/minecraft/world/level/gameevent/PositionSourceType",
-        "debug_subscription", "net/minecraft/util/debug/DebugSubscriptions",
-        "command_argument_type", "net/minecraft/commands/synchronization/ArgumentTypeInfos",
-        // the bootstrap is sometimes the element type itself rather than a class of its own
-        "consume_effect_type", "net/minecraft/world/item/consume_effects/ConsumeEffect$Type",
-        // elements built by a helper from the registry each one wraps (makeRegistryStatType)
-        "stat_type", "net/minecraft/stats/Stats"
-    );
+    static final Map<String, String> registryBootstrapCache = new HashMap<>();
+
+    static String registryBootstrap(String registry) {
+        if (registryBootstrapCache.isEmpty()) {
+            String owner = "net/minecraft/core/registries/BuiltInRegistries";
+            ClassModel cm = classModel(owner);
+            if (cm != null) for (MethodModel m : cm.methods()) {
+                if (!m.methodName().stringValue().equals("<clinit>")) continue;
+                String key = null;
+                for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                    if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.GETSTATIC && fi.owner().asInternalName().endsWith("core/registries/Registries")) {
+                        key = registryName(fi.name().stringValue());
+                    } else if (el instanceof InvokeDynamicInstruction idi && key != null) {
+                        LambdaV l = lambdaOf(idi);
+                        String cls = l.owner().equals(owner) ? firstStaticOwner(owner, l.name()) : l.owner();
+                        if (cls != null) {
+                            registryBootstrapCache.putIfAbsent(key, cls);
+                            // the method reference itself (MaterialRules::bootstrapRules, next
+                            // to bootstrapConditions in the same class); a lambda of
+                            // BuiltInRegistries' own leaves the class's convention, "bootstrap"
+                            if (!l.owner().equals(owner)) registryBootstrapMethodCache.putIfAbsent(key, l.name());
+                        }
+                        key = null;
+                    }
+                }
+                break;
+            }
+        }
+        return registryBootstrapCache.get(registry);
+    }
+
+    static final Map<String, String> registryBootstrapMethodCache = new HashMap<>();
+
+    /** The static method of registryBootstrap's class that registers the elements ("bootstrap" unless a method reference names another). */
+    static String registryBootstrapMethod(String registry) {
+        registryBootstrap(registry);
+        return registryBootstrapMethodCache.getOrDefault(registry, "bootstrap");
+    }
+
+    static String registryBootstrapMethodByLocation(String location) {
+        registryBootstrapByLocation(location);
+        String field = registryLocationField.get(location);
+        return field == null ? "bootstrap" : registryBootstrapMethod(registryName(field));
+    }
+
+    static final Map<String, String> registryLocationField = new HashMap<>();
+
+    /**
+     * The same, by the registry's location (`worldgen/block_state_provider_type`, what an NBT
+     * dispatch names): Registries.<clinit> creates each key as createRegistryKey("<location>")
+     * and stores it in the field the bootstrap map is keyed by.
+     */
+    static String registryBootstrapByLocation(String location) {
+        if (registryLocationField.isEmpty()) {
+            ClassModel cm = classModel("net/minecraft/core/registries/Registries");
+            if (cm != null) for (MethodModel m : cm.methods()) {
+                if (!m.methodName().stringValue().equals("<clinit>")) continue;
+                String last = null;
+                for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                    if (el instanceof ConstantInstruction ci && ci.constantValue() instanceof String str) last = str;
+                    else if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.PUTSTATIC && fi.typeSymbol().descriptorString().contains("ResourceKey") && last != null) {
+                        registryLocationField.putIfAbsent(last, fi.name().stringValue());
+                        last = null;
+                    }
+                }
+                break;
+            }
+        }
+        String field = registryLocationField.get(location);
+        return field == null ? null : registryBootstrap(registryName(field));
+    }
+
+    /** The class whose static field a method reads first, or null. */
+    static String firstStaticOwner(String owner, String method) {
+        ClassModel cm = classModel(owner);
+        if (cm == null) return null;
+        for (MethodModel m : cm.methods()) {
+            if (!m.methodName().stringValue().equals(method)) continue;
+            for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                if (el instanceof FieldInstruction fi && fi.opcode() == Opcode.GETSTATIC && fi.owner().asInternalName().startsWith("net/minecraft/")) return fi.owner().asInternalName();
+            }
+            return null;
+        }
+        return null;
+    }
 
     /** The index of the first parameter of a descriptor whose type contains needle, or -1. */
     static int paramOfType(String desc, String needle) {
@@ -944,7 +1020,7 @@ public class GenPacketSchema {
     static final Map<String, List<Map<String, Object>>> registryCasesCache = new HashMap<>();
 
     static List<Map<String, Object>> registryCases(String registry, int depth) {
-        String cls = REGISTRY_BOOTSTRAP.get(registry);
+        String cls = registryBootstrap(registry);
         if (cls == null) return null;
         if (registryCasesCache.containsKey(registry)) return registryCasesCache.get(registry);
         registryCasesCache.put(registry, null);   // recursion guard
@@ -1063,7 +1139,7 @@ public class GenPacketSchema {
      * or nothing was registered, so the caller leaves the dispatch without cases.
      */
     static List<Map<String, Object>> registryMethodCases(String registry, String method, int depth) {
-        String cls = REGISTRY_BOOTSTRAP.get(registry);
+        String cls = registryBootstrap(registry);
         if (cls == null) return null;
         String key = registry + "." + method;
         if (registryMethodCache.containsKey(key)) return registryMethodCache.get(key);
@@ -1835,6 +1911,9 @@ public class GenPacketSchema {
         // a region whose condition the walker cannot read makes the reads inside it
         // conditional — unless the region turns out to be a loop, which is collapsed instead
         Set<Region> forcedBy = Collections.newSetFromMap(new IdentityHashMap<>());
+        // A switch on the ordinal of an enum just read is a dispatch on that enum: each arm
+        // reads that constant's payload. Walked as the arms come, one after the other.
+        SwitchWalk sw = null;
         Set<Region> collapsed = Collections.newSetFromMap(new IdentityHashMap<>());
         boolean conditional = false;
         Label lastLabel = null;
@@ -1878,6 +1957,12 @@ public class GenPacketSchema {
                         break;
                     }
                     boolean jump = bi.opcode() == Opcode.GOTO || bi.opcode() == Opcode.GOTO_W;
+                    if (jump && sw != null && sw.current != null) {
+                        // the arm is done; every arm leaves for the same label, which ends the switch
+                        sw.arm(values);
+                        sw.end = bi.target();
+                        break;
+                    }
                     Value[] ops = jump ? null : peek2(stack);
                     Region r = new Region(bi.target(), idx, jump ? null : branchTest(bi.opcode(), stack));
                     // `for (i = 0; i < bound; i++)`: the counter starts at zero, so the other
@@ -1889,12 +1974,37 @@ public class GenPacketSchema {
                     pending.add(r);
                 }
                 case IncrementInstruction inc -> iincs++;
-                case LookupSwitchInstruction ls -> { pending.add(new Region(ls.defaultTarget(), idx, null)); for (var c : ls.cases()) pending.add(new Region(c.target(), idx, null)); }
-                case TableSwitchInstruction ts -> { pending.add(new Region(ts.defaultTarget(), idx, null)); for (var c : ts.cases()) pending.add(new Region(c.target(), idx, null)); }
+                case LookupSwitchInstruction ls -> {
+                    Value on = stack.isEmpty() ? null : stack.pop();
+                    if (on instanceof PassedV pv && "ordinal".equals(pv.sub()) && values.contains(pv.of())) {
+                        sw = new SwitchWalk(pv.of(), values.indexOf(pv.of()));
+                        for (var c : ls.cases()) sw.caseOf.put(c.target(), c.caseValue());
+                        sw.dflt = ls.defaultTarget();
+                    } else {
+                        pending.add(new Region(ls.defaultTarget(), idx, null));
+                        for (var c : ls.cases()) pending.add(new Region(c.target(), idx, null));
+                    }
+                }
+                case TableSwitchInstruction ts -> {
+                    Value on = stack.isEmpty() ? null : stack.pop();
+                    if (on instanceof PassedV pv && "ordinal".equals(pv.sub()) && values.contains(pv.of())) {
+                        sw = new SwitchWalk(pv.of(), values.indexOf(pv.of()));
+                        for (var c : ts.cases()) sw.caseOf.put(c.target(), c.caseValue());
+                        sw.dflt = ts.defaultTarget();
+                    } else {
+                        pending.add(new Region(ts.defaultTarget(), idx, null));
+                        for (var c : ts.cases()) pending.add(new Region(c.target(), idx, null));
+                    }
+                }
                 case LabelTarget lt -> {
                     lastLabel = lt.label();
                     bound.add(lt.label());
                     labelAt.putIfAbsent(lt.label(), values.size());
+                    if (sw != null) {
+                        if (lt.label().equals(sw.end)) { sw.arm(values); sw.finish(values, owner); sw = null; }   // the last arm falls through
+                        else if (sw.caseOf.containsKey(lt.label())) { sw.current = sw.caseOf.get(lt.label()); sw.segStart = values.size(); }
+                        else if (lt.label().equals(sw.dflt)) { sw.current = -1; sw.segStart = values.size(); }
+                    }
                     for (Region r : new ArrayList<>(pending)) {
                         if (!lt.label().equals(r.target)) continue;
                         pending.remove(r);
@@ -1996,7 +2106,10 @@ public class GenPacketSchema {
                 }
                 case StackInstruction si when si.opcode() == Opcode.DUP -> { if (!stack.isEmpty()) stack.push(stack.peek()); }
                 case StackInstruction si when si.opcode() == Opcode.POP -> { if (!stack.isEmpty()) stack.pop(); }
-                case ReturnInstruction ri -> { if (!stack.isEmpty() && stack.peek() instanceof CodecV c) returned = c.n(); }
+                case ReturnInstruction ri -> {
+                    if (sw != null && sw.current != null) { sw.arm(values); sw.finish(values, owner); sw = null; }
+                    if (!stack.isEmpty() && stack.peek() instanceof CodecV c) returned = c.n();
+                }
                 default -> { }
             }
         }
@@ -2260,6 +2373,49 @@ public class GenPacketSchema {
             }
         }
         return any;
+    }
+
+    /**
+     * A switch on an enum read, walked arm by arm: `switch (type) { case A -> …; case B ->
+     * buf.readX() }` is a dispatch on the enum whose case for each constant is what its arm
+     * read — nothing (unit), one value, or a struct of several. The enum node in the reader's
+     * values is replaced by the dispatch, and the arms' reads leave the values, since the
+     * dispatch carries them.
+     */
+    static final class SwitchWalk {
+        final Map<String, Object> key;
+        final int keyAt;
+        final Map<Label, Integer> caseOf = new HashMap<>();
+        Label dflt, end;
+        Integer current;
+        int segStart;
+        final Map<Integer, List<Map<String, Object>>> arms = new TreeMap<>();
+
+        SwitchWalk(Map<String, Object> key, int keyAt) { this.key = key; this.keyAt = keyAt; }
+
+        void arm(List<Map<String, Object>> values) {
+            if (current != null && current >= 0) arms.put(current, new ArrayList<>(values.subList(Math.min(segStart, values.size()), values.size())));
+            current = null;
+        }
+
+        void finish(List<Map<String, Object>> values, String owner) {
+            @SuppressWarnings("unchecked")
+            List<String> constants = (List<String>) key.get("values");
+            if (constants == null) return;
+            List<Map<String, Object>> cases = new ArrayList<>();
+            for (int i = 0; i < constants.size(); i++) {
+                List<Map<String, Object>> body = arms.getOrDefault(i, List.of());
+                Map<String, Object> t = body.isEmpty() ? node("unit") : body.size() == 1 ? body.get(0) : elemStruct(body, owner);
+                Map<String, Object> c = new LinkedHashMap<>();
+                c.put("k", "case"); c.put("id", constants.get(i)); c.put("num", i); c.put("type", t);
+                cases.add(c);
+            }
+            Map<String, Object> d = node("dispatch", "name", shortName(owner), "key", key, "cases", cases);
+            for (List<Map<String, Object>> body : arms.values()) for (Map<String, Object> b : body) removeIdentity(values, b);
+            int at = values.indexOf(key);
+            if (at >= 0) values.set(at, d); else values.add(keyAt, d);
+            hintOf.putIfAbsent(d, hintOf.getOrDefault(key, lowerFirst(shortName(owner))));
+        }
     }
 
     /** What one turn of a loop reads: the value itself, or a struct of the values in order. */
@@ -2849,6 +3005,11 @@ public class GenPacketSchema {
         List<Value> args = popArgs(stack, n);
         Value recv = isStatic ? null : (stack.isEmpty() ? new OtherV("underflow") : stack.pop());
         String ret = desc.substring(desc.indexOf(')') + 1);
+        // type.ordinal() on an enum just read: the number a switch is about to select on
+        if (name.equals("ordinal") && desc.equals("()I") && recv instanceof CodecV oc && "enum".equals(oc.n().get("k"))) {
+            stack.push(new PassedV(oc.n(), "ordinal"));
+            return;
+        }
         boolean isBuf = owner.endsWith("FriendlyByteBuf") || owner.endsWith("RegistryFriendlyByteBuf") || owner.endsWith("io/netty/buffer/ByteBuf")
             // VarInt moved out of the codec package in 26.3; its own byte loop is not a
             // packet's, so it has to be recognised wherever it lives

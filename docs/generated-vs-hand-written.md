@@ -81,8 +81,9 @@ their bits, enums that do not travel as their ordinal. On 2026-09-07 and 08 the 
 hand-written component types went (all 122 components of 26.3-pre-2 are generated from their
 codec chains), the chunk sections were described down to the palettes and packed longs, and
 the cross-language check became part of the pipeline. Every packet and component of 26.1, 26.2
-and 26.3-pre-2 is generated; the one partial description left is `player_chat`'s `FilterMask`
-in 26.1 and 26.2, whose hand-written type is right on the wire.
+and 26.3-pre-2 is generated, and no packet or component of the three is partial: the last,
+`player_chat`'s `FilterMask` in 26.1 and 26.2, is read as the dispatch it is since the walker
+follows a switch on an enum.
 
 ## What the categories mean
 
@@ -113,11 +114,28 @@ of payoff:
    generated element types do not have:
    the registries sent in the configuration phase (`registry/elements_gen.go`, the `Registries`
    struct) and the chat style, click and hover events and decoration (`chat/style_gen.go`) are
-   generated from the DataFixerUpper codecs (`nbt_schema.json`); what the walker cannot type (an
-   `IntProvider`, a dispatch on a registry) stays a raw field, listed in the file header;
+   generated from the DataFixerUpper codecs (`nbt_schema.json`); since 2026-09-08 a dispatch on
+   a registry gets its cases from the registry's bootstrap class (dialogs, int providers), a
+   `forEach` over a static map registers what the map holds (the dialog actions), an inherited
+   static factory is read from the class that declares it, a helper that returns a group of
+   fields is read like a codec factory, a codec that contains itself through an `either` is a
+   named `recursive` node, and `StateHolder.codec` is the id-and-properties struct it
+   dispatches to; every registry of the three versions is described (no `opaque`, no caseless
+   dispatch), and on 2026-09-09 the last node kinds got Go types too: an `either` is
+   `registry.Either[L, R]` (the first side that decodes without an unknown key), an xor of
+   keyed fields (`VerticalAnchor`) a struct with each key optional, a `ref` a pointer to the
+   enclosing type it names (by name and kind), a `recursive` codec its body's type or a
+   wrapper with the body embedded (`BlockStateProviderHolder`), a registry whose element is a
+   list (block transformers) a slice, and a Java record whose uses give a field different
+   types (`Weighted<T>`, `ModelAndTexture<T>`) a generic Go struct with that field as its type
+   parameter; the raw fields left are the maps whose value type
+   depends on the key (game rules, environment attributes, enchantment effect components),
+   the custom payloads, and two union fields whose type differs between cases;
 3. the save formats (`level.dat`, chunks, player data in `save/`) — their shapes are read with
-   keyed accessors rather than codecs; `nbt_schema.json` already carries the codec-built parts
-   (`LevelData$RespawnData`, `WorldDataConfiguration`, `WorldOptions`);
+   keyed accessors rather than codecs (`LevelSettings` has no codec at all: `parse(Dynamic)`);
+   `nbt_schema.json` carries the codec-built parts in full since 2026-09-08
+   (`LevelData$RespawnData`, `WorldDataConfiguration`, `DataPackConfig`, `WorldOptions`,
+   `WorldDimensions` down to the density functions, surface rules and material rules);
 4. ~~entity metadata serializers~~ — done 2026-09-06, and guarded by a smoke test that summons
    entities and compares what the server sends with the generated table: `GenEntityData` + `data/entitydata` and
    `types.EntityData`; `set_entity_data` and `level_particles` are generated, the particle
@@ -129,14 +147,18 @@ of payoff:
    packets still skipped are dispatches on a registry (particles, recipes, debug values) and a
    few readers with loops (`set_equipment`, `commands`, the advancements) — all of which have
    since been typed: no packet is skipped in 26.1, 26.2 or 26.3-pre-2;
-6. the chunk section codec (`level/palette.go`, `level/chunk.go`, about 840 lines) — its wire
-   form is now described in `prims.json` (`CHUNK_SECTIONS`, `PALETTED_BLOCK_STATES`,
-   `PALETTED_BIOMES`, with the `rest` and `packed` node kinds), and `decode.py` reads chunks
-   from that description alone; the Go side still reads them with the hand-written palette
-   code, which could be generated from the same definitions;
+6. ~~the chunk section codec~~ — done 2026-09-08: its wire form is described in `prims.json`
+   (`CHUNK_SECTIONS`, `PALETTED_BLOCK_STATES`, `PALETTED_BIOMES`, with the `rest` and `packed`
+   node kinds), `decode.py` reads chunks from that description alone, and the Go side does too:
+   `level/section_gen.go` is generated from those definitions (the section, the two paletted
+   containers, the width functions), and `level` converts between it and its own palettes and
+   bit storage, which is the runtime logic that stays by hand;
 7. the text component itself (`chat/message.go`, `chat/nbtmessage.go`, about 400 lines): the
-   style, click and hover events are generated from `nbt_schema.json`, the `Message` struct
-   and its NBT/JSON readers are not.
+   style, click and hover events are generated from `nbt_schema.json`, and since 2026-09-08 the
+   schema describes the whole component (`ComponentSerialization.CODEC`, recursive, with its
+   legacy dispatch on `type`); the Go `Message` struct and its NBT/JSON readers are still by
+   hand, since their behaviour (translation, formatting, the string and list forms) is most of
+   the code.
 
 The logic — NBT, framing, world files, the bot's event model, the server framework — stays
 hand-written by design.

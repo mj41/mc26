@@ -72,7 +72,9 @@ describes it to a reader who already has this library. `crosscheck` starts a van
 above and runs the traffic test (`TestSmokeTraffic`, the same bot the smoke test uses, driven
 over RCON through gives, summons, a scoreboard, a boss bar, a built chunk section and a rejoin)
 through a recording proxy. The proxy splits the stream by the frame `nodes.json` describes
-rather than by the library's framing code, follows the state changes, and keeps the first few
+rather than by the library's framing code, follows the state changes `frame.data` names (which
+packet switches to which state, which one turns compression on, with the ids `packets.json`
+gives them in that version), and keeps the first few
 packets of every state/flow/id triple of each session, both directions, in
 `temp/capture/<version>.jsonl`.
 
@@ -94,6 +96,17 @@ go run ./gen/cmd/mc26 pipeline --version 26.2 --smoke --e2e [--skip-extract]
 Extract (or reuse `temp/data/26.2`), build, unit tests, smoke, e2e. This is what
 `.github/workflows/pipeline.yml` runs on every pull request. `release` runs the smoke test
 before it commits the library, and the e2e too with `--e2e`.
+
+## Memory
+
+Everything the harness starts is bounded (`gen/internal/limits`): a go build, vet or test
+compiles four packages at a time (`GOFLAGS=-p=4` — a translation table is a large compile), a
+server's container has 2.5 GB and its JVM 1.5 GB of heap, the extraction container 6 GB and
+every JVM in it 4 GB. Run the versions one after the other, not side by side: one full pass
+(build, smoke, cross-check, e2e) holds one server and one compile at a time. Keep editors'
+language servers out of `temp/` — it carries one built library per version, 1.2 million lines
+each, rewritten by every build; `.vscode/settings.json` filters it out of gopls, which otherwise
+indexes all of them (14 GB seen).
 
 ## Adding a scenario
 

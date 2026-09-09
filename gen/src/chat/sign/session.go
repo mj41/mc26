@@ -9,6 +9,7 @@ import (
 
 	"github.com/mj41/go-mc26/chat"
 	pk "github.com/mj41/go-mc26/net/packet"
+	"github.com/mj41/go-mc26/protocol/types"
 	"github.com/mj41/go-mc26/yggdrasil/user"
 )
 
@@ -16,8 +17,8 @@ type Message struct {
 	Prev      Prev
 	Signature *Signature
 	*MessageBody
-	Unsigned *chat.Message
-	FilterMask
+	Unsigned   *chat.Message
+	FilterMask types.FilterMask
 }
 
 type Prev struct {

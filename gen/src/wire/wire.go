@@ -8,6 +8,7 @@ package wire
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -56,6 +57,105 @@ func (l LenPrefixed[T, PT]) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	m, err := w.Write(buf.Bytes())
 	return n + int64(m), err
+}
+
+// Rest is a value repeated until the enclosing window has no bytes left (a
+// length-prefixed buffer, the packet frame): no count anywhere, the reader
+// knows it has the last one when the next read finds nothing. The chunk's
+// sections are one, their number being the dimension's height, which the
+// packet does not carry (nodes.json `rest`).
+type Rest[T pk.FieldEncoder, P Ptr[T]] []T
+
+func (l *Rest[T, P]) ReadFrom(r io.Reader) (n int64, err error) {
+	*l = (*l)[:0]
+	var first [1]byte
+	for {
+		// whether anything is left is known before an element is read, not from
+		// the error an element's own reader wraps around the end
+		if _, err := io.ReadFull(r, first[:]); err != nil {
+			if err == io.EOF {
+				return n, nil
+			}
+			return n, err
+		}
+		n++
+		var elem T
+		m, err := P(&elem).ReadFrom(io.MultiReader(bytes.NewReader(first[:]), r))
+		n += m - 1
+		if err != nil {
+			return n, err
+		}
+		*l = append(*l, elem)
+	}
+}
+
+func (l Rest[T, P]) WriteTo(w io.Writer) (n int64, err error) {
+	for i := range l {
+		m, err := l[i].WriteTo(w)
+		n += m
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+// Packed is a run of values packed into big-endian 64-bit longs, kept as the
+// longs: floor(64/width) values per long, none crossing a long, exactly
+// ceil(entries/that) longs and no count in front of them, none at all when
+// the width is 0 (nodes.json `packed`). The count and the width are not on the
+// wire — the palette byte read before it selects the width — so a Packed reads
+// and writes through PackedOf, which is handed both.
+type Packed []uint64
+
+// PackedOf pairs a Packed with its count of values and its width.
+func PackedOf(p *Packed, entries, width int) *packedOf {
+	return &packedOf{p, entries, width}
+}
+
+type packedOf struct {
+	p              *Packed
+	entries, width int
+}
+
+// PackedLongs is how many longs a run of entries values of width bits takes.
+func PackedLongs(entries, width int) int {
+	if width <= 0 {
+		return 0
+	}
+	perLong := 64 / width
+	return (entries + perLong - 1) / perLong
+}
+
+func (c *packedOf) ReadFrom(r io.Reader) (n int64, err error) {
+	longs := PackedLongs(c.entries, c.width)
+	*c.p = make(Packed, longs)
+	var buf [8]byte
+	for i := range *c.p {
+		m, err := io.ReadFull(r, buf[:])
+		n += int64(m)
+		if err != nil {
+			return n, err
+		}
+		(*c.p)[i] = binary.BigEndian.Uint64(buf[:])
+	}
+	return n, nil
+}
+
+func (c *packedOf) WriteTo(w io.Writer) (n int64, err error) {
+	if want := PackedLongs(c.entries, c.width); len(*c.p) != want {
+		return 0, fmt.Errorf("%d longs where %d values of %d bits take %d", len(*c.p), c.entries, c.width, want)
+	}
+	var buf [8]byte
+	for _, v := range *c.p {
+		binary.BigEndian.PutUint64(buf[:], v)
+		m, err := w.Write(buf[:])
+		n += int64(m)
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
 }
 
 // Ptr is the pointer-receiver decoder constraint used by the generic containers.
@@ -288,10 +388,21 @@ func (t NBT) WriteTo(w io.Writer) (int64, error) {
 	return pk.NBT(t.RawMessage).WriteTo(w)
 }
 
+// SetRaw stores an undecoded payload.
+func (t *NBT) SetRaw(v nbt.RawMessage) { t.RawMessage = v }
+
 // OptionalNBT is an NBT payload that may be absent (a single TAG_End byte).
 type OptionalNBT struct {
 	Has bool
 	NBT
+}
+
+// SetRaw stores an undecoded payload and marks it present. A field that one
+// version carries as NBT and another as OptionalNBT (the chunk's block entity
+// tag) is set the same way in both.
+func (t *OptionalNBT) SetRaw(v nbt.RawMessage) {
+	t.Has = true
+	t.RawMessage = v
 }
 
 func (t *OptionalNBT) ReadFrom(r io.Reader) (int64, error) {

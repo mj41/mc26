@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/mj41/go-mc26/wire"
 	"io"
 	"math/bits"
 	"strconv"
@@ -100,12 +101,15 @@ func ChunkFromSave(c *save.Chunk) (*Chunk, error) {
 		if err := v.Unmarshal(&tmp); err != nil {
 			return nil, err
 		}
-		blockEntities[i].Data = v
-		if x, z := int(tmp.X-c.XPos<<4), int(tmp.Z-c.ZPos<<4); !blockEntities[i].PackXZ(x, z) {
+		blockEntities[i].Tag.SetRaw(v) // NBT in 26.1 and 26.2, OptionalNBT from 26.3 on
+		x, z := int(tmp.X-c.XPos<<4), int(tmp.Z-c.ZPos<<4)
+		xz, ok := PackBlockEntityXZ(x, z)
+		if !ok {
 			return nil, errors.New("Packing a XZ(" + strconv.Itoa(x) + ", " + strconv.Itoa(z) + ") out of bound")
 		}
-		blockEntities[i].Y = int16(tmp.Y)
-		blockEntities[i].Type = block.EntityTypes[tmp.ID]
+		blockEntities[i].PackedXZ = xz
+		blockEntities[i].Y = pk.Short(tmp.Y)
+		blockEntities[i].Type = pk.VarInt(block.EntityTypes[tmp.ID])
 	}
 
 	bitsForHeight := bits.Len( /* chunk height in blocks */ uint(secs)*16 + 1)
@@ -280,22 +284,24 @@ func (c *Chunk) SetHeightmapData(data map[int32][]uint64) {
 	}
 }
 
-func (c *Chunk) Data() ([]byte, error) {
-	var buff bytes.Buffer
+// WireSections is the chunk's sections in the chunk packet's form (the
+// generated LevelChunkSection), bottom section first.
+func (c *Chunk) WireSections() []LevelChunkSection {
+	out := make([]LevelChunkSection, len(c.Sections))
 	for i := range c.Sections {
-		_, err := c.Sections[i].WriteTo(&buff)
-		if err != nil {
-			return nil, err
-		}
+		out[i] = c.Sections[i].ToWire()
 	}
-	return buff.Bytes(), nil
+	return out
 }
 
-func (c *Chunk) PutData(data []byte) error {
-	r := bytes.NewReader(data)
-	for i := range c.Sections {
-		_, err := c.Sections[i].ReadFrom(r)
-		if err != nil {
+// PutSections fills the chunk from the sections of a chunk packet, which has
+// as many as the dimension has (its height in blocks / 16).
+func (c *Chunk) PutSections(secs []LevelChunkSection) error {
+	if len(secs) != len(c.Sections) {
+		return fmt.Errorf("a chunk packet with %d sections for a dimension of %d", len(secs), len(c.Sections))
+	}
+	for i := range secs {
+		if err := c.Sections[i].FromWire(&secs[i]); err != nil {
 			return err
 		}
 	}
@@ -311,41 +317,23 @@ type HeightMaps struct {
 	MotionBlockingNoLeaves *BitStorage // test = BlocksMotion or isFluid
 }
 
-type BlockEntity struct {
-	XZ   int8
-	Y    int16
-	Type block.EntityType
-	Data nbt.RawMessage
+// BlockEntity is a block entity as the chunk packet carries it (generated into
+// package wire from the schema): the position packed into a byte and a short,
+// the block entity type's registry id and its NBT.
+type BlockEntity = wire.LevelChunkPacketDataBlockEntityInfo
+
+// BlockEntityXZ unpacks the x and z of a block entity within its chunk.
+func BlockEntityXZ(b BlockEntity) (X, Z int) {
+	return int((uint8(b.PackedXZ) >> 4) & 0xF), int(uint8(b.PackedXZ) & 0xF)
 }
 
-func (b BlockEntity) UnpackXZ() (X, Z int) {
-	return int((uint8(b.XZ) >> 4) & 0xF), int(uint8(b.XZ) & 0xF)
-}
-
-func (b *BlockEntity) PackXZ(X, Z int) bool {
+// PackBlockEntityXZ packs an x and z within a chunk into the byte the packet
+// carries; false when either is out of range.
+func PackBlockEntityXZ(X, Z int) (pk.Byte, bool) {
 	if X > 0xF || Z > 0xF || X < 0 || Z < 0 {
-		return false
+		return 0, false
 	}
-	b.XZ = int8(X<<4 | Z)
-	return true
-}
-
-func (b BlockEntity) WriteTo(w io.Writer) (n int64, err error) {
-	return pk.Tuple{
-		pk.Byte(b.XZ),
-		pk.Short(b.Y),
-		pk.VarInt(b.Type),
-		pk.NBT(b.Data),
-	}.WriteTo(w)
-}
-
-func (b *BlockEntity) ReadFrom(r io.Reader) (n int64, err error) {
-	return pk.Tuple{
-		(*pk.Byte)(&b.XZ),
-		(*pk.Short)(&b.Y),
-		(*pk.VarInt)(&b.Type),
-		pk.NBT(&b.Data),
-	}.ReadFrom(r)
+	return pk.Byte(X<<4 | Z), true
 }
 
 type Section struct {
@@ -375,22 +363,24 @@ func (s *Section) SetBlock(i int, v BlocksState) {
 	s.States.Set(i, v)
 }
 
-// WriteTo encodes the section in the 26.1+ network layout:
-// blockCount:Short, fluidCount:Short, states:PalettedContainer, biomes:PalettedContainer.
-func (s *Section) WriteTo(w io.Writer) (int64, error) {
-	return pk.Tuple{
-		pk.Short(s.BlockCount),
-		pk.Short(s.FluidCount),
-		s.States,
-		s.Biomes,
-	}.WriteTo(w)
+// ToWire is the section in the chunk packet's form: the block and fluid
+// counts, then the two containers (LevelChunkSection, generated from prims.json).
+func (s *Section) ToWire() LevelChunkSection {
+	return LevelChunkSection{
+		NonEmptyBlockCount: pk.Short(s.BlockCount),
+		FluidCount:         pk.Short(s.FluidCount),
+		States:             StatesToWire(s.States),
+		Biomes:             BiomesToWire(s.Biomes),
+	}
 }
 
-func (s *Section) ReadFrom(r io.Reader) (int64, error) {
-	return pk.Tuple{
-		(*pk.Short)(&s.BlockCount),
-		(*pk.Short)(&s.FluidCount),
-		s.States,
-		s.Biomes,
-	}.ReadFrom(r)
+// FromWire fills the section from the chunk packet's form.
+func (s *Section) FromWire(w *LevelChunkSection) (err error) {
+	s.BlockCount = int16(w.NonEmptyBlockCount)
+	s.FluidCount = int16(w.FluidCount)
+	if s.States, err = StatesFromWire(&w.States); err != nil {
+		return err
+	}
+	s.Biomes, err = BiomesFromWire(&w.Biomes)
+	return err
 }

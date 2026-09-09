@@ -18,20 +18,20 @@ describes most of it exactly; a binding implements the rest from `nodes.json` an
 |---|---:|---|---|
 | `net/packet` | 1,751 | the field types (`VarInt`, `String`, `UUID`, …), `Packet`, `Tuple`, `Option`, `Array` | the 18 natives `prims.json` names (`native` entries: bool, i8…f64be, varint, varlong, string, rest/fixed bytes, fixed bit set, optional var int, lp_vec3, nbt) — ~200 lines in decode.py |
 | `wire` | 560 | the generics behind the node kinds: `List`, `Map`, `Holder`, `HolderSet`, `Either`, `EnumSet`, `LenPrefixed`, `Counted`, `Box`, the packed positions, the NBT bridges | the 33 node kinds of `nodes.json`; decode.py's `d_*`/`e_*` methods are the reference (one per kind) |
-| `net` (conn, framing, CFB8) | 620 | the connection: length-prefixed frames, zlib compression once negotiated, AES/CFB8 encryption after login | the `frame` entry of `nodes.json` (prose, not data) plus AES/CFB8 from the login's shared secret — the one part written from Java knowledge rather than the JSON |
+| `net` (conn, framing, CFB8) | 620 | the connection: length-prefixed frames, zlib compression once negotiated, AES/CFB8 encryption after login | the `frame` entry of `nodes.json`: prose in `wire`/`fields`, and since 2026-09-08 the same as data in `frame.data` (length, body, compression with its trigger packet and limits, encryption with its trigger packets and cipher, the states and every transition with the packet that causes it); the recording proxy of `crosscheck` follows the connection from `frame.data` alone |
 | `nbt`, `nbt/dynbt` | 5,053 | the NBT codec (struct tags, dynamic values, SNBT) | the tag table of `prims.json`'s `NBT` (every id, its payload) — ~150 lines in decode.py; SNBT and reflection-based struct mapping are a convenience, not a wire need |
-| `registry` | 658 | the registry container the configuration phase fills, lookups by id and name, the NBT bridge types (`Holder`, `HolderSet`, `Color`) | `registries.json` for the built-in ids, the generated `Registries` struct for the synchronised ones; the container itself is a map |
+| `registry` | 710 | the registry container the configuration phase fills, lookups by id and name, the NBT bridge types (`Holder`, `HolderSet`, `Either`, `Color`) | `registries.json` for the built-in ids, the generated `Registries` struct for the synchronised ones; the container itself is a map |
 | `protocol/types` (types.go) | 142 | the aliases from `wire` and the bridges to chat, level and components | nothing: naming |
 | `level/component/types.go` | 328 | the item stack bridges (`SlotData`, `Typed`, `Patch`, delimited forms) | described by `prims.json` (`ITEM_STACK`, `COMPONENT_PATCH`, `DELIMITED_COMPONENT_PATCH`, `TYPED_DATA_COMPONENT`); Go keeps hand types for the API |
-| `chat` (message, nbtmessage, jsonmessage, decoration, events) | 1,321 | the text component: its NBT and JSON forms, translation, formatting; the style, click and hover events are generated (`style_gen.go`) | **not in the JSON**: the component codec (`ComponentSerialization`) is not extracted, so a binding writes it from the Java — the largest gap left (item 7 of [generated-vs-hand-written.md](generated-vs-hand-written.md)) |
-| `chat/sign` | 382 | the signed-chat wire types (`PackedMessageBody`, `PackedSignature`, `FilterMask`) and the signature cache and session | the wire types are in `packet_schema.json` (26.3 fully; 26.1/26.2 leave `FilterMask` conditional); the cache and the signing are logic |
-| `level` (chunk, palette, bitstorage, chunkstatus) | 1,184 | chunk sections and palettes: read, write, get, set | the wire form is `prims.json`'s `CHUNK_SECTIONS` / `PALETTED_*` (`rest`, `packed`); decode.py reads chunks from it alone; the container logic (get/set, palette growth) is a binding's own |
+| `chat` (message, nbtmessage, jsonmessage, decoration, events) | 1,321 | the text component: its NBT and JSON forms, translation, formatting; the style, click and hover events are generated (`style_gen.go`) | described since 2026-09-08: `nbt_schema.json`'s types carry `ComponentSerialization.CODEC` in full — a recursive `Component` that is a string, a non-empty list of components, or a compound of the contents (a legacy dispatch on `type`: text, translatable, keybind, score, selector, nbt, object), `extra` and the style; the Go `Message` stays by hand for its behaviour, another binding can generate its struct from the schema |
+| `chat/sign` | 242 | the signature cache, the session and its verification, the unpacking of a signed body against the cache; the wire types are generated | logic on top of generated types |
+| `level` (chunk, palette, bitstorage, chunkstatus) | 1,100 | palettes and bit storage: get, set, palette growth; the chunk's wire form is generated (`section_gen.go`, from `prims.json`'s `CHUNK_SECTIONS` / `PALETTED_*`) and converted from and to | the container logic is a binding's own; the wire form is in the JSON (`rest`, `packed`) |
 | `level/block` (block.go, properties.go) | 194 | block-state helpers on the generated tables | `blocks.json` |
 
-A binding that writes Tier A from `nodes.json` + `prims.json` + the Java-derived pieces (the
-frame's crypto, the text component) can then generate everything else, which is what the Go
-tree does; the two gaps to close for that to be true without Java are the text component's
-codec and the frame as data rather than prose.
+A binding that writes Tier A from `nodes.json` + `prims.json` can then generate everything
+else, which is what the Go tree does. The frame is in `nodes.json` as data (`frame.data`) as
+well as prose; the cipher it names (AES-128/CFB8, key and iv the login's shared secret) is a
+standard one every language has.
 
 ## Tier B — application: a client, a server, world files, accounts
 
@@ -62,6 +62,6 @@ generated code is trusted. They stay wherever the harness can run them.
   module or repository.
 - The `_versions/26.1` overlay (one file, `server/login.go`) is Tier B: only the server
   framework differs between versions today.
-- Two Tier A items still need Java to write in another language: the text component codec
-  and the frame's encryption. Extracting `ComponentSerialization` into `nbt_schema.json` would
-  close the first; the second is one paragraph of prose in `nodes.json` and a standard cipher.
+- Nothing in Tier A needs Java to write in another language any more: the frame is data in
+  `nodes.json` (`frame.data`, since 2026-09-08) and the text component's codec is in
+  `nbt_schema.json` (same day).
