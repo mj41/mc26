@@ -18,6 +18,7 @@ import (
 	"github.com/mj41/mc26/gen/internal/generate"
 	"github.com/mj41/mc26/gen/internal/gitx"
 	"github.com/mj41/mc26/gen/internal/prims"
+	"github.com/mj41/mc26/gen/internal/schemacheck"
 )
 
 // Options configures one build.
@@ -29,6 +30,7 @@ type Options struct {
 	DataSource string // recorded in version.go and the README, e.g. "mc26-data v0.262.0"
 	Generator  string // recorded likewise, e.g. "mc26 1a2b3c4d5e6f"
 	Test       bool   // run go test ./... in the result
+	AllowHoles bool   // build although a schema has a hole (an opaque node, a partial entry, a dangling ref)
 	Log        func(format string, args ...any)
 }
 
@@ -139,6 +141,22 @@ func Run(o Options) (*Info, error) {
 		return nil, fmt.Errorf("node kinds used by prims.json but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
 	}
 	o.Log("build %s: %d primitives and %d node kinds, all defined", v.ID, len(used), len(kinds))
+
+	// The schemas have to describe everything, or the library ships a raw field
+	// that only a reader of the JSON would notice. A version that opens a hole
+	// stops here; AllowHoles lets a build through while the extractor is fixed.
+	sc, err := schemacheck.Check(o.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	if !sc.OK() {
+		if !o.AllowHoles {
+			return nil, fmt.Errorf("schemas: %w\n(build --allow-holes to go on regardless)", sc.Err())
+		}
+		o.Log("build %s: %d holes in the schemas, allowed", v.ID, len(sc.Problems))
+	} else {
+		o.Log("build %s: %d schema entries and %d refs, all described", v.ID, sc.Entries, sc.Refs)
+	}
 
 	o.Log("build %s: generate", v.ID)
 	generate.Build = generate.BuildInfo{DataSource: o.DataSource, Generator: o.Generator}

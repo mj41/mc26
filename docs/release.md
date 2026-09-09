@@ -18,7 +18,8 @@ data tag and the `mc26` commit that built. A build is reproducible from those tw
 ## Locally
 
 ```bash
-go run ./gen/cmd/mc26 release --version 26.2            # commits and tags in ../mc26-data and ../go-mc26
+go run ./gen/cmd/mc26 update  --version 26.2            # extract, check, build, verify, then the commits and tags in ../mc26-data and ../go-mc26
+go run ./gen/cmd/mc26 release --version 26.2            # the commits and tags alone (extract + build + smoke, no cross-check, no e2e)
 go run ./gen/cmd/mc26 release --version 26.2 --push     # and pushes branches and tags
 ```
 

@@ -7,13 +7,15 @@ Java itself.
 
 ```
 gen/
-├── cmd/mc26/            extract · build · smoke · e2e · pipeline · release · report · commit · latest · tag · import-src · import-examples
+├── cmd/mc26/            extract · build · smoke · crosscheck · e2e · verify · update · pipeline · release · report · commit · latest · tag · import-src · import-examples
 ├── cmd/packetdiff/      wire-layout diff of two versions (packet_schema.json + packets.json)
+├── cmd/nbtdiff/         what the registry elements and shared NBT types gained, lost or changed between two versions (nbt_schema.json)
 ├── cmd/mcmeta/          registry preview and check against misode/mcmeta, no Java needed
 ├── cmd/schemacov/       how much of packet_schema.json is fully typed, and why the rest is not
 ├── internal/extract/    downloads (jar, language files) and the extraction container; _meta.json
 ├── internal/generate/   the generators (gen_*.go) and their helpers
 ├── internal/build/      copy src/ + generate + README/CI + go mod tidy, gofmt, build, vet, test
+├── internal/schemacheck/ the schemas describe everything (no opaque node, no caseless dispatch, every ref resolves) — build stops on a hole
 ├── internal/smoke/      vanilla server + `go test ./bot -run TestSmoke`
 ├── internal/gitx/       branch, replace tree, commit, tag, push
 ├── internal/importsrc/  one-time import of the library sources and examples from a go-mc tree

@@ -19,12 +19,13 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/mj41/mc26/gen/internal/limits"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -36,8 +37,10 @@ import (
 	"github.com/mj41/mc26/gen/internal/extract"
 	"github.com/mj41/mc26/gen/internal/gitx"
 	"github.com/mj41/mc26/gen/internal/importsrc"
+	"github.com/mj41/mc26/gen/internal/limits"
 	"github.com/mj41/mc26/gen/internal/paths"
 	"github.com/mj41/mc26/gen/internal/report"
+	"github.com/mj41/mc26/gen/internal/schemacheck"
 	"github.com/mj41/mc26/gen/internal/smoke"
 )
 
@@ -50,7 +53,10 @@ const (
 	smokePort   = 25599
 )
 
-func logf(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }
+// logOut is where every command's progress goes; verify points it at a log file per step.
+var logOut io.Writer = os.Stderr
+
+func logf(format string, args ...any) { fmt.Fprintf(logOut, format+"\n", args...) }
 
 func main() {
 	if len(os.Args) < 2 {
@@ -62,7 +68,7 @@ func main() {
 		"extract": cmdExtract, "build": cmdBuild, "commit": cmdCommit, "smoke": cmdSmoke, "e2e": cmdE2E,
 		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag, "report": cmdReport,
 		"import-src": cmdImportSrc, "import-examples": cmdImportExamples,
-		"crosscheck": cmdCrossCheck,
+		"crosscheck": cmdCrossCheck, "verify": cmdVerify, "update": cmdUpdate,
 	}
 	fn, ok := commands[cmd]
 	if !ok {
@@ -79,10 +85,12 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: mc26 <command> [flags]
 
   extract   --version V [--runtime podman|docker] [--dry-run] [--only GenNbtSchema,…]
-  build     --data DIR --out DIR [--version V] [--data-source S] [--no-test]
+  build     --data DIR --out DIR [--version V] [--data-source S] [--no-test] [--allow-holes]
   smoke     --version V [--lib DIR] [--port N] [--runtime podman|docker|host]
   e2e       --version V [--lib DIR] [--examples DIR] [--port N] [--runtime …]
   pipeline  --version V [--data DIR] [--out DIR] [--smoke] [--e2e] [--skip-extract]
+  verify    [--versions 26.1,26.2] [--steps build,smoke,crosscheck,e2e] [--quiet] [--examples DIR] [--runtime …]
+  update    [--version V | --pre] [--skip-extract] [--allow-holes] [--no-verify] [--no-commit] [--runtime …]
   release   --version V [--data-repo DIR] [--data-pre-repo DIR] [--lib-repo DIR] [--skip-extract] [--no-smoke] [--e2e] [--push]
   commit    --repo DIR --branch B --from TREE --message M [--tag-base v0.262.] [--push]
   report    --version V | --lib DIR      generated vs hand-written lines of a built library
@@ -125,12 +133,16 @@ func extractVersion(version, runtime string, dryRun bool, only ...string) (strin
 	return out, meta, err
 }
 
+// allowHoles lets `build --allow-holes` through a schema with a hole; every
+// other command builds strictly.
+var allowHoles bool
+
 // buildLib builds the library from dataDir into outDir.
 func buildLib(dataDir, outDir, version, dataSource string, test bool) (*build.Info, error) {
 	root := paths.MustRoot()
 	return build.Run(build.Options{
 		GenRoot: filepath.Join(root, "gen"), DataDir: dataDir, OutDir: outDir, Version: version,
-		DataSource: dataSource, Generator: "mc26 " + gitx.ShortHead(root), Test: test, Log: logf,
+		DataSource: dataSource, Generator: "mc26 " + gitx.ShortHead(root), Test: test, AllowHoles: allowHoles, Log: logf,
 	})
 }
 
@@ -283,7 +295,9 @@ func cmdBuild(args []string) error {
 	version := fs.String("version", "", "expected version id")
 	source := fs.String("data-source", "", "recorded in version.go (default: the data path)")
 	noTest := fs.Bool("no-test", false, "skip go test")
+	holes := fs.Bool("allow-holes", false, "build although a schema has a hole (while the extractor is being fixed)")
 	fs.Parse(args)
+	allowHoles = *holes
 	if *data == "" {
 		return fmt.Errorf("--data is required")
 	}
@@ -344,7 +358,6 @@ func cmdCrossCheck(args []string) error {
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
-	root := paths.MustRoot()
 	if *lib == "" {
 		*lib = filepath.Join(paths.Temp(), "lib", *version)
 	}
@@ -354,26 +367,33 @@ func cmdCrossCheck(args []string) error {
 	if *capturePath == "" {
 		*capturePath = filepath.Join(paths.Temp(), "capture", *version+".jsonl")
 	}
-	if !*keep {
-		jar, err := extract.ServerJar(paths.Cache(), *version, logf)
+	return runCrossCheck(*version, *data, *lib, *capturePath, *keep, *port, *runtime)
+}
+
+// runCrossCheck records a traffic session through the proxy (unless keep), checks
+// this library reads every packet of it, and hands it to the JSON-only decoder.
+func runCrossCheck(version, data, lib, capturePath string, keep bool, port int, runtime string) error {
+	root := paths.MustRoot()
+	if !keep {
+		jar, err := extract.ServerJar(paths.Cache(), version, logf)
 		if err != nil {
 			return err
 		}
-		ids, err := capture.LoadIDs(filepath.Join(*data, "packets.json"), filepath.Join(root, "gen", "hand-crafted", "nodes.json"))
+		ids, err := capture.LoadIDs(filepath.Join(data, "packets.json"), filepath.Join(root, "gen", "hand-crafted", "nodes.json"))
 		if err != nil {
 			return err
 		}
-		proxy := &capture.Proxy{Target: fmt.Sprintf("127.0.0.1:%d", *port), IDs: ids, PerID: 4, Log: logf}
+		proxy := &capture.Proxy{Target: fmt.Sprintf("127.0.0.1:%d", port), IDs: ids, PerID: 4, Log: logf}
 		l, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			return err
 		}
 		go proxy.Serve(l)
-		logf("crosscheck: recording through %s to the server on %d", l.Addr(), *port)
+		logf("crosscheck: recording through %s to the server on %d", l.Addr(), port)
 		err = smoke.Run(smoke.Options{
-			Version: *version, LibDir: *lib, JarPath: jar,
-			WorkDir: filepath.Join(paths.Temp(), "smoke", *version),
-			Port:    *port, Runtime: *runtime, Log: logf,
+			Version: version, LibDir: lib, JarPath: jar,
+			WorkDir: filepath.Join(paths.Temp(), "smoke", version),
+			Port:    port, Runtime: runtime, Log: logf,
 			TestRun:    "TestSmokeTraffic",
 			ClientAddr: l.Addr().String(),
 		})
@@ -388,21 +408,21 @@ func cmdCrossCheck(args []string) error {
 		if len(ps) == 0 {
 			return fmt.Errorf("nothing went through the proxy: the bot did not connect to it")
 		}
-		if err := os.MkdirAll(filepath.Dir(*capturePath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(capturePath), 0o755); err != nil {
 			return err
 		}
-		if err := capture.Write(*capturePath, ps); err != nil {
+		if err := capture.Write(capturePath, ps); err != nil {
 			return err
 		}
 		logf("crosscheck: %d packets of %d state/flow/id triples recorded to %s %v",
-			len(ps), len(capture.Distinct(ps)), *capturePath, proxy.Counts())
+			len(ps), len(capture.Distinct(ps)), capturePath, proxy.Counts())
 
 		// The same packets through this library's generated types, which is a
 		// different question from whether the JSON describes them: a type short of
 		// a field reads without complaint, so this checks each is read to its end.
 		check := exec.Command("go", "test", "./bot", "-run", "TestCaptureCheck", "-v", "-count=1")
-		check.Dir = *lib
-		check.Env = limits.GoEnv("MC26_CHECK_CAPTURE=" + *capturePath)
+		check.Dir = lib
+		check.Env = limits.GoEnv("MC26_CHECK_CAPTURE=" + capturePath)
 		out, err := check.CombinedOutput()
 		logf("%s", strings.TrimSpace(string(out)))
 		if err != nil {
@@ -413,16 +433,177 @@ func cmdCrossCheck(args []string) error {
 	if _, err := os.Stat(decoder); err != nil {
 		return fmt.Errorf("%s not found: the cross-language decoder is what this command runs", decoder)
 	}
-	logf("crosscheck: decoding %s with %s", *capturePath, decoder)
+	logf("crosscheck: decoding %s with %s", capturePath, decoder)
 	cmd := exec.Command("python3", decoder,
-		"--data", *data,
+		"--data", data,
 		"--prims", filepath.Join(root, "gen", "hand-crafted", "prims.json"),
 		"--nodes", filepath.Join(root, "gen", "hand-crafted", "nodes.json"),
-		"--capture", *capturePath)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		"--capture", capturePath)
+	cmd.Stdout, cmd.Stderr = logOut, logOut
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("the JSON-only decoder did not read what this library reads: %w", err)
 	}
+	return nil
+}
+
+// cmdVerify runs the whole check — build, smoke, crosscheck, e2e — for every
+// version, one step at a time (each holds one server or one compile), and
+// prints one table. A failed step does not stop the other versions; a failed
+// build skips the steps of that version that need the library.
+func cmdVerify(args []string) error {
+	fs := flag.NewFlagSet("verify", flag.ExitOnError)
+	versions := fs.String("versions", "", "comma-separated Minecraft versions (default: every extracted one under temp/data)")
+	steps := fs.String("steps", "build,smoke,crosscheck,e2e", "comma-separated steps to run, in this order")
+	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout for e2e")
+	port := fs.Int("port", smokePort, "server port")
+	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
+	quiet := fs.Bool("quiet", false, "progress goes to the log files only, not to stderr")
+	logDir := fs.String("log-dir", filepath.Join(paths.Temp(), "verify"), "one log file per version and step")
+	fs.Parse(args)
+	var vs []string
+	if *versions != "" {
+		vs = strings.Split(*versions, ",")
+	} else {
+		var err error
+		if vs, err = extractedVersions(); err != nil {
+			return err
+		}
+	}
+	return runVerify(vs, strings.Split(*steps, ","), *examples, *port, *runtime, *quiet, *logDir)
+}
+
+// extractedVersions lists the versions under temp/data, oldest first.
+func extractedVersions() ([]string, error) {
+	entries, err := os.ReadDir(paths.DataRoot())
+	if err != nil {
+		return nil, fmt.Errorf("no extracted data: %w", err)
+	}
+	var vs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			vs = append(vs, e.Name())
+		}
+	}
+	if len(vs) == 0 {
+		return nil, fmt.Errorf("no versions: extract one first")
+	}
+	sort.Slice(vs, func(i, j int) bool { return versionLess(vs[i], vs[j]) })
+	return vs, nil
+}
+
+// versionLess orders Minecraft ids: 26.1 < 26.3-pre-1 < 26.3-pre-2 < 26.3 < 26.10.
+func versionLess(a, b string) bool {
+	ka, kb := versionKey(a), versionKey(b)
+	for i := range ka {
+		if ka[i] != kb[i] {
+			return ka[i] < kb[i]
+		}
+	}
+	return a < b
+}
+
+func versionKey(v string) [4]int {
+	m := regexp.MustCompile(`^(\d+)\.(\d+)(?:-([a-z]+)-?(\d+))?$`).FindStringSubmatch(v)
+	if m == nil {
+		return [4]int{}
+	}
+	yy, _ := strconv.Atoi(m[1])
+	n, _ := strconv.Atoi(m[2])
+	if m[3] == "" {
+		return [4]int{yy, n, 9, 0} // a release sorts after its pre-releases and release candidates
+	}
+	kind := map[string]int{"snapshot": 1, "pre": 2, "rc": 3}[m[3]]
+	k, _ := strconv.Atoi(m[4])
+	return [4]int{yy, n, kind, k}
+}
+
+// runVerify is verify's body: the steps for every version, then the table.
+func runVerify(vs, wanted []string, examples string, port int, runtime string, quiet bool, logDir string) error {
+	type result struct {
+		status string // ok, FAIL, skipped
+		took   time.Duration
+		log    string
+	}
+	results := map[string]map[string]result{}
+	var failed []string
+	stderr := logOut
+	defer func() { logOut = stderr }()
+	for _, v := range vs {
+		results[v] = map[string]result{}
+		data := paths.Data(v)
+		lib := filepath.Join(paths.Temp(), "lib", v)
+		built := true
+		for _, step := range wanted {
+			logPath := filepath.Join(logDir, v, step+".log")
+			if !built {
+				results[v][step] = result{status: "skipped", log: logPath}
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+				return err
+			}
+			f, err := os.Create(logPath)
+			if err != nil {
+				return err
+			}
+			if quiet {
+				logOut = f
+			} else {
+				logOut = io.MultiWriter(stderr, f)
+			}
+			fmt.Fprintf(stderr, "########## %s %s\n", v, step)
+			start := time.Now()
+			switch step {
+			case "build":
+				_, err = buildLib(data, lib, v, "", true)
+			case "smoke":
+				err = runSmoke(v, lib, port, runtime)
+			case "crosscheck":
+				err = runCrossCheck(v, data, lib, filepath.Join(paths.Temp(), "capture", v+".jsonl"), false, port, runtime)
+			case "e2e":
+				err = runE2E(v, data, lib, examples, port, runtime)
+			default:
+				err = fmt.Errorf("unknown step %q (build, smoke, crosscheck, e2e)", step)
+			}
+			took := time.Since(start).Round(time.Second)
+			if err != nil {
+				logf("verify: %s %s FAILED after %s: %v", v, step, took, err)
+			}
+			logOut = stderr
+			f.Close()
+			r := result{status: "ok", took: took, log: logPath}
+			if err != nil {
+				r.status = "FAIL"
+				failed = append(failed, fmt.Sprintf("%s %s: %v (log: %s)", v, step, err, logPath))
+				if step == "build" {
+					built = false
+				}
+			}
+			results[v][step] = r
+		}
+	}
+	// the table, on stdout: what a reader of the run wants first
+	fmt.Printf("%-14s", "version")
+	for _, step := range wanted {
+		fmt.Printf(" %-14s", step)
+	}
+	fmt.Println()
+	for _, v := range vs {
+		fmt.Printf("%-14s", v)
+		for _, step := range wanted {
+			r := results[v][step]
+			cell := r.status
+			if r.took > 0 {
+				cell += " " + r.took.String()
+			}
+			fmt.Printf(" %-14s", cell)
+		}
+		fmt.Println()
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%d of %d steps failed:\n  %s", len(failed), len(vs)*len(wanted), strings.Join(failed, "\n  "))
+	}
+	fmt.Printf("verify: %d versions, %d steps each, all passed; logs in %s\n", len(vs), len(wanted), logDir)
 	return nil
 }
 
@@ -497,26 +678,47 @@ func cmdPipeline(args []string) error {
 // extraction always needs a container runtime, the server may use "host".
 func containerRuntime(r string) string { return r }
 
+// releaseOpts are release's flags; update fills them in too.
+type releaseOpts struct {
+	version, dataRepo, dataPreRepo, libRepo, examples, runtime string
+	skipExtract, noSmoke, dataOnly, e2e, push                  bool
+}
+
+func releaseFlags(fs *flag.FlagSet, o *releaseOpts) {
+	fs.StringVar(&o.version, "version", "", "Minecraft version id")
+	fs.StringVar(&o.dataRepo, "data-repo", sibling("mc26-data"), "checkout of mc26-data")
+	fs.StringVar(&o.dataPreRepo, "data-pre-repo", sibling("mc26-data-pre"), "checkout of mc26-data-pre (pre-releases and snapshots)")
+	fs.StringVar(&o.libRepo, "lib-repo", sibling("go-mc26"), "checkout of go-mc26")
+	fs.StringVar(&o.examples, "examples", sibling("go-mc26-examples"), "go-mc26-examples checkout for --e2e")
+	fs.StringVar(&o.runtime, "runtime", "", "podman or docker (detected)")
+}
+
 func cmdRelease(args []string) error {
 	fs := flag.NewFlagSet("release", flag.ExitOnError)
-	version := fs.String("version", "", "Minecraft version id")
-	dataRepo := fs.String("data-repo", sibling("mc26-data"), "checkout of mc26-data")
-	dataPreRepo := fs.String("data-pre-repo", sibling("mc26-data-pre"), "checkout of mc26-data-pre (pre-releases and snapshots)")
-	libRepo := fs.String("lib-repo", sibling("go-mc26"), "checkout of go-mc26")
-	skipExtract := fs.Bool("skip-extract", false, "reuse temp/data/<version> when it exists")
-	noSmoke := fs.Bool("no-smoke", false, "skip the vanilla-server smoke test")
-	dataOnly := fs.Bool("data-only", false, "stop after the data commit and tag (a pre-release whose library needs work)")
-	doE2E := fs.Bool("e2e", false, "also run the example bots against a vanilla server before committing the library")
-	examples := fs.String("examples", sibling("go-mc26-examples"), "go-mc26-examples checkout for --e2e")
-	push := fs.Bool("push", false, "push the branches and tags to origin")
-	runtime := fs.String("runtime", "", "podman or docker (detected)")
+	var o releaseOpts
+	releaseFlags(fs, &o)
+	fs.BoolVar(&o.skipExtract, "skip-extract", false, "reuse temp/data/<version> when it exists")
+	fs.BoolVar(&o.noSmoke, "no-smoke", false, "skip the vanilla-server smoke test")
+	fs.BoolVar(&o.dataOnly, "data-only", false, "stop after the data commit and tag (a pre-release whose library needs work)")
+	fs.BoolVar(&o.e2e, "e2e", false, "also run the example bots against a vanilla server before committing the library")
+	fs.BoolVar(&o.push, "push", false, "push the branches and tags to origin")
 	fs.Parse(args)
-	if *version == "" {
+	if o.version == "" {
 		return fmt.Errorf("--version is required")
 	}
+	_, _, err := runRelease(o)
+	return err
+}
+
+// runRelease is release's body: data commit and tag, the library built from
+// that data and tested, its commit and tag, and the push when asked. It
+// returns the two tags.
+func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
+	version, dataRepo, dataPreRepo, libRepo, examples, runtime := &o.version, &o.dataRepo, &o.dataPreRepo, &o.libRepo, &o.examples, &o.runtime
+	skipExtract, noSmoke, dataOnly, doE2E, push := &o.skipExtract, &o.noSmoke, &o.dataOnly, &o.e2e, &o.push
 	base, err := tagBase(*version)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	branch := "mc-" + *version
 	repo := *dataRepo
@@ -529,67 +731,180 @@ func cmdRelease(args []string) error {
 	dataDir := filepath.Join(paths.DataRoot(), *version)
 	if _, err := os.Stat(filepath.Join(dataDir, "_meta.json")); err != nil || !*skipExtract {
 		if _, _, err := extractVersion(*version, *runtime, false); err != nil {
-			return err
+			return "", "", err
 		}
 	}
 	meta, err := extract.ReadMeta(dataDir)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	stage, err := stageData(dataDir, repo)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	dataMsg := fmt.Sprintf("Extract %s (data version %d, protocol %d; mc26 %s)", meta.ID, meta.WorldVersion, meta.ProtocolVersion, meta.ExtractorCommit)
-	dataTag, err := commitTree(repo, branch, stage, dataMsg, base)
+	dataTag, err = commitTree(repo, branch, stage, dataMsg, base)
 	if err != nil {
-		return fmt.Errorf("%s: %w", dataName, err)
+		return "", "", fmt.Errorf("%s: %w", dataName, err)
 	}
 	if *dataOnly {
 		if *push {
 			if err := gitx.Push(repo, branch, dataTag); err != nil {
-				return err
+				return "", "", err
 			}
 			logf("pushed %s %s %s", dataName, branch, dataTag)
 		} else {
 			logf("release %s: %s %s committed locally (not pushed); library skipped (--data-only)", *version, dataName, dataTag)
 		}
-		return nil
+		return dataTag, "", nil
 	}
 
 	// 2. library, built from the data branch checkout, smoke-tested before it is committed
 	libOut := filepath.Join(paths.Temp(), "lib", *version)
 	if _, err := buildLib(repo, libOut, *version, dataName+" "+dataTag, true); err != nil {
-		return err
+		return "", "", err
 	}
 	if !*noSmoke {
 		if err := runSmoke(*version, libOut, smokePort, *runtime); err != nil {
-			return err
+			return "", "", err
 		}
 	}
 	if *doE2E {
 		if err := runE2E(*version, repo, libOut, *examples, smokePort, *runtime); err != nil {
-			return err
+			return "", "", err
 		}
 	}
 	libMsg := fmt.Sprintf("Build %s from %s %s (mc26 %s)", meta.ID, dataName, dataTag, gitx.ShortHead(paths.MustRoot()))
-	libTag, err := commitTree(*libRepo, branch, libOut, libMsg, base)
+	libTag, err = commitTree(*libRepo, branch, libOut, libMsg, base)
 	if err != nil {
-		return fmt.Errorf("go-mc26: %w", err)
+		return "", "", fmt.Errorf("go-mc26: %w", err)
 	}
 
 	// 3. push
 	if *push {
 		if err := gitx.Push(repo, branch, dataTag); err != nil {
-			return err
+			return "", "", err
 		}
 		if err := gitx.Push(*libRepo, branch, libTag); err != nil {
-			return err
+			return "", "", err
 		}
 		logf("pushed %s %s %s and go-mc26 %s %s", dataName, branch, dataTag, branch, libTag)
 	} else {
 		logf("release %s: %s %s / go-mc26 %s committed locally (not pushed)", *version, dataName, dataTag, libTag)
 	}
+	return dataTag, libTag, nil
+}
+
+// cmdUpdate is a new Minecraft version from the manifest to local commits:
+// extract, the schemas checked, the wire diff against the previous version,
+// a strict build, verify over every extracted version, then the data and
+// library commits and tags — never a push. It stops where a person is
+// needed: a hole in a schema (the extractor), a compile error (gen/src), a
+// failed test.
+func cmdUpdate(args []string) error {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	var o releaseOpts
+	releaseFlags(fs, &o)
+	pre := fs.Bool("pre", false, "without --version: the newest snapshot or pre-release instead of the newest release")
+	skipExtract := fs.Bool("skip-extract", false, "reuse temp/data/<version> when it exists (after fixing gen/src)")
+	holes := fs.Bool("allow-holes", false, "go on although a schema has a hole")
+	noVerify := fs.Bool("no-verify", false, "skip smoke, crosscheck and e2e")
+	noCommit := fs.Bool("no-commit", false, "stop after verify: no data or library commit")
+	fs.Parse(args)
+	start := time.Now()
+	if o.version == "" {
+		release, snapshot, err := extract.LatestVersions()
+		if err != nil {
+			return err
+		}
+		o.version = release
+		if *pre {
+			o.version = snapshot
+		}
+		logf("update: Mojang's manifest says release %s, snapshot %s: taking %s", release, snapshot, o.version)
+	}
+	v := o.version
+
+	// 1. the data
+	dataDir := paths.Data(v)
+	if _, err := os.Stat(filepath.Join(dataDir, "_meta.json")); err != nil || !*skipExtract {
+		if _, _, err := extractVersion(v, o.runtime, false); err != nil {
+			return err
+		}
+	} else {
+		logf("update: reusing %s", dataDir)
+	}
+
+	// 2. the schemas: a hole is the extractor's to close
+	sc, err := schemacheck.Check(dataDir)
+	if err != nil {
+		return err
+	}
+	if !sc.OK() {
+		if !*holes {
+			return fmt.Errorf("the extractor does not describe %s in full: %w\n(fix data-gen/java and re-extract, or --allow-holes)", v, sc.Err())
+		}
+		logf("update: %d holes in the schemas, going on", len(sc.Problems))
+	} else {
+		logf("update: schemas of %s: %d entries and %d refs, all described", v, sc.Entries, sc.Refs)
+	}
+
+	// 3. what changed on the wire, against the newest version before this one
+	all, err := extractedVersions()
+	if err != nil {
+		return err
+	}
+	prev := ""
+	for _, x := range all {
+		if x != v && versionLess(x, v) {
+			prev = x
+		}
+	}
+	if prev != "" {
+		logf("update: wire changes %s → %s (packetdiff)", prev, v)
+		diff := exec.Command("go", "run", "./gen/cmd/packetdiff", prev, v)
+		diff.Dir = paths.MustRoot()
+		diff.Env = limits.GoEnv()
+		diff.Stdout, diff.Stderr = logOut, logOut
+		if err := diff.Run(); err != nil {
+			return fmt.Errorf("packetdiff: %w", err)
+		}
+		logf("update: registry and shared-type changes %s → %s (nbtdiff)", prev, v)
+		diff = exec.Command("go", "run", "./gen/cmd/nbtdiff", prev, v)
+		diff.Dir = paths.MustRoot()
+		diff.Env = limits.GoEnv()
+		diff.Stdout, diff.Stderr = logOut, logOut
+		if err := diff.Run(); err != nil {
+			return fmt.Errorf("nbtdiff: %w", err)
+		}
+	}
+
+	// 4. the library: a compile error names the field the sources have to follow
+	allowHoles = *holes
+	libOut := filepath.Join(paths.Temp(), "lib", v)
+	if _, err := buildLib(dataDir, libOut, v, "data "+dataDir, true); err != nil {
+		return fmt.Errorf("%w\n(fix gen/src for %s, then: mc26 update --version %s --skip-extract)", err, v, v)
+	}
+
+	// 5. every extracted version against a real server: the sources changed for all of them
+	if !*noVerify {
+		if err := runVerify(all, []string{"build", "smoke", "crosscheck", "e2e"}, o.examples, smokePort, o.runtime, true, filepath.Join(paths.Temp(), "verify")); err != nil {
+			return err
+		}
+	}
+	if *noCommit {
+		logf("update %s: ok in %s, nothing committed (--no-commit)", v, time.Since(start).Round(time.Second))
+		return nil
+	}
+
+	// 6. the commits, verified already: no second smoke, no push
+	o.skipExtract, o.noSmoke, o.push = true, true, false
+	dataTag, libTag, err := runRelease(o)
+	if err != nil {
+		return err
+	}
+	logf("update %s: ok in %s — data %s, library %s, committed locally", v, time.Since(start).Round(time.Second), dataTag, libTag)
+	logf("to publish: mc26 release --version %s --skip-extract --no-smoke --push", v)
 	return nil
 }
 
@@ -637,6 +952,19 @@ func cmdReport(args []string) error {
 	if name == "" {
 		if v, err := build.ReadVersionGo(*lib); err == nil {
 			name = v
+		}
+	}
+	if name != "" {
+		if _, err := os.Stat(paths.Data(name)); err == nil {
+			sc, err := schemacheck.Check(paths.Data(name))
+			if err != nil {
+				return err
+			}
+			if sc.OK() {
+				fmt.Printf("schemas of %s: %d entries and %d refs, all described\n\n", name, sc.Entries, sc.Refs)
+			} else {
+				fmt.Printf("schemas of %s: %v\n\n", name, sc.Err())
+			}
 		}
 	}
 	r.Print(os.Stdout, name)

@@ -90,20 +90,44 @@ decoder found the JSON did and did not say when it was first written, and what h
 ## Everything at once
 
 ```bash
+go run ./gen/cmd/mc26 verify                       # every extracted version, all four steps
+go run ./gen/cmd/mc26 verify --versions 26.3-pre-2 --steps build,smoke
+```
+
+`verify` is the check to run before a commit that touches an extractor, a generator or the
+sources: build (the schema check, the generators, the unit tests), smoke, cross-check and e2e, for every version under
+`temp/data` (or the ones named), one step at a time so that only one server and one compile
+run at once. It prints one table:
+
+```
+version        build          smoke          crosscheck     e2e
+26.1           ok 16s         ok 34s         ok 35s         ok 26s
+26.2           ok 16s         ok 35s         ok 35s         ok 26s
+26.3-pre-2     ok 13s         FAIL 20s       ok 36s         ok 27s
+```
+
+and exits non-zero naming every failed step and its log; each step's full output is in
+`temp/verify/<version>/<step>.log` (`--quiet` keeps it out of the terminal). A failed build
+skips that version's other steps. A run over three versions takes about six minutes with the
+jars cached and the container image pulled.
+
+```bash
 go run ./gen/cmd/mc26 pipeline --version 26.2 --smoke --e2e [--skip-extract]
 ```
 
-Extract (or reuse `temp/data/26.2`), build, unit tests, smoke, e2e. This is what
-`.github/workflows/pipeline.yml` runs on every pull request. `release` runs the smoke test
-before it commits the library, and the e2e too with `--e2e`.
+`pipeline` is one version from the extraction on: extract (or reuse `temp/data/26.2`), build,
+unit tests, smoke, e2e. This is what `.github/workflows/pipeline.yml` runs on every pull
+request. `release` runs the smoke test before it commits the library, and the e2e too with
+`--e2e`.
 
 ## Memory
 
 Everything the harness starts is bounded (`gen/internal/limits`): a go build, vet or test
 compiles four packages at a time (`GOFLAGS=-p=4` — a translation table is a large compile), a
 server's container has 2.5 GB and its JVM 1.5 GB of heap, the extraction container 6 GB and
-every JVM in it 4 GB. Run the versions one after the other, not side by side: one full pass
-(build, smoke, cross-check, e2e) holds one server and one compile at a time. Keep editors'
+every JVM in it 4 GB. Run the versions one after the other, not side by side, which is what
+`verify` does: one full pass (build, smoke, cross-check, e2e) holds one server and one compile
+at a time. Keep editors'
 language servers out of `temp/` — it carries one built library per version, 1.2 million lines
 each, rewritten by every build; `.vscode/settings.json` filters it out of gopls, which otherwise
 indexes all of them (14 GB seen).
