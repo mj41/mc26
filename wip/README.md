@@ -10,18 +10,18 @@ below is the order to do them. A finished task is removed: what is worth keeping
 |---|---|---|
 | 1 | [publish-repositories.md](publish-repositories.md) | create the four GitHub repositories, re-tag, first push |
 | 2 | [old-fork.md](old-fork.md) | the note on the old fork, the consumers repointed, the fork archived |
+| 3 | [zero-hand-written.md](zero-hand-written.md) | everything with data behind it is generated (and four hand-written files were wrong). Two things left, both a call rather than work: ~1,900 lines that generating would only move into the generator, and ~7,500 of runtime for a module of its own |
 
 ## 2. Next
 
 | order | task | what is asked |
 |---|---|---|
-| 3 | [release-26-3.md](release-26-3.md) | Minecraft 26.3 through `mc26 update`, then `release --push` and the kit's matrix |
+| 4 | [release-26-3.md](release-26-3.md) | Minecraft 26.3 through `mc26 update`, then `release --push` and the kit's matrix |
 
 ## 3. Research
 
 | task | what is asked |
 |---|---|
-| [zero-hand-written.md](zero-hand-written.md) | what of the library's 14,230 hand-written lines can still be generated, and what 0 takes: ~780 have data behind them (300 done, the save formats are the rest), ~1,900 would only move into the generator, 7,500 are runtime for a module of its own |
 | [exports.md](exports.md) | exports of the schema to other ecosystems' formats, and the errors a comparison with one found (docs/minecraft-data.md) |
 
 Conventions for these files: public text — no private repositories, hosts or infrastructure of

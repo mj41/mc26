@@ -163,7 +163,11 @@ func (e *Encoder) writeValue(val reflect.Value, tagType byte) error {
 
 		for i := 0; i < val.Len(); i++ {
 			arrType, arrVal := getTagType(val.Index(i))
-			err := e.writeValue(arrVal, arrType)
+			// marshal, not writeValue: an element that writes itself (an either,
+			// a holder, a colour) has to be asked, or the list is written by
+			// reflection over its fields and says Left and Right where the tag
+			// should hold what the either chose
+			err := e.marshal(arrVal, arrType)
 			if err != nil {
 				return err
 			}

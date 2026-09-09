@@ -398,6 +398,20 @@ func paramList(n int) string {
 // an int provider there) is a generic record, and those fields become type
 // parameters instead of the first use's type standing for all.
 func (g *nbtGen) findGenerics(schema *nbtSchemaFile) {
+	var roots []map[string]any
+	for _, e := range schema.Registries {
+		roots = append(roots, e.Type)
+	}
+	for _, e := range schema.Types {
+		roots = append(roots, e.Type)
+	}
+	g.findGenericsIn(roots)
+}
+
+// findGenericsIn is findGenerics over any set of roots: a Java record whose
+// field types differ between its uses becomes a generic Go struct with those
+// fields as its type parameters.
+func (g *nbtGen) findGenericsIn(roots []map[string]any) {
 	g.generic = map[string][]int{}
 	sigs := map[string][][]string{} // java → per use, per field, the type node as JSON
 	var walk func(n map[string]any)
@@ -425,11 +439,8 @@ func (g *nbtGen) findGenerics(schema *nbtSchemaFile) {
 			}
 		}
 	}
-	for _, e := range schema.Registries {
-		walk(e.Type)
-	}
-	for _, e := range schema.Types {
-		walk(e.Type)
+	for _, r := range roots {
+		walk(r)
 	}
 	for java, uses := range sigs {
 		first := uses[0]
@@ -677,7 +688,9 @@ func (g *nbtGen) goType(n map[string]any, p string) (string, string) {
 	case "either":
 		l, r := n["left"].(map[string]any), n["right"].(map[string]any)
 		c := "either " + nodeSummary(l) + " or " + nodeSummary(r)
-		if p != "registry" {
+		// Either[L, R] lives in registry; a package that may import it gets the real type,
+		// one that may not keeps the tag raw
+		if p != "registry" && p != "save" {
 			return g.raw(p), c
 		}
 		if fs := eitherFields(n); fs != nil && n["java"] != nil {
@@ -690,7 +703,11 @@ func (g *nbtGen) goType(n map[string]any, p string) (string, string) {
 		if lt == g.raw(p) || rt == g.raw(p) {
 			return g.raw(p), c
 		}
-		return "Either[" + lt + ", " + rt + "]", c
+		q := ""
+		if p != "registry" {
+			q = "registry."
+		}
+		return q + "Either[" + lt + ", " + rt + "]", c
 	case "ref":
 		// what is being defined, inside itself: a pointer to it
 		if t, ok := g.byName[str(n["name"])+"|"+str(n["of"])]; ok {
@@ -923,6 +940,10 @@ func holeSummaryNBT(n schemaNode) string {
 // ---- rendering --------------------------------------------------------------------
 
 func (g *nbtGen) render(p *nbtPkg, doc string) string {
+	return g.renderFrom(p, doc, "gen_nbt.go", "nbt_schema.json")
+}
+
+func (g *nbtGen) renderFrom(p *nbtPkg, doc, generator, source string) string {
 	var sb strings.Builder
 	sort.SliceStable(p.types, func(i, j int) bool {
 		if p.types[i].Kind != p.types[j].Kind {
@@ -978,8 +999,11 @@ func (g *nbtGen) render(p *nbtPkg, doc string) string {
 	if p.name != "chat" && strings.Contains(body, "chat.") {
 		imports = append(imports, "\t\"github.com/mj41/go-mc26/chat\"")
 	}
+	if p.name != "registry" && strings.Contains(body, "registry.") {
+		imports = append(imports, "\t\"github.com/mj41/go-mc26/registry\"")
+	}
 	var out strings.Builder
-	out.WriteString(generatedHeader("gen_nbt.go", "nbt_schema.json"))
+	out.WriteString(generatedHeader(generator, source))
 	out.WriteString("\n" + doc + "package " + p.name + "\n\n")
 	if len(imports) > 0 {
 		sort.Strings(imports)

@@ -10,49 +10,20 @@ import (
 	"github.com/mj41/go-mc26/nbt"
 )
 
-// Chunk is 16* chunk
-type Chunk struct {
-	BlockEntities  []nbt.RawMessage `nbt:"block_entities"`
-	BlockTicks     nbt.RawMessage   `nbt:"block_ticks"`
-	CarvingMasks   map[string][]uint64
-	DataVersion    int32
-	Entities       []nbt.RawMessage    `nbt:"entities"`
-	FluidTicks     nbt.RawMessage      `nbt:"fluid_ticks"`
-	Heightmaps     map[string][]uint64 // keys: "WORLD_SURFACE_WG", "WORLD_SURFACE", "WORLD_SURFACE_IGNORE_SNOW", "OCEAN_FLOOR_WG", "OCEAN_FLOOR", "MOTION_BLOCKING", "MOTION_BLOCKING_NO_LEAVES"
-	InhabitedTime  int64
-	IsLightOn      byte `nbt:"isLightOn"`
-	LastUpdate     int64
-	Lights         []nbt.RawMessage
-	PostProcessing nbt.RawMessage
-	Sections       []Section `nbt:"sections"`
-	Status         string
-	Structures     nbt.RawMessage `nbt:"structures"`
-	XPos           int32          `nbt:"xPos"`
-	YPos           int32          `nbt:"yPos"`
-	ZPos           int32          `nbt:"zPos"`
-}
+// Chunk is a saved chunk: the shape is generated from the reader Mojang parses
+// one with (save_gen.go, SerializableChunkData). This name is the one a caller
+// uses; the generated one carries Mojang's.
+type Chunk = SerializableChunkData
 
-type Section struct {
-	Y           int8
-	BlockStates PaletteContainer[BlockState] `nbt:"block_states"`
-	Biomes      PaletteContainer[BiomeState] `nbt:"biomes"`
-	SkyLight    []byte                       `nbt:"SkyLight,omitempty"`
-	BlockLight  []byte                       `nbt:"BlockLight,omitempty"`
-}
+// Section is one 16-block-high slice of a saved chunk.
+type Section = SerializableChunkDatasections
 
-type PaletteContainer[T any] struct {
-	Palette []T      `nbt:"palette"`
-	Data    []uint64 `nbt:"data"`
-}
+// PaletteContainer is a section's block states or biomes: the palette and the
+// entries packed into longs, at the width the palette's size needs.
+type PaletteContainer[T any] = PalettedContainerROPackedData[T]
 
-type BlockState struct {
-	Name       string
-	Properties nbt.RawMessage
-}
-
-type BiomeState string
-
-// Load read column data from []byte
+// Load reads a chunk from a region file's sector: a compression byte, then the
+// NBT of the chunk in that compression.
 func (c *Chunk) Load(data []byte) (err error) {
 	var r io.Reader = bytes.NewReader(data[1:])
 
@@ -71,11 +42,11 @@ func (c *Chunk) Load(data []byte) (err error) {
 	}
 
 	d := nbt.NewDecoder(r)
-	// d.DisallowUnknownFields()
 	_, err = d.Decode(c)
 	return
 }
 
+// Data is the inverse of Load: the compression byte and the compressed NBT.
 func (c *Chunk) Data(compressingType byte) ([]byte, error) {
 	var buff bytes.Buffer
 
@@ -95,6 +66,10 @@ func (c *Chunk) Data(compressingType byte) ([]byte, error) {
 	return buff.Bytes(), err
 }
 
+// Entities is the NBT an entity of a saved chunk or a player file carries. It
+// is not generated: Mojang reads an entity through a chain of
+// readAdditionalSaveData methods, one per class in its hierarchy, which the
+// save extractor does not follow yet.
 type Entities struct {
 	Pos, Motion  [3]float64
 	Rotation     [3]float32

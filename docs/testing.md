@@ -62,6 +62,7 @@ assembled with), starts a server as above, and runs:
 | `autofish` | logs in, reaches game start |
 | `pressureTest` | three bots log in and reach game start |
 | `mcadump` | after the server stopped, dumps an overworld region file it wrote |
+| `savechunk` | every chunk of a region file the server wrote is converted to a `level.Chunk` and back (`go test ./level -run TestSaveChunk` in the kit tree, with the file's path). The saved shapes are generated from the reader and the writer Mojang parses and writes a chunk with, and this is the only place a real save file of the version is read; the scenario fails when the test matches nothing, so it cannot pass by checking nothing |
 
 The `daze` example has a console: a line on stdin is sent as chat, a `/line` as a command. That
 is how the harness drives bots; it works for a person too.

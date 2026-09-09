@@ -234,7 +234,7 @@ public class ExtractAll {
     }
 
     static void runCustomExtractors(Path serverJar, Path innerJar, Path outputDir) throws Exception {
-        String[] extractors = {"GenEntities", "GenComponents", "GenBlockEntities", "GenBlockProperties", "GenBiomes", "GenItems", "GenPacketSchema", "GenNbtSchema", "GenEntityData", "GenConstants"};
+        String[] extractors = {"GenEntities", "GenComponents", "GenBlockEntities", "GenBlockProperties", "GenBiomes", "GenItems", "GenPacketSchema", "GenNbtSchema", "GenSaveSchema", "GenEntityData", "GenConstants"};
         List<String> found = new ArrayList<>();
 
         for (String name : extractors) {

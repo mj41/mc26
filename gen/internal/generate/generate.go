@@ -57,6 +57,7 @@ var Generators = []Generator{
 	{"lang", genLang},
 	{"packets", genPackets},
 	{"nbt", genNBT},
+	{"save", genSave},
 	{"constants", genConstants},
 	{"rpc", genRPC},
 }

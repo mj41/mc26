@@ -96,7 +96,9 @@ it. Anything — a Java or Rust generator, a test suite, a script — can consum
 URL without Go or Java. A diff between two branches is the change between two Minecraft
 versions, readable without running anything. It also holds the files nobody else publishes:
 `packet_schema.json` (the typed wire layout of every packet, shared structure and data
-component), `nbt_schema.json` (the registry elements and chat structures as NBT) and
+component), `nbt_schema.json` (the registry elements and chat structures as NBT),
+`save_schema.json` (the save formats, which have no codec: read from the keyed accessors of
+their readers) and
 `entity_data.json` (the entity metadata layout).
 
 ## What is hand-written, what is generated

@@ -530,10 +530,41 @@ public class GenNbtSchema {
      * names may appear, so the shape is one struct: id, then a string-to-string map.
      */
     static Map<String, Object> stateHolderCodec(String self, String holder, List<V> args, int depth) {
+        // The two keys are the first strings the codec pushes, in order: they were
+        // "Name" and "Properties" until 26.2 and are "id" and "properties" from 26.3,
+        // so reading them is the difference between describing a saved block state and
+        // describing the one a previous version had.
+        List<String> keys = stringConstants(holder, "codec", 2);
+        String idKey = keys.size() > 0 ? keys.get(0) : "id";
+        String propsKey = keys.size() > 1 ? keys.get(1) : "properties";
         List<Object> fields = new ArrayList<>();
-        fields.add(fieldOf(field(nodeOf(arg(args, 0), depth), "id", false, null)));
-        fields.add(fieldOf(field(node("map", "key", prim("STRING"), "val", prim("STRING")), "properties", true, null)));
+        fields.add(fieldOf(field(nodeOf(arg(args, 0), depth), idKey, false, null)));
+        fields.add(fieldOf(field(node("map", "key", prim("STRING"), "val", prim("STRING")), propsKey, true, null)));
         return node("struct", "name", shortName(self), "java", self, "fields", fields);   // java: the state class, since BlockState and FluidState share the holder
+    }
+
+    /**
+     * The first `want` string constants a method pushes, in order, looking in its lambdas
+     * too when the method itself has none: a key a codec names is a constant in the
+     * bytecode, and reading it is how a renamed key is noticed rather than assumed.
+     */
+    static List<String> stringConstants(String owner, String method, int want) {
+        List<String> out = new ArrayList<>();
+        ClassModel cm = classModel(owner);
+        if (cm == null) return out;
+        for (String prefix : List.of(method, "lambda$" + method)) {
+            for (MethodModel m : cm.methods()) {
+                String n = m.methodName().stringValue();
+                if (!(n.equals(prefix) || n.startsWith(prefix + "$"))) continue;
+                for (CodeElement el : m.code().map(c -> (Iterable<CodeElement>) c).orElse(List.of())) {
+                    if (el instanceof ConstantInstruction ci && ci.constantValue() instanceof String v && !v.isEmpty()) {
+                        if (!out.contains(v)) out.add(v);
+                        if (out.size() >= want) return out;
+                    }
+                }
+            }
+        }
+        return out;
     }
 
     static boolean hasMethod(ClassModel cm, String name, String desc) {

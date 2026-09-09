@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -149,17 +150,65 @@ func (e *Either[L, R]) UnmarshalNBT(tagType byte, r nbt.DecoderReader) error {
 	if err := raw.UnmarshalNBT(tagType, r); err != nil {
 		return err
 	}
+	// NBT lists are homogeneous, so a list of eithers whose sides have different
+	// tag types is written as compounds throughout, and a side that is not a
+	// compound arrives wrapped under the empty key. That is how a saved block
+	// state palette holds a bare block id beside a state with properties.
+	if tagType == nbt.TagCompound {
+		var wrapper map[string]nbt.RawMessage
+		if err := raw.Unmarshal(&wrapper); err == nil && len(wrapper) == 1 {
+			if inner, ok := wrapper[""]; ok {
+				return e.UnmarshalNBT(inner.TagType(), bytes.NewReader(inner.Data))
+			}
+		}
+	}
 	l := new(L)
-	if err := raw.UnmarshalDisallowUnknownField(l); err == nil {
-		e.Left, e.Right = l, nil
-		return nil
+	if tagFits(tagType, l) {
+		if err := raw.UnmarshalDisallowUnknownField(l); err == nil {
+			e.Left, e.Right = l, nil
+			return nil
+		}
 	}
 	rv := new(R)
+	if !tagFits(tagType, rv) {
+		return fmt.Errorf("registry: either %T: neither side reads a tag of type %d", e, tagType)
+	}
 	if err := raw.Unmarshal(rv); err != nil {
 		return fmt.Errorf("registry: either %T: neither side reads the tag: %w", e, err)
 	}
 	e.Left, e.Right = nil, rv
 	return nil
+}
+
+// tagFits says whether a side of an either can hold a tag of this type. The
+// decoder is lenient — a compound read into a string leaves the string empty
+// rather than failing — so the tag type has to be the thing that decides, or
+// the first side would swallow every tag.
+func tagFits(tagType byte, v any) bool {
+	if t, ok := v.(interface{ TagType() byte }); ok {
+		return t.TagType() == tagType
+	}
+	switch reflect.Indirect(reflect.ValueOf(v)).Kind() {
+	case reflect.String:
+		return tagType == nbt.TagString
+	case reflect.Bool, reflect.Int8, reflect.Uint8:
+		return tagType == nbt.TagByte
+	case reflect.Int16, reflect.Uint16:
+		return tagType == nbt.TagShort
+	case reflect.Int32, reflect.Uint32:
+		return tagType == nbt.TagInt
+	case reflect.Int64, reflect.Uint64, reflect.Int, reflect.Uint:
+		return tagType == nbt.TagLong
+	case reflect.Float32:
+		return tagType == nbt.TagFloat
+	case reflect.Float64:
+		return tagType == nbt.TagDouble
+	case reflect.Struct, reflect.Map:
+		return tagType == nbt.TagCompound
+	case reflect.Slice, reflect.Array:
+		return tagType == nbt.TagList || tagType == nbt.TagByteArray || tagType == nbt.TagIntArray || tagType == nbt.TagLongArray
+	}
+	return true
 }
 
 // Color is an RGB colour (ExtraCodecs.STRING_RGB_COLOR): written as "#rrggbb",

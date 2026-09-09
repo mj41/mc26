@@ -85,14 +85,19 @@ func Run(o Options) error {
 		o.Log("e2e %-12s ok   (%s)", sc.name, time.Since(start).Round(time.Second))
 	}
 	srv.Stop()
-	if err := scenarioMcadump(o, bin, srv); err != nil {
-		failed++
-		o.Log("e2e %-12s FAIL: %v", "mcadump", err)
-	} else {
-		o.Log("e2e %-12s ok", "mcadump")
+	for _, sc := range []scenario{
+		{"mcadump", func() error { return scenarioMcadump(o, bin, srv) }},
+		{"savechunk", func() error { return scenarioSaveChunk(o, srv) }},
+	} {
+		if err := sc.fn(); err != nil {
+			failed++
+			o.Log("e2e %-12s FAIL: %v", sc.name, err)
+			continue
+		}
+		o.Log("e2e %-12s ok", sc.name)
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d of %d scenarios failed", failed, len(scenarios)+1)
+		return fmt.Errorf("%d of %d scenarios failed", failed, len(scenarios)+2)
 	}
 	return nil
 }
@@ -463,6 +468,33 @@ func scenarioPressure(o Options, bin string, srv *smoke.Server) error {
 }
 
 // scenarioMcadump dumps a region file the server wrote (after it stopped).
+// scenarioSaveChunk converts every chunk of a region file the server wrote,
+// which is the only place a real save file of this version is read.
+func scenarioSaveChunk(o Options, srv *smoke.Server) error {
+	dir := filepath.Join(srv.WorkDir, "world", "dimensions", "minecraft", "overworld", "region")
+	regions, _ := filepath.Glob(filepath.Join(dir, "r.*.mca"))
+	if len(regions) == 0 {
+		return fmt.Errorf("the server wrote no overworld region file under %s", srv.WorkDir)
+	}
+	path, err := filepath.Abs(dir) // every region: one of them held what the others did not
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("go", "test", kit.LibModule+"/level", "-run", "TestSaveChunk", "-count=1", "-v")
+	cmd.Dir = o.KitDir
+	cmd.Env = kit.Env(o.KitDir, "MC26_SAVE_REGION="+path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v\n%s", err, tail(string(out), 12))
+	}
+	// `go test` is happy when a pattern matches nothing, which would make this
+	// scenario pass without reading a chunk
+	if !strings.Contains(string(out), "converted ") {
+		return fmt.Errorf("the test did not run (no chunk was converted):\n%s", tail(string(out), 12))
+	}
+	return nil
+}
+
 func scenarioMcadump(o Options, bin string, srv *smoke.Server) error {
 	// 26.x keeps every dimension under world/dimensions/<namespace>/<name>/.
 	regions, _ := filepath.Glob(filepath.Join(srv.WorkDir, "world", "dimensions", "minecraft", "overworld", "region", "r.*.mca"))

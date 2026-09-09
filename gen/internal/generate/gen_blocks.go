@@ -303,6 +303,25 @@ func generateBlocksGo(w *strings.Builder, blocks []blockInfo) {
 		pad := strings.Repeat(" ", maxFullNameLen-len(b.FullName))
 		fmt.Fprintf(w, "\t%q:%s %s{},\n", b.FullName, pad, b.GoName)
 	}
+	w.WriteString("}\n\n")
+
+	// The state a block id alone stands for. FromID gives the zero value of the
+	// block's struct, which is a state the block may not have (a wall torch
+	// faces north by default, and nothing faces the zero direction); a saved
+	// chunk's palette carries a bare id wherever the state is the default one,
+	// so reading it needs to know which that is.
+	w.WriteString("// DefaultStateID is the state Mojang marks as a block's default, by block id.\n")
+	w.WriteString("var DefaultStateID = map[string]StateID{\n")
+	for _, b := range blocks {
+		for _, st := range b.States {
+			if !st.Default {
+				continue
+			}
+			pad := strings.Repeat(" ", maxFullNameLen-len(b.FullName))
+			fmt.Fprintf(w, "\t%q:%s %d,\n", b.FullName, pad, st.ID)
+			break
+		}
+	}
 	w.WriteString("}\n")
 }
 

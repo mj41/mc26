@@ -40,11 +40,11 @@ type packetsReport map[string]map[string]map[string]struct {
 // one target package (protocol/types for the packets, level/component for the
 // data components).
 type genState struct {
-	enums      map[string]*pktEnumDef   // Go name -> def
-	structs    map[string]*structDef    // Go name -> def
-	unions     map[string]*unionDef     // Go name -> def
-	whiles     map[string]*whileListDef // Go name -> def
-	whileOrder []string
+	enums        map[string]*pktEnumDef   // Go name -> def
+	structs      map[string]*structDef    // Go name -> def
+	unions       map[string]*unionDef     // Go name -> def
+	whiles       map[string]*whileListDef // Go name -> def
+	whileOrder   []string
 	bits         map[string]*bitsDef // Go name -> def
 	bitsOrder    []string
 	factories    map[string]*factoryDef // Go name -> def
@@ -56,7 +56,7 @@ type genState struct {
 	// DataComponentPatch, ITEM_STACK and UNTRUSTED_ITEM_STACK both ItemStack).
 	primRename string
 	// primNames is the Go name a primitive's definition takes, by primitive.
-	primNames map[string]string
+	primNames  map[string]string
 	order      []string // struct emission order (dependencies first)
 	unionOrder []string
 	fixedBits  map[int]bool // sizes of fixed bit sets seen (readFixedBitSet(n))

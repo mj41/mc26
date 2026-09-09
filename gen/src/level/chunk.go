@@ -69,20 +69,46 @@ func EmptyChunk(secs int) *Chunk {
 
 // ChunkFromSave convert save.Chunk to level.Chunk.
 func ChunkFromSave(c *save.Chunk) (*Chunk, error) {
-	secs := len(c.Sections)
+	// A saved chunk carries a section below the world and one above it, which
+	// hold light and nothing else; Mojang's reader takes the level's height and
+	// skips whatever falls outside it. Here the sections that carry block
+	// states are the world's, and their lowest Y is where it starts.
+	minY, secs := int32(0), 0
+	for _, v := range c.Sections {
+		if v.BlockStates == nil {
+			continue
+		}
+		if secs == 0 || int32(v.Y) < minY {
+			minY = int32(v.Y)
+		}
+		secs++
+	}
+	if secs == 0 {
+		minY, secs = c.YPos, len(c.Sections)
+	}
 	sections := make([]Section, secs)
 	for _, v := range c.Sections {
-		i := int32(v.Y) - c.YPos
+		i := int32(v.Y) - minY
 		if i < 0 || i >= int32(secs) {
-			return nil, fmt.Errorf("section Y value %d out of bounds", v.Y)
+			continue // light for a section outside the world
+		}
+		// A section outside the generated world carries light and nothing else:
+		// its containers are absent, which is a section of the default state.
+		states := v.BlockStates
+		if states == nil {
+			states = newStatesContainer()
+		}
+		biomes := v.Biomes
+		if biomes == nil {
+			biomes = &save.PaletteContainer[[]string]{}
 		}
 		var err error
-		sections[i].States, err = readStatesPalette(v.BlockStates.Palette, v.BlockStates.Data)
+		sections[i].States, err = readStatesPalette(states.Palette, states.Data)
 		if err != nil {
 			return nil, err
 		}
 		sections[i].BlockCount = countNoneAirBlocks(&sections[i])
-		sections[i].Biomes, err = readBiomesPalette(v.Biomes.Palette, v.Biomes.Data)
+		sections[i].Biomes, err = readBiomesPalette(biomes.Palette, biomes.Data)
 		if err != nil {
 			return nil, err
 		}
@@ -113,44 +139,27 @@ func ChunkFromSave(c *save.Chunk) (*Chunk, error) {
 	}
 
 	bitsForHeight := bits.Len( /* chunk height in blocks */ uint(secs)*16 + 1)
+	heightmaps, err := heightmapsOf(c.Heightmaps)
+	if err != nil {
+		return nil, err
+	}
 	return &Chunk{
 		Sections: sections,
 		HeightMaps: HeightMaps{
-			WorldSurface:           NewBitStorage(bitsForHeight, 16*16, c.Heightmaps["WORLD_SURFACE_WG"]),
-			WorldSurfaceWG:         NewBitStorage(bitsForHeight, 16*16, c.Heightmaps["WORLD_SURFACE"]),
-			OceanFloorWG:           NewBitStorage(bitsForHeight, 16*16, c.Heightmaps["OCEAN_FLOOR_WG"]),
-			OceanFloor:             NewBitStorage(bitsForHeight, 16*16, c.Heightmaps["OCEAN_FLOOR"]),
-			MotionBlocking:         NewBitStorage(bitsForHeight, 16*16, c.Heightmaps["MOTION_BLOCKING"]),
-			MotionBlockingNoLeaves: NewBitStorage(bitsForHeight, 16*16, c.Heightmaps["MOTION_BLOCKING_NO_LEAVES"]),
+			WorldSurface:           NewBitStorage(bitsForHeight, 16*16, unsigned(heightmaps["WORLD_SURFACE_WG"])),
+			WorldSurfaceWG:         NewBitStorage(bitsForHeight, 16*16, unsigned(heightmaps["WORLD_SURFACE"])),
+			OceanFloorWG:           NewBitStorage(bitsForHeight, 16*16, unsigned(heightmaps["OCEAN_FLOOR_WG"])),
+			OceanFloor:             NewBitStorage(bitsForHeight, 16*16, unsigned(heightmaps["OCEAN_FLOOR"])),
+			MotionBlocking:         NewBitStorage(bitsForHeight, 16*16, unsigned(heightmaps["MOTION_BLOCKING"])),
+			MotionBlockingNoLeaves: NewBitStorage(bitsForHeight, 16*16, unsigned(heightmaps["MOTION_BLOCKING_NO_LEAVES"])),
 		},
 		BlockEntity: blockEntities,
 		Status:      ChunkStatus(c.Status),
 	}, nil
 }
 
-func readStatesPalette(palette []save.BlockState, data []uint64) (paletteData *PaletteContainer[BlocksState], err error) {
-	statePalette := make([]BlocksState, len(palette))
-	for i, v := range palette {
-		b, ok := block.FromID[v.Name]
-		if !ok {
-			return nil, fmt.Errorf("unknown block id: %v", v.Name)
-		}
-		if v.Properties.Data != nil {
-			if err := v.Properties.Unmarshal(&b); err != nil {
-				return nil, fmt.Errorf("unmarshal block properties fail: %v", err)
-			}
-		}
-		s, ok := block.ToStateID[b]
-		if !ok {
-			return nil, fmt.Errorf("unknown block: %v", b)
-		}
-		statePalette[i] = s
-	}
-	paletteData = NewStatesPaletteContainerWithData(16*16*16, data, statePalette)
-	return
-}
-
-func readBiomesPalette(palette []save.BiomeState, data []uint64) (*PaletteContainer[BiomesState], error) {
+// readBiomesPalette reads a saved biome palette: every entry is a biome id.
+func readBiomesPalette(palette []string, data []int64) (*PaletteContainer[BiomesState], error) {
 	biomesRawPalette := make([]BiomesState, len(palette))
 	for i, v := range palette {
 		err := biomesRawPalette[i].UnmarshalText([]byte(v))
@@ -158,7 +167,42 @@ func readBiomesPalette(palette []save.BiomeState, data []uint64) (*PaletteContai
 			return nil, err
 		}
 	}
-	return NewBiomesPaletteContainerWithData(4*4*4, data, biomesRawPalette), nil
+	return NewBiomesPaletteContainerWithData(4*4*4, unsigned(data), biomesRawPalette), nil
+}
+
+// unsigned and signed convert between the longs the bit storage packs values
+// into and the signed longs NBT holds them as; the bits are the same.
+func unsigned(data []int64) []uint64 {
+	if data == nil {
+		return nil // a heightmap a version does not write: the bit storage allocates its own
+	}
+	out := make([]uint64, len(data))
+	for i, v := range data {
+		out[i] = uint64(v)
+	}
+	return out
+}
+
+func signed(data []uint64) []int64 {
+	out := make([]int64, len(data))
+	for i, v := range data {
+		out[i] = int64(v)
+	}
+	return out
+}
+
+// heightmapsOf reads the Heightmaps compound, whose keys are the heightmap
+// types a version has: the schema keeps it as a tag, since the writer fills it
+// from a map rather than key by key.
+func heightmapsOf(raw nbt.RawMessage) (map[string][]int64, error) {
+	out := map[string][]int64{}
+	if raw.Data == nil {
+		return out, nil
+	}
+	if err := raw.Unmarshal(&out); err != nil {
+		return nil, fmt.Errorf("heightmaps: %w", err)
+	}
+	return out, nil
 }
 
 func countNoneAirBlocks(sec *Section) (blockCount int16) {
@@ -177,8 +221,9 @@ func ChunkToSave(c *Chunk, dst *save.Chunk) (err error) {
 	sections := make([]save.Section, secs)
 	for i, v := range c.Sections {
 		s := &sections[i]
-		states := &s.BlockStates
-		biomes := &s.Biomes
+		s.BlockStates = newStatesContainer()
+		s.Biomes = &save.PaletteContainer[[]string]{}
+		states, biomes := s.BlockStates, s.Biomes
 		s.Y = int8(int32(i) + dst.YPos)
 		states.Palette, states.Data, err = writeStatesPalette(v.States)
 		if err != nil {
@@ -192,47 +237,28 @@ func ChunkToSave(c *Chunk, dst *save.Chunk) (err error) {
 		s.BlockLight = v.BlockLight
 	}
 	dst.Sections = sections
-	if dst.Heightmaps == nil {
-		dst.Heightmaps = make(map[string][]uint64)
+	heightmaps := map[string][]int64{
+		"WORLD_SURFACE_WG":          signed(c.HeightMaps.WorldSurfaceWG.Raw()),
+		"WORLD_SURFACE":             signed(c.HeightMaps.WorldSurface.Raw()),
+		"OCEAN_FLOOR_WG":            signed(c.HeightMaps.OceanFloorWG.Raw()),
+		"OCEAN_FLOOR":               signed(c.HeightMaps.OceanFloor.Raw()),
+		"MOTION_BLOCKING":           signed(c.HeightMaps.MotionBlocking.Raw()),
+		"MOTION_BLOCKING_NO_LEAVES": signed(c.HeightMaps.MotionBlockingNoLeaves.Raw()),
 	}
-	dst.Heightmaps["WORLD_SURFACE_WG"] = c.HeightMaps.WorldSurfaceWG.Raw()
-	dst.Heightmaps["WORLD_SURFACE"] = c.HeightMaps.WorldSurface.Raw()
-	dst.Heightmaps["OCEAN_FLOOR_WG"] = c.HeightMaps.OceanFloorWG.Raw()
-	dst.Heightmaps["OCEAN_FLOOR"] = c.HeightMaps.OceanFloor.Raw()
-	dst.Heightmaps["MOTION_BLOCKING"] = c.HeightMaps.MotionBlocking.Raw()
-	dst.Heightmaps["MOTION_BLOCKING_NO_LEAVES"] = c.HeightMaps.MotionBlockingNoLeaves.Raw()
+	raw, err := nbt.Marshal(heightmaps)
+	if err != nil {
+		return err
+	}
+	if err := dst.Heightmaps.UnmarshalNBT(nbt.TagCompound, bytes.NewReader(raw[3:])); err != nil {
+		return err
+	}
 	dst.Status = string(c.Status)
 	return
 }
 
-func writeStatesPalette(paletteData *PaletteContainer[BlocksState]) (palette []save.BlockState, data []uint64, err error) {
+func writeBiomesPalette(paletteData *PaletteContainer[BiomesState]) (palette []string, data []int64, err error) {
 	rawPalette := paletteData.palette.export()
-	palette = make([]save.BlockState, len(rawPalette))
-
-	var buffer bytes.Buffer
-	for i, v := range rawPalette {
-		b := block.StateList[v]
-		palette[i].Name = b.ID()
-
-		buffer.Reset()
-		err = nbt.NewEncoder(&buffer).Encode(b, "")
-		if err != nil {
-			return
-		}
-		_, err = nbt.NewDecoder(&buffer).Decode(&palette[i].Properties)
-		if err != nil {
-			return
-		}
-	}
-
-	data = make([]uint64, len(paletteData.data.Raw()))
-	copy(data, paletteData.data.Raw())
-	return
-}
-
-func writeBiomesPalette(paletteData *PaletteContainer[BiomesState]) (palette []save.BiomeState, data []uint64, err error) {
-	rawPalette := paletteData.palette.export()
-	palette = make([]save.BiomeState, len(rawPalette))
+	palette = make([]string, len(rawPalette))
 
 	var biomeID []byte
 	for i, v := range rawPalette {
@@ -240,11 +266,10 @@ func writeBiomesPalette(paletteData *PaletteContainer[BiomesState]) (palette []s
 		if err != nil {
 			return
 		}
-		palette[i] = save.BiomeState(biomeID)
+		palette[i] = string(biomeID)
 	}
 
-	data = make([]uint64, len(paletteData.data.Raw()))
-	copy(data, paletteData.data.Raw())
+	data = signed(paletteData.data.Raw())
 	return
 }
 
