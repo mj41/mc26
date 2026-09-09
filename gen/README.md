@@ -18,7 +18,7 @@ gen/
 ├── internal/build/      copy src/ + generate + README/CI + go mod tidy, gofmt, build, vet, test; then the kit against the result
 ├── internal/kit/        assembles the go-mc26-kit checkout (../go-mc26-kit, --kit-src) against a built library under temp/kit/<version> (a workspace) and builds, vets, tests it there
 ├── internal/docgen/     renders docs/*.mc26tmpl.md for a version (HTML-comment directives; tables and trees from the JSON)
-├── docs/                the documentation templates: protocol (frame, primitives, node kinds), packets, components, registries
+├── docs/                the documentation templates: protocol (frame, primitives, node kinds), packets, components, registries, save formats
 ├── internal/schemacheck/ the schemas describe everything (no opaque node, no caseless dispatch, every ref resolves) — build stops on a hole
 ├── internal/smoke/      vanilla server + `go test ./bot go-mc26/management -run TestSmoke` from the kit tree
 ├── internal/gitx/       branch, replace tree, commit, tag, push
@@ -58,7 +58,7 @@ rather than copying its fields avoids most overlays.
 | packets | `packet_schema.json` (its `prims` section defines the primitives; one with no Go type of its own, `CHUNK_SECTIONS`, is rendered from its definition) + `packets.json` | `protocol/<state>/{clientbound,serverbound}_gen.go` (+ round-trip tests), `protocol/types/{enums,structs}_gen.go`, `level/section_gen.go` (the chunk section and its paletted containers, with the width function of each packed run) |
 | entity data (inside packets) | `entity_data.json` | `protocol/types/entitydata_gen.go` (serializer names, `NewEntityDataValue`), `data/entitydata/entitydata_gen.go` (field index constants per class, the fields of every entity type) |
 | constants | `constants.json` | `data/constants/constants_gen.go` — the compile-time constants of a few classes (inventory slot layout, section geometry, level limits, living-entity NBT keys) |
-| save | `save_schema.json` | `save/save_gen.go` (a saved chunk down to the palettes of a section; `save/chunk.go` keeps the compression wrapper and the short names) |
+| save | `save_schema.json` + the world records of `nbt_schema.json` | `save/save_gen.go` (a saved chunk down to the palettes of a section; every entity type's NBT and a player's file, each from the save chain of its class; `level.dat` from its writer; the codec-built records of a world: the world options, the dimensions and their generators, the respawn data, the data-pack lists; `save/chunk.go` and `save/playerdata.go` keep the compression wrapper and the short names) |
 | nbt | `nbt_schema.json` | `registry/elements_gen.go` (the registry elements sent in the configuration phase, their enums and records, a decode test), `registry/registries_gen.go` (the `Registries` struct), `chat/style_gen.go` (`Style`, `ClickEvent`, `HoverEvent`, `Decoration`) |
 | rpc | `json-rpc-api-schema.json` | `management/types_gen.go` (every schema of the server's OpenRPC document: `Player`, `UserBan`, `ServerState`, the `Difficulty` and `GameType` constants), `management/methods_gen.go` (a typed method on `management.Client` for each of the API's methods — `ServerStatus`, `AllowlistAdd`, `ServersettingsMotdSet`, `GamerulesUpdate` — and a typed value for each notification it sends); the transport, JSON-RPC 2.0 over a WebSocket with the server's secret as a bearer token, is the hand-written `management/client.go` |
 
@@ -183,7 +183,9 @@ on a node kind nobody has defined, as it does on a primitive.
 a recording proxy between it and the traffic test's bot — so every state and both directions are
 on record, framed by the description in `nodes.json` rather than by this library — and hands the
 bytes to a reader that has only the JSON: `gen/crosslang`, a Go module of its own that imports neither the library nor the generators (Python until 2026-09-09), reads the schema, the primitives and the node kinds, decodes
-each captured packet and encodes it again. It passes only when every packet comes back byte for
+each captured packet and encodes it again. The same reader reads a world the end-to-end server
+wrote (`--world`): the region container from `nodes.json`'s `region` entry, every chunk, entity
+and player file as generic NBT, re-encoded byte for byte and walked against `save_schema.json`. It passes only when every packet comes back byte for
 byte. A description that is complete to a reader who already has this library, and no one else,
 fails there. The recording half checks the same packets in Go as it goes: every one must decode
 into its generated type and consume the body exactly, which is what `Packet.ScanAll` is for and

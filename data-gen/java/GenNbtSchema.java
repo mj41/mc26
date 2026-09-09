@@ -1043,7 +1043,17 @@ public class GenNbtSchema {
                     String id = null;
                     int nameAt = -1;
                     for (int i = 0; i < a.size(); i++) if (a.get(i) instanceof ConstV c && c.v() instanceof String str) { id = str; nameAt = i; break; }
-                    V value = nameAt >= 0 && nameAt + 1 < a.size() ? a.get(a.size() - 1) : null;
+                    // the value is the last argument after the name that is a codec of the
+                    // NBT kind: ParticleTypes.register(name, override, codecFn, streamCodecFn)
+                    // ends in the packet codec's function, which describes the wire, not a tag
+                    V value = null;
+                    for (int i = a.size() - 1; nameAt >= 0 && i > nameAt; i--) {
+                        V cand = a.get(i);
+                        if (cand instanceof LambdaV lv && lv.desc().endsWith("codec/StreamCodec;")) continue;
+                        if (cand instanceof RefV rv && GenPacketSchema.classModel(rv.owner()) != null && isStreamCodecField(rv.owner(), rv.field())) continue;
+                        value = cand;
+                        break;
+                    }
                     if (id != null && value != null && !(value instanceof OtherV) && !(value instanceof ConstV)) {
                         Map<String, Object> t = nodeOf(value, depth + 1);
                         if ("field".equals(t.get("k"))) {
@@ -1061,6 +1071,16 @@ public class GenNbtSchema {
                 step(el, stack, locals, cls, depth);
             }
         }
+    }
+
+    /** Whether a static field holds a StreamCodec (the packet side, not a tag's). */
+    static boolean isStreamCodecField(String owner, String field) {
+        ClassModel cm = classModel(owner);
+        if (cm == null) return false;
+        for (var f : cm.fields()) {
+            if (f.fieldName().stringValue().equals(field)) return f.fieldTypeSymbol().descriptorString().endsWith("codec/StreamCodec;");
+        }
+        return false;
     }
 
     /**

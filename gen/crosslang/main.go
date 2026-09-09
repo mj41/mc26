@@ -27,11 +27,15 @@ func main() {
 	data := flag.String("data", "", "extracted data directory")
 	nodes := flag.String("nodes", "", "nodes.json")
 	capture := flag.String("capture", "", "capture file (JSON lines: state, flow, id, data as hex)")
+	region := flag.String("world", "", "a world directory: its chunks, entities and player files checked against save_schema.json instead of a capture")
 	verbose := flag.Bool("verbose", false, "print every packet's value, and both byte strings on a mismatch")
 	flag.Parse()
-	if *data == "" || *nodes == "" || *capture == "" {
-		fmt.Fprintln(os.Stderr, "usage: crosslang --data <dir> --nodes <nodes.json> --capture <file.jsonl> [--verbose]")
+	if *data == "" || *nodes == "" || (*capture == "") == (*region == "") {
+		fmt.Fprintln(os.Stderr, "usage: crosslang --data <dir> --nodes <nodes.json> (--capture <file.jsonl> | --world <dir>) [--verbose]")
 		os.Exit(2)
+	}
+	if *region != "" {
+		os.Exit(runSave(*data, *nodes, *region, *verbose))
 	}
 	os.Exit(run(*data, *nodes, *capture, *verbose))
 }

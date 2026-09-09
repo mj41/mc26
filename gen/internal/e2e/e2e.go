@@ -19,20 +19,25 @@ import (
 	"time"
 
 	"github.com/mj41/mc26/gen/internal/build"
+	"github.com/mj41/mc26/gen/internal/fixtures"
 	"github.com/mj41/mc26/gen/internal/kit"
+	"github.com/mj41/mc26/gen/internal/limits"
 	"github.com/mj41/mc26/gen/internal/smoke"
 )
 
 // Options configures one run.
 type Options struct {
-	Version string
-	DataDir string // for the expected protocol number
-	KitDir  string // the kit tree assembled against the built library of the same version
-	JarPath string
-	WorkDir string
-	Port    int
-	Runtime string // see smoke.Server
-	Log     func(format string, args ...any)
+	Version   string
+	DataDir   string // for the expected protocol number
+	KitDir    string // the kit tree assembled against the built library of the same version
+	CrossLang string // gen/crosslang: the reader written from the JSON alone, for the save check
+	NodesPath string // gen/hand-crafted/nodes.json
+	Fixtures  string // where to cut the save tests' fixture world from the server's world (empty: do not)
+	JarPath   string
+	WorkDir   string
+	Port      int
+	Runtime   string // see smoke.Server
+	Log       func(format string, args ...any)
 }
 
 // Run builds the bots, runs the scenarios and returns the first failure.
@@ -88,6 +93,8 @@ func Run(o Options) error {
 	for _, sc := range []scenario{
 		{"mcadump", func() error { return scenarioMcadump(o, bin, srv) }},
 		{"savechunk", func() error { return scenarioSaveChunk(o, srv) }},
+		{"saveschema", func() error { return scenarioSaveSchema(o, srv) }},
+		{"fixtures", func() error { return scenarioFixtures(o, srv) }},
 	} {
 		if err := sc.fn(); err != nil {
 			failed++
@@ -97,7 +104,7 @@ func Run(o Options) error {
 		o.Log("e2e %-12s ok", sc.name)
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d of %d scenarios failed", failed, len(scenarios)+2)
+		return fmt.Errorf("%d of %d scenarios failed", failed, len(scenarios)+4)
 	}
 	return nil
 }
@@ -230,6 +237,9 @@ func scenarioDaze(o Options, bin string, srv *smoke.Server) error {
 		{`tellraw Daze {"text":"private hi"}`, ""},
 		{"give Daze minecraft:stone 3", "Gave 3"},
 		{"tp Daze ~ ~5 ~", "Teleported Daze"},
+		// the player's file: written for an online player by save-all, which is
+		// what the save-schema scenario reads afterwards
+		{"save-all flush", "Saved the game"},
 	}
 	for _, c := range commands {
 		resp, err := rcon.command(c.cmd)
@@ -491,6 +501,45 @@ func scenarioSaveChunk(o Options, srv *smoke.Server) error {
 	// scenario pass without reading a chunk
 	if !strings.Contains(string(out), "converted ") {
 		return fmt.Errorf("the test did not run (no chunk was converted):\n%s", tail(string(out), 12))
+	}
+	return nil
+}
+
+// scenarioFixtures cuts the save package's fixture world out of the world the
+// server wrote (a few chunks, entities, level.dat, the bot's player file), so
+// the library's own tests read this version's files from the next build on.
+func scenarioFixtures(o Options, srv *smoke.Server) error {
+	if o.Fixtures == "" {
+		return nil
+	}
+	_, err := fixtures.Make(fixtures.Options{
+		Version: o.Version, World: filepath.Join(srv.WorkDir, "world"), Out: o.Fixtures, Log: o.Log,
+	})
+	return err
+}
+
+// scenarioSaveSchema reads the same world with the reader that has only the
+// JSON: the region container from nodes.json, the chunk from save_schema.json.
+// It is the proof the save schema describes a world rather than hinting at it.
+func scenarioSaveSchema(o Options, srv *smoke.Server) error {
+	if o.CrossLang == "" {
+		return fmt.Errorf("no cross-language reader directory given")
+	}
+	dir, err := filepath.Abs(filepath.Join(srv.WorkDir, "world"))
+	if err != nil {
+		return err
+	}
+	data, err := filepath.Abs(o.DataDir)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("go", "run", ".", "--data", data, "--nodes", o.NodesPath, "--world", dir)
+	cmd.Dir = o.CrossLang
+	cmd.Env = limits.GoEnv()
+	out, err := cmd.CombinedOutput()
+	o.Log("%s", strings.TrimSpace(string(out)))
+	if err != nil {
+		return fmt.Errorf("the JSON-only reader did not read the world the way save_schema.json says: %w", err)
 	}
 	return nil
 }

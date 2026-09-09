@@ -5,6 +5,7 @@
 //	mc26 build    --data temp/data/26.2 --out temp/lib/26.2   # data → library tree, built and tested
 //	mc26 smoke    --version 26.2 --lib temp/lib/26.2          # vanilla server (container) ↔ bot smoke test
 //	mc26 e2e      --version 26.2                                  # the kit's example bots against a vanilla server
+//	mc26 fixtures --version 26.2                                  # the save tests' small world, cut from the e2e run's
 //	mc26 pipeline --version 26.2 [--smoke] [--e2e]   # extract + build + test (+ smoke, + e2e), nothing committed
 //	mc26 release  --version 26.2 [--push]        # extract → mc26-data branch+tag → build → smoke → go-mc26 branch+tag
 //	mc26 commit   --repo DIR --branch B --from TREE --message M [--tag-base v0.262.]
@@ -36,6 +37,7 @@ import (
 	"github.com/mj41/mc26/gen/internal/docgen"
 	"github.com/mj41/mc26/gen/internal/e2e"
 	"github.com/mj41/mc26/gen/internal/extract"
+	"github.com/mj41/mc26/gen/internal/fixtures"
 	"github.com/mj41/mc26/gen/internal/gitx"
 	"github.com/mj41/mc26/gen/internal/importsrc"
 	"github.com/mj41/mc26/gen/internal/kit"
@@ -72,6 +74,7 @@ func main() {
 		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag, "report": cmdReport,
 		"import-src": cmdImportSrc,
 		"crosscheck": cmdCrossCheck, "verify": cmdVerify, "update": cmdUpdate, "docs": cmdDocs, "index": cmdIndex,
+		"fixtures": cmdFixtures,
 	}
 	fn, ok := commands[cmd]
 	if !ok {
@@ -186,9 +189,12 @@ func runE2E(version, dataDir, kitDir string, port int, runtime string) error {
 	if err != nil {
 		return err
 	}
+	root := paths.MustRoot()
 	return e2e.Run(e2e.Options{
 		Version: version, DataDir: dataDir, KitDir: kitDir, JarPath: jar,
+		CrossLang: filepath.Join(root, "gen", "crosslang"), NodesPath: filepath.Join(root, "gen", "hand-crafted", "nodes.json"),
 		WorkDir: filepath.Join(paths.Temp(), "e2e", version), Port: port, Runtime: runtime, Log: logf,
+		Fixtures: paths.Fixtures(version),
 	})
 }
 
@@ -637,6 +643,36 @@ func cmdE2E(args []string) error {
 		*kitDir = paths.Kit(*version)
 	}
 	return runE2E(*version, *data, *kitDir, *port, *runtime)
+}
+
+// cmdFixtures cuts the save package's test world out of the world the
+// end-to-end run's server wrote, so the library's own tests read what this
+// version's server writes.
+func cmdFixtures(args []string) error {
+	fs := flag.NewFlagSet("fixtures", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version whose end-to-end world to cut from")
+	world := fs.String("world", "", "world directory (default temp/e2e/<version>/server/world, what `mc26 e2e` leaves)")
+	out := fs.String("out", "", "fixture directory (default gen/src/save/testdata/<version>; the build copies it to save/testdata/world)")
+	chunks := fs.Int("chunks", 4, "chunks to keep around the spawn, and entity chunks")
+	fs.Parse(args)
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	if *world == "" {
+		*world = filepath.Join(paths.Temp(), "e2e", *version, "server", "world")
+	}
+	if _, err := os.Stat(filepath.Join(*world, "level.dat")); err != nil {
+		return fmt.Errorf("no world at %s: run `mc26 e2e --version %s` first", *world, *version)
+	}
+	if *out == "" {
+		*out = paths.Fixtures(*version)
+	}
+	note, err := fixtures.Make(fixtures.Options{Version: *version, World: *world, Out: *out, Chunks: *chunks, Log: logf})
+	if err != nil {
+		return err
+	}
+	fmt.Print(note)
+	return nil
 }
 
 func cmdPipeline(args []string) error {

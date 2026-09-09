@@ -401,6 +401,12 @@ func writeInt64(w io.Writer, n int64) error {
 
 // Copied from encoding/json/encode.go
 func isEmptyValue(v reflect.Value) bool {
+	// a RawMessage no tag was read into has no tag type: nothing to write
+	if v.Kind() == reflect.Struct && v.CanInterface() {
+		if m, ok := v.Interface().(Marshaler); ok {
+			return m.TagType() == TagEnd
+		}
+	}
 	switch v.Kind() {
 	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
 		return v.Len() == 0

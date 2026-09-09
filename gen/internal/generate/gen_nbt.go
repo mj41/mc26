@@ -50,6 +50,9 @@ type nbtGen struct {
 	// generic: Java class → the indexes of the fields whose type differs between the
 	// record's uses (Weighted<T>: data), which become type parameters
 	generic map[string][]int
+	// inlined: Java class → the key signature it was first inlined with; a later
+	// inlining with other keys is flattened into its parent
+	inlined map[string]string
 }
 
 type nbtPkg struct {
@@ -99,7 +102,7 @@ func genNBT(jsonDir, outRoot string) error {
 	for _, key := range sortedKeys(schema.Types) {
 		e := schema.Types[key]
 		if !strings.HasPrefix(e.Class, "net.minecraft.network.chat.") {
-			continue // save-format shapes: recorded in the schema, not consumed yet
+			continue // save-format shapes: rendered into package save by gen_save.go
 		}
 		if e.Type["k"] == "recursive" {
 			continue // the text component: described in full for other bindings, chat.Message by hand here
@@ -469,6 +472,19 @@ func (g *nbtGen) findGenericsIn(roots []map[string]any) {
 	}
 }
 
+// nbtFieldsSig is the keys and types of a struct node, to tell two inlinings of
+// one record apart.
+func nbtFieldsSig(n map[string]any) string {
+	var parts []string
+	fs, _ := n["fields"].([]any)
+	for _, fa := range fs {
+		f, _ := fa.(map[string]any)
+		ft, _ := f["type"].(map[string]any)
+		parts = append(parts, str(f["key"])+"="+typeSig(ft))
+	}
+	return strings.Join(parts, ",")
+}
+
 // fields renders the fields of a struct node for code in package p.
 func (g *nbtGen) fields(n schemaNode, p, owner string) []nbtField {
 	var out []nbtField
@@ -479,6 +495,19 @@ func (g *nbtGen) fields(n schemaNode, p, owner string) []nbtField {
 		ft, _ := f["type"].(map[string]any)
 		if f["inline"] == true {
 			if ft["k"] == "struct" {
+				// A MapCodec record inlined more than once with different keys
+				// (RecipeBookSettings$TypeSettings four times, prefixed per book) is
+				// one Go type only by name: its keys go into the parent instead.
+				sig := nbtFieldsSig(ft)
+				java := str(ft["java"])
+				if prev, ok := g.inlined[java]; ok && prev != sig {
+					out = append(out, g.fields(ft, p, owner)...)
+					continue
+				}
+				if g.inlined == nil {
+					g.inlined = map[string]string{}
+				}
+				g.inlined[java] = sig
 				inner := g.structType(ft, p, "inlined into "+owner)
 				out = append(out, nbtField{Type: g.local(p, inner), Embedded: true, Comment: "keys at this level"})
 				continue

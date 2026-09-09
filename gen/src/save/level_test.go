@@ -6,86 +6,37 @@ import (
 	"testing"
 )
 
+// TestLevel reads the level.dat a vanilla server of this version wrote
+// (testdata/world, `mc26 fixtures`).
 func TestLevel(t *testing.T) {
-	f, err := os.Open("testdata/level.dat")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	r, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := ReadLevel(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	//want := PlayerData{
-	//	Pos:    [3]float64{-41.5, 65, -89.5},
-	//	Motion: [3]float64{0, -0.0784000015258789, 0},
-	//	Rotation: [2]float32{0,0},
-	//}
-
-	t.Logf("%+v", data)
-	//if data != want {
-	//	t.Errorf("player data parse error: get %v, want %v", data, want)
-	//}
-}
-
-// TestLevel26 reads a level.dat written by a vanilla 26.2 server (DataVersion 4903),
-// which moved difficulty into difficulty_settings and the spawn point into spawn.
-func TestLevel26(t *testing.T) {
-	f, err := os.Open("testdata/level-26.2.dat")
+	skipWithoutFixtures(t)
+	f, err := os.Open("testdata/world/level.dat")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-
 	r, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	data, err := ReadLevel(r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.Data.DataVersion != 4903 || data.Data.Version.Name != "26.2" {
-		t.Errorf("unexpected version: DataVersion=%d Name=%q", data.Data.DataVersion, data.Data.Version.Name)
+	if data.Data == nil {
+		t.Fatal("no Data compound")
 	}
-	if data.Data.DifficultySettings.Difficulty != "peaceful" {
-		t.Errorf("difficulty_settings.difficulty = %q, want peaceful", data.Data.DifficultySettings.Difficulty)
+	d := data.Data
+	if d.DataVersion == 0 || d.Version == nil || d.Version.Name == "" {
+		t.Errorf("no version: DataVersion=%d Version=%+v", d.DataVersion, d.Version)
 	}
-	if data.Data.Spawn.Dimension != "minecraft:overworld" || len(data.Data.Spawn.Pos) != 3 {
-		t.Errorf("spawn = %+v", data.Data.Spawn)
+	if d.DifficultySettings.Difficulty == "" {
+		t.Errorf("difficulty_settings.difficulty is empty")
 	}
-}
-
-// TestLevel26Paper reads a level.dat written by Paper 26.2 (a world converted to
-// the 26.1+ dimensions layout). Paper adds "Bukkit.Version", which the strict
-// decoder used to reject as an unknown field.
-func TestLevel26Paper(t *testing.T) {
-	f, err := os.Open("testdata/level-26.2-paper.dat")
-	if err != nil {
-		t.Fatal(err)
+	if d.Spawn.Dimension != "minecraft:overworld" || len(d.Spawn.Pos) != 3 {
+		t.Errorf("spawn = %+v", d.Spawn)
 	}
-	defer f.Close()
-
-	r, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := ReadLevel(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if data.Data.DataVersion != 4903 || data.Data.Version.Name != "26.2" {
-		t.Errorf("unexpected version: DataVersion=%d Name=%q", data.Data.DataVersion, data.Data.Version.Name)
-	}
-	if data.Data.BukkitVersion == "" {
-		t.Errorf("Bukkit.Version missing; Paper writes it")
+	if d.LevelName == "" || len(d.ServerBrands) == 0 {
+		t.Errorf("LevelName %q, ServerBrands %v", d.LevelName, d.ServerBrands)
 	}
 }

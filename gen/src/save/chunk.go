@@ -25,8 +25,21 @@ type PaletteContainer[T any] = PalettedContainerROPackedData[T]
 // Load reads a chunk from a region file's sector: a compression byte, then the
 // NBT of the chunk in that compression.
 func (c *Chunk) Load(data []byte) (err error) {
-	var r io.Reader = bytes.NewReader(data[1:])
+	r, err := sectorReader(data)
+	if err != nil {
+		return err
+	}
+	_, err = nbt.NewDecoder(r).Decode(c)
+	return
+}
 
+// sectorReader is the NBT of a region sector: a compression byte, then the
+// data in that compression. An entity region's sectors are framed the same.
+func sectorReader(data []byte) (r io.Reader, err error) {
+	if len(data) == 0 {
+		return nil, errors.New("empty sector")
+	}
+	r = bytes.NewReader(data[1:])
 	switch data[0] {
 	default:
 		err = errors.New("unknown compression")
@@ -37,13 +50,7 @@ func (c *Chunk) Load(data []byte) (err error) {
 	case 3:
 		// none compression
 	}
-	if err != nil {
-		return err
-	}
-
-	d := nbt.NewDecoder(r)
-	_, err = d.Decode(c)
-	return
+	return r, err
 }
 
 // Data is the inverse of Load: the compression byte and the compressed NBT.
@@ -62,31 +69,19 @@ func (c *Chunk) Data(compressingType byte) ([]byte, error) {
 	case 3:
 		w = &buff
 	}
-	err := nbt.NewEncoder(w).Encode(c, "")
-	return buff.Bytes(), err
+	if err := nbt.NewEncoder(w).Encode(c, ""); err != nil {
+		return nil, err
+	}
+	// the compressor holds the tail until it is closed
+	if closer, ok := w.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return buff.Bytes(), nil
 }
 
-// Entities is the NBT an entity of a saved chunk or a player file carries. It
-// is not generated: Mojang reads an entity through a chain of
-// readAdditionalSaveData methods, one per class in its hierarchy, which the
-// save extractor does not follow yet.
-type Entities struct {
-	Pos, Motion  [3]float64
-	Rotation     [3]float32
-	FallDistance float32
-	Fire, Air    int16
-
-	OnGround       bool
-	Invulnerable   bool
-	PortalCooldown int32
-	UUID           [4]int32
-
-	CustomName        string
-	CustomNameVisible bool
-	Silent            bool
-	NoGravity         bool
-	Glowing           bool
-	TicksFrozen       int32
-	HasVisualFire     bool
-	Tags              []string
-}
+// Entities is the NBT every entity carries, the keys of Entity.load and
+// Entity.save; a specific type's keys are its own generated struct (Zombie,
+// ItemFrame, …), one per entity type of this version (save_gen.go).
+type Entities = Entity

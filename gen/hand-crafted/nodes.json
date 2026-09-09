@@ -1,11 +1,12 @@
 {
  "_": [
-  "The schema's node kinds and the frame a packet travels in, as data.",
+  "The schema's node kinds, the frame a packet travels in and the container a chunk is saved in, as data.",
   "",
   "What each kind is on the wire is written in gen/docs/protocol.mc26tmpl.md, which",
   "mc26 docs renders for a version into the data repository; the build checks that every",
   "kind here has its section there. This file keeps what machines read: the list of kinds",
-  "with a one-line summary, and the frame as data, which the recording proxy follows."
+  "with a one-line summary, the frame as data, which the recording proxy follows, and the",
+  "region file as data, which the JSON-only reader opens a world with."
  ],
  "frame": {
   "data": {
@@ -202,6 +203,48 @@
   },
   "whilelist": {
    "summary": "Entries repeated with NO count anywhere: each entry carries a continuation bit inside one of its own fields, and reading ends at the first entry for which the `while` condition holds."
+  }
+ },
+ "region": {
+  "_": "The container a saved chunk is stored in, as data: Mojang's RegionFile. One file per 32x32 chunks, named r.<x>.<z>.mca under the dimension's region/ directory; entities/ and poi/ use the same container. gen/crosslang reads a world from this and save_schema.json alone.",
+  "sector": {
+   "bytes": 4096,
+   "note": "the file is a whole number of sectors; the first two are the tables"
+  },
+  "locations": {
+   "at": 0,
+   "entries": 1024,
+   "entry": {
+    "bytes": 4,
+    "offset": "the high 3 bytes: the chunk's first sector, 0 when the chunk is absent",
+    "count": "the low byte: how many sectors it spans"
+   },
+   "index": "x + z * 32, x and z the chunk's position inside the region"
+  },
+  "timestamps": {
+   "at": 4096,
+   "entries": 1024,
+   "entry": {
+    "bytes": 4,
+    "value": "seconds since the epoch when the chunk was last written"
+   }
+  },
+  "chunk": {
+   "length": {
+    "bytes": 4,
+    "note": "big-endian; counts the compression byte and the data, not itself"
+   },
+   "compression": {
+    "bytes": 1,
+    "codes": {
+     "1": "gzip",
+     "2": "zlib",
+     "3": "none",
+     "4": "lz4"
+    },
+    "external": "a code with bit 0x80 set means the data is in c.<x>.<z>.mcc next to the file, in that compression"
+   },
+   "data": "the NBT of the chunk: one unnamed TAG_Compound, the format save_schema.json describes as \"chunk\""
   }
  }
 }

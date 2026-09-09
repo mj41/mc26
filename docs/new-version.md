@@ -33,7 +33,11 @@ go run ./gen/cmd/mc26 update --pre            # the newest snapshot or pre-relea
    that omits a field compiles, so only *reads* of a vanished field are reported. Then
    `update --version 26.3 --skip-extract` to go on;
 5. **verify** every extracted version — build, smoke, cross-check, e2e — since the sources
-   changed for all of them (one table, logs under `temp/verify/`);
+   changed for all of them (one table, logs under `temp/verify/`). The e2e run's last
+   scenario cuts the version's fixture world for the save tests into
+   `gen/src/save/testdata/<version>/`, so the new version's first build skips those tests
+   and every later one runs them; a release's world is committed with the sources, a
+   pre-release's stays local (see `testing.md`);
 6. **commit** the data into `../mc26-data` (branch `mc-26.3`, tag `v0.263.0`) and the library
    into `../go-mc26` (the same branch and tag), locally; it never pushes. `--no-commit` stops
    after verify.

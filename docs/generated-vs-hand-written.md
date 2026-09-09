@@ -12,15 +12,16 @@ examples), see [architecture.md](architecture.md).
 
 | go-mc26 | files | lines |
 |---|---:|---:|
-| **generated** | 408 | 1,277,810 |
+| **generated** | 412 | 1,287,157 |
 | translations (`data/lang`, 143 languages) | 143 | 1,225,009 |
-| generated without translations | 265 | 52,801 |
-| **hand-written** | 84 | 14,230 |
-| byte-identical to Tnze/go-mc | 53 | 8,746 |
-| modified since | 22 | 3,328 |
-| new in this project | 9 | 2,156 |
+| generated without translations | 269 | 62,148 |
+| **hand-written** | 83 | 13,946 |
+| byte-identical to Tnze/go-mc | 45 | 7,772 |
+| modified since | 25 | 3,947 |
+| new in this project | 13 | 2,227 |
 
-Generated share of the library's lines: 98.9 % overall, 78.8 % without the translations.
+Generated share of the library's lines: 98.9 % overall, 81.7 % without the translations
+(`mc26 report --version 26.3-pre-3`, 2026-09-09).
 
 | go-mc26-kit | files | lines |
 |---|---:|---:|
@@ -28,44 +29,47 @@ Generated share of the library's lines: 98.9 % overall, 78.8 % without the trans
 
 | generator | writes | files | lines |
 |---|---|---:|---:|
-| packets | `protocol/{status,login,configuration,play,handshake}` structs and round-trip tests, `protocol/types` enums and shared structs, the `wire` records, `level/section_gen.go` | 26 | 11,660 |
+| packets | `protocol/{status,login,configuration,play,handshake}` structs and round-trip tests, `protocol/types` enums and shared structs, the `wire` records, `level/section_gen.go`, the component wire types | 27 | 11,922 |
 | item | `data/item` | 1 | 11,628 |
-| blocks | `level/block` (+ `block_states.nbt`) | 2 | 8,384 |
-| registryid | `data/registryid`, one file per registry | 95 | 7,623 |
+| blocks | `level/block` (+ `block_states.nbt`), each block's default state | 2 | 9,674 |
+| save | `save/save_gen.go`: the saved chunk, the entity region, every entity type, the player file and `level.dat`, from Mojang's readers and writers; the codec-built records of a world | 1 | 7,724 |
+| registryid | `data/registryid`, one file per registry | 96 | 7,654 |
 | entity data | `protocol/types/entitydata_gen.go`, `data/entitydata/entitydata_gen.go` | 2 | 3,279 |
 | component types | `level/component/*_gen.go` | 124 | 2,732 |
 | soundid | `data/soundid` | 1 | 2,008 |
 | entity | `data/entity` | 1 | 1,634 |
-| nbt | `registry/elements_gen.go`, `registry/registries_gen.go` (+ decode test), `chat/style_gen.go` | 4 | 1,143 |
+| nbt | `registry/elements_gen.go`, `registry/registries_gen.go` (+ decode test), `chat/style_gen.go` | 4 | 1,146 |
 | rpc | `management/{types,methods}_gen.go`: the server management API (JSON-RPC over a WebSocket), 68 typed calls, 21 typed notifications | 2 | 966 |
 | blockentities | `level/block` | 2 | 622 |
 | packetid | `data/packetid` (ids and `String()`) | 1 | 549 |
 | component | `level/component/components.go` | 1 | 260 |
 | constants | `data/constants` | 1 | 165 |
 | biome | `level/biome` | 1 | 121 |
+| chunkstatus | `level/chunkstatus_gen.go`, the `chunk_status` registry | 1 | 37 |
 | version | `data/version` | 1 | 27 |
 
 | package | generated lines | hand-written lines | what is hand-written |
 |---|---:|---:|---|
-| `nbt` | 0 | 4,960 | NBT codec, SNBT, dynamic values: upstream |
+| `nbt` | 0 | 4,970 | NBT codec, SNBT, dynamic values: upstream (the encoder now asks list elements and raw messages to marshal themselves) |
+| `level` | 14,835 | 1,599 | palettes and bit storage, the saved palette, the chunk conversions, block state helpers |
 | `net` | 0 | 2,796 | connection, packet framing and field types, RCON: upstream (one test rewritten) |
-| `level` | 13,246 | 1,627 | palettes and bit storage, block state helpers, the item stack bridges |
 | `chat` | 95 | 1,182 | text components, translations, signed chat: modified |
-| `save` | 0 | 1,166 | level.dat, player data, region files: upstream, keys followed 26.1 |
-| `registry` | 1,048 | 749 | the registry container and lookups, the NBT bridge types (`Holder`, `HolderSet`, `Either`, `Color`) with their tests |
+| `save` | 7,724 | 868 | the region file container, the compression wrappers, the short names and the tests over the fixture world; the chunk, every entity type, the player file and level.dat are generated |
+| `registry` | 1,051 | 798 | the registry container and lookups, the NBT bridge types (`Holder`, `HolderSet`, `Either`, `Color`) with their tests |
 | `wire` | 149 | 671 | the wire generics (`List`, `Map`, `Holder`, `Either`, `EnumSet`, `LenPrefixed`, `Counted`, …), packed positions, NBT bridges: new |
 | `management` | 966 | 618 | the WebSocket and JSON-RPC transport under the generated API, and its smoke test: new |
 | `yggdrasil/user` | 0 | 300 | a player's profile properties and public key, the session-key validator: upstream |
 | `protocol` | 10,502 | 144 | the type aliases |
-| `data` | 1,251,804 | 17 | one hand-written helper (`data/lang/en-us`) |
+| `data` | 1,251,835 | 0 | — |
 
-The machinery that produces both: 14,415 lines of Go in `gen/` (commands, generators, build,
-the test harness, the recording proxy), 6,167 lines of Java in `data-gen/java`, the two
+The machinery that produces both: 15,337 lines of Go in `gen/` (commands, generators, build,
+the test harness, the recording proxy, the fixture cutter), 7,049 lines of Java in `data-gen/java`, the two
 hand-crafted files that make the JSON a description rather than a hint (`prims.json`, which jar
 members the 50 primitives stand for, four definitions still written there by hand; `nodes.json`,
 30 node kinds and the frame), and `gen/crosslang`, the reader written from the JSON alone that
-checks all of it (a Go module that imports nothing from the library). No version needs an
-overlay file. How it got here is the git history of this repository, one commit per rule.
+checks all of it (a Go module that imports nothing from the library). Two versions carry an
+overlay file (`gen/src/_versions/26.1` and `26.2`, 97 lines each: the saved palette that is a
+compound in every entry until 26.3). How it got here is the git history of this repository, one commit per rule.
 
 ## What the categories mean
 
@@ -88,16 +92,12 @@ overlay file. How it got here is the git history of this repository, one commit 
 
 Everything that mirrors Mojang's data is generated: every packet, data component, registry
 element, shared type, entity metadata field, block, item, biome, translation, the management
-API, the handshake, the chunk sections down to the palettes. Two things are data-shaped and
-still written by hand, and why:
+API, the handshake, the chunk sections down to the palettes, and the save formats — the
+chunk, the entity region, every entity type, the player file and `level.dat`, read from the
+readers and writers Mojang parses them with (`save_schema.json`, since 2026-09-09). One thing
+is data-shaped and still written by hand, and why:
 
-1. **The save formats** (`save/`: `level.dat`, chunks, player data). Their shapes are read in
-   Java with keyed accessors rather than codecs (`LevelSettings` has no codec at all, it parses
-   a `Dynamic`), so there is nothing for the extractor to read them from. The codec-built parts
-   are in `nbt_schema.json` (`LevelData$RespawnData`, `WorldDataConfiguration`, `DataPackConfig`,
-   `WorldOptions`, `WorldDimensions` down to the density functions and surface rules); the rest
-   follows the 26.1 keys by hand.
-2. **The text component** (`chat/message.go`, `chat/nbtmessage.go`, about 400 lines). The
+1. **The text component** (`chat/message.go`, `chat/nbtmessage.go`, about 400 lines). The
    schema describes it in full (`ComponentSerialization.CODEC` in `nbt_schema.json`, recursive,
    with its dispatch on `type`), and the style, click and hover events are generated from it.
    The Go `Message` struct and its NBT and JSON readers stay by hand because their behaviour

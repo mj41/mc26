@@ -1,8 +1,11 @@
 # Zero hand-written lines in go-mc26
 
 Status: **decision** — what remains is the owner's call, not more generating. Started and
-finished on 2026-09-09 for everything that had data behind it. The question: what of the library's 14,230 hand-written lines (`report --version 26.3-pre-3`: 10,614
-in 84 files plus 3,616 of tests) can still be generated, and what "0" would take.
+finished on 2026-09-09 for everything that had data behind it; the docs carry the result
+(`docs/generated-vs-hand-written.md`, `docs/hand-written.md`, `gen/docs/save.mc26tmpl.md`,
+`docs/testing.md`). The question: what of the library's hand-written lines (`report --version
+26.3-pre-3` on 2026-09-09: 13,946 in 83 files, 10,175 of code plus 3,771 of tests) can still
+be generated, and what "0" would take.
 
 The answer, in one line: the ~780 lines that had data behind them are generated (2026-09-09);
 about 1,900 more could be, but that only moves them into the generator and makes them worse;
@@ -10,7 +13,7 @@ the remaining ~7,500 are runtime with no Mojang source, and "0" for them means a
 their own, not a generator.
 
 What the work measured, which is not what it set out to measure: generating a shape is a
-correctness tool, not a line-count tool. Seven defects came out of it, each one code that had
+correctness tool, not a line-count tool. Nine defects came out of it, each one code that had
 been wrong against a real server or a real world for as long as it had existed, and the biggest
 item — the saved chunk — ended with more hand-written lines than it started, because the format
 is not what the hand-written types claimed. Generating a thing is how you find out what it is.
@@ -48,7 +51,17 @@ real world, and the first two not even in the code being generated:
 - from 26.3 an entry with no properties is written as the bare id and one with them as a
   compound, while 26.1 and 26.2 always write the compound — two shapes, hence the overlay;
 - a saved chunk carries a light-only section below the world and one above it, which the
-  conversion has to skip rather than reject.
+  conversion has to skip rather than reject;
+- and two the fixture world found the moment the tests read this version's files instead of a
+  1.18 world: **the encoder refused a raw message nothing was read into** (an absent optional
+  `UpgradeData`), and **`Chunk.Data` never closed its zlib writer**, so a chunk the library
+  wrote did not read back. Neither had a test that could reach it.
+
+The walker itself had to learn, on the way to the entity and level formats: an interface's
+default method (a villager's `Inventory`), the player written by `saveWithoutId` (no `id`), a
+helper that builds and returns a compound or a list, a list typed by what is added to it, a
+map codec stored without a key, and that a branch takes its operands off the stack —
+`Snapshot` is written as `!stable()`, a ternary whose both arms the linear walk had pushed.
 
 So the lesson of the biggest item is not the one the table below predicts. Generating a shape
 does not shrink the code that uses it; what it buys is that the shape is this version's, that
@@ -65,25 +78,28 @@ Non-test lines by file, from `gen/src` on 2026-09-09:
 
 | package | lines | files |
 |---|---:|---|
-| `nbt` | 2,762 | decode 690, snbt_decode 568, snbt_scanner 432, encode 415, snbt 247, typeinfo 242, rawmsg 85, nbt 71, interface 12 |
+| `nbt` | 2,772 | decode, snbt_decode, snbt_scanner, encode, snbt, typeinfo, rawmsg, nbt, interface |
 | `net/packet` | 1,226 | types 680, util 294, packet 232, builder 20 |
-| `level` | 996 | chunk 386, palette 376, bitstorage 215, chunkstatus 19 |
+| `level` | 1,128 | chunk 411, palette 376, bitstorage 215, savepalette 107 (+ 97 in each of the 26.1 and 26.2 overlays) |
 | `chat` | 712 | message 286, decoration 182, nbtmessage 123, jsonmessage 73, clickevent 29, hoverevent 19 |
 | `wire` | 671 | wire 671 |
-| `registry` | 612 | nbttypes 225, network 149, registry 124, codec 114 |
+| `registry` | 661 | nbttypes, network, registry, codec |
 | `nbt/dynbt` | 566 | types 231, decode 194, encode 94, update 47 |
 | `management` | 491 | client 491 |
 | `net` | 481 | conn 249, rcon 216, interface 16 |
-| `save` | 480 | dimension 163, level 118, chunk 117, playerdata 82 |
 | `save/region` | 317 | mca 317 |
 | `yggdrasil/user` | 300 | validator 92, user 84, pubkey 77, property 47 |
-| `level/component` | 277 | types 277 |
 | `chat/sign` | 178 | session 94, cache 42, sign 42 |
 | `level/block` | 163 | block 91, properties 58, utilfuncs 14 |
 | `protocol/types` | 144 | types 144 |
 | `net/CFB8` | 137 | cfb8 137 |
+| `save` | 131 | chunk 92 (the compression wrapper, the short names), level 25 (two aliases and a reader), playerdata 14 |
 | `net/queue` | 84 | queue 84 |
-| `data/registryid/bootstrap` | 17 | builtinregistries 17 |
+| `level/component` | 13 | types 13 (two aliases) |
+
+Gone since the first count: `save/dimension.go` (its records are generated), the hand-written
+`LevelData` and `PlayerData`, `level/chunkstatus.go`, `data/registryid/bootstrap`, and 264 of
+the 277 lines of `level/component/types.go`.
 
 ## Two kinds of line
 
@@ -107,7 +123,7 @@ people). Rows marked **move** below are that; rows marked **generate** have data
 | ~~`level/component/types.go`~~ | 277 → 13 | **done 2026-09-09**: the five primitive definitions rendered into `level/component/wire_gen.go`; the file keeps the two aliases the generated components use. The generator learned a dispatch whose cases are another section (`casesFrom`) and names taken from the primitive. The fields now carry Mojang's names (`Item`, `Positive`, `Negative`), which the kit followed | done |
 | `yggdrasil/user` structs | 208 → about 30 | **measured 2026-09-09, do not**: only `Property` is schema-shaped, and its hand form is the better API (plain strings, the optional signature folded in) where the generated one would be `pk.String` and `pk.Option`. `PublicKey` holds a parsed RSA key and an expiry time, which is parsing, not schema; `user.go` fetches a key pair over HTTP; the validator verifies signatures. B |
 | `chat/message.go` struct | 200 → about 50 | **measured 2026-09-09, do not**: the `Message` struct is 50 lines of the file's 286 and the schema does describe it (`ComponentSerialization.CODEC`), but the other 236 are its methods — append, colour, translate, the two string renderings — and they would sit beside a generated struct instead of with it. B |
-| `save/*` | 480 | **done 2026-09-09** for the chunk, and it cost lines rather than saving them (see the section above). `GenSaveSchema` walks the reader and the writer of a format and records every key with its tag type, default and nesting; the saved chunk is described in full for every version (`save_schema.json`), and `gen_save.go` renders it into `save/save_gen.go`. `level.dat` and the player data are still by hand (their readers use a third API) | done |
+| ~~`save/*`~~ | 480 → 131 | **done 2026-09-09** (see the section above). `GenSaveSchema` walks the reader and the writer of a format and records every key with its tag type, default and nesting: the saved chunk, the entity region, every entity type (165 in 26.3), the player file and `level.dat` are described in full for every version (`save_schema.json`), and `gen_save.go` renders them into `save/save_gen.go`. The chunk cost lines in `level`; the rest removed them | done |
 | `net/packet/types.go` natives | 450 | **move**: the 18 natives are prose in `prims.json`, so the generator would carry one template per native | a day, nothing gained |
 | `net/packet/packet.go`, `net/conn.go` framing | 270 | **move**: `frame.data` of `nodes.json` says what the frame is, and the recording proxy follows it, but the compression and cipher code is not in that data | a day, nothing gained |
 | `wire/wire.go` | 600 | **move**: one generic per node kind, each the implementation of that kind; `gen/crosslang` is the same thing as one `case` per kind, and both are read by people | two days, nothing gained |
@@ -126,6 +142,10 @@ Three pieces the generator needs before the component bridges can be rendered, a
    `DELIMITED_COMPONENT_PATCH` are both Java `DataComponentPatch` with different fields, and
    `ITEM_STACK` and `UNTRUSTED_ITEM_STACK` are both `ItemStack`: the struct registry would
    collide, so a primitive's definition has to be named after the primitive.
+3. **A holder with no direct form.** `ItemStack`'s item is `holder:item` with no `direct` node,
+   which both `wire.Holder` and the JSON reader encode as a plain var int id — the same bytes
+   the hand-written `ItemID` writes, so this one is a type change and not a wire change
+   (checked, not assumed).
 4. ~~**The paletted containers of a saved chunk**~~ — done 2026-09-09. They are read through a
    codec that is an instance field of `PalettedContainerFactory`, built per level rather than
    held in a static field, and applied by a lambda mapped over the compound. Two rules closed
@@ -134,14 +154,9 @@ Three pieces the generator needs before the component bridges can be rendered, a
    describes the compound it is mapped over. Both palettes now come out in full: the block
    states as an either of a block id or an id-and-properties struct, the biomes as a holder of
    the biome registry, each beside its packed long array.
-5. **A key read outside the reader.** `DataVersion` is taken off the tag before `parse` (the
-   data fixer reads it), so the chunk's schema has no such key although every saved chunk has
-   one; a second reader would have to be walked for it.
-
-3. **A holder with no direct form.** `ItemStack`'s item is `holder:item` with no `direct` node,
-   which both `wire.Holder` and the JSON reader encode as a plain var int id — the same bytes
-   the hand-written `ItemID` writes, so this one is a type change and not a wire change
-   (checked, not assumed).
+5. ~~**A key read outside the reader.**~~ — done 2026-09-09: `DataVersion` is taken off the tag
+   before `parse` (the data fixer reads it), and the chunk's writer puts it, so walking the
+   writer as well as the reader has it.
 
 **B. No source of truth in Mojang's data: runtime.** About 7,500 lines: SNBT (1,250; Mojang
 has `SnbtGrammar` in 26.x, a real grammar class, but a parser generated from it is more code
@@ -152,8 +167,9 @@ RCON, the packet queue and CFB8 (440), the region file reader (317), the managem
 the registry container and lookups (600). Version independent by observation: none of it
 changed between 26.1 and 26.3.
 
-**Tests** (3,616) follow their code: generated packages get generated round-trip tests, the
-runtime keeps its own.
+**Tests** (3,771) follow their code: generated packages get generated round-trip tests, the
+runtime keeps its own, and the save package reads a fixture world cut from this version's
+server (`mc26 fixtures`, `docs/testing.md`).
 
 ## What "0" takes
 
@@ -162,8 +178,15 @@ runtime keeps its own.
    version), the item stack and component patch wire types (264 lines to 13), and the saved
    chunk. Measured and dropped along the way: the profile structs and the text component's
    struct, where the schema-shaped part is 30 and 50 lines and the generated form would be the
-   worse API. What is left of the save formats is `level.dat` and the player data, whose readers
-   use a third API (`Dynamic` and a chain of `readAdditionalSaveData` methods per class).
+   worse API. Done since, 2026-09-09: the entity region file, every entity type's NBT and the
+   player file, from `Entity.load` and `Entity.save` walked with the type's own class resolving
+   the virtual calls, interface default methods included, the player through `saveWithoutId`
+   (165 formats in 26.3; the four end-to-end worlds read with no finding, chunks, entities and
+   players alike); the codec-built records of a world; and `level.dat`, from the tag
+   `LevelStorageAccess.saveDataTag` builds — a helper that builds and returns a compound or
+   a list is followed, and a branch takes its operands off the walker's stack (`Snapshot`
+   was written as `!stable()`). `save/level.go` is two aliases and a reader now. Nothing of
+   the save formats is by hand.
 2. **Decide about the rest, which is a move and not a reduction: about 1,900 lines.** The
    natives, the framing, the node-kind generics and the tag codec would go from `gen/src` into
    `gen/internal/generate` as one template each. The report would say 0; the project would not

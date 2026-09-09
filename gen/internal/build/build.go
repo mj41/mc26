@@ -117,6 +117,13 @@ func Run(o Options) (*Info, error) {
 		}
 		o.Log("build %s: overlay %s applied", v.ID, overlay)
 	}
+	// The save package's tests read the fixture world of this version
+	// (src/save/testdata/<version>, cut by the end-to-end run) as
+	// save/testdata/world; the other versions' worlds are not shipped, and
+	// COPIED names the files where the library has them.
+	if err := shipFixtures(src, o.OutDir, v.ID, o.Log); err != nil {
+		return nil, err
+	}
 
 	// Every primitive the schema leaves as a name has to have a definition, or
 	// the JSON describes the protocol only to a reader that already owns a Go
@@ -265,4 +272,45 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0o644)
+}
+
+func shipFixtures(src, out, version string, log func(string, ...any)) error {
+	testdata := filepath.Join(out, "save", "testdata")
+	if err := os.RemoveAll(testdata); err != nil {
+		return err
+	}
+	from := filepath.Join(src, "save", "testdata", version)
+	var shipped []string
+	if fi, err := os.Stat(from); err != nil || !fi.IsDir() {
+		log("build %s: no fixture world under %s yet (the end-to-end run writes it); the save tests skip", version, from)
+	} else {
+		if err := gitx.CopyTree(from, filepath.Join(testdata, "world"), nil); err != nil {
+			return fmt.Errorf("fixture world: %w", err)
+		}
+		filepath.WalkDir(filepath.Join(testdata, "world"), func(path string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				rel, _ := filepath.Rel(out, path)
+				shipped = append(shipped, filepath.ToSlash(rel))
+			}
+			return nil
+		})
+		log("build %s: fixture world %s → save/testdata/world (%d files)", version, from, len(shipped))
+	}
+	// COPIED lists the fixture files the tree has, as this project's own
+	copied := filepath.Join(out, "COPIED")
+	b, err := os.ReadFile(copied)
+	if err != nil {
+		return nil // a tree without the origin list: nothing to list in
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		if !strings.HasPrefix(line, "save/testdata/") {
+			lines = append(lines, line)
+		}
+	}
+	sort.Strings(shipped)
+	for _, f := range shipped {
+		lines = append(lines, f+"\tnew")
+	}
+	return os.WriteFile(copied, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }

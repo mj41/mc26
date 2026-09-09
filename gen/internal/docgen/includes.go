@@ -19,6 +19,7 @@ type data struct {
 		ProtocolID int `json:"protocol_id"`
 	}
 	nbt   map[string]any // nbt_schema.json
+	save  map[string]any // save_schema.json
 	prims map[string]any // packet_schema.json "prims": the definitions of this version
 	nodes map[string]any // nodes.json
 }
@@ -50,6 +51,9 @@ func load(o Options) (*data, error) {
 		return nil, err
 	}
 	if err := readJSON(filepath.Join(o.DataDir, "nbt_schema.json"), &d.nbt); err != nil {
+		return nil, err
+	}
+	if err := readJSON(filepath.Join(o.DataDir, "save_schema.json"), &d.save); err != nil {
 		return nil, err
 	}
 	d.prims, _ = d.packet["prims"].(map[string]any)
@@ -92,6 +96,7 @@ var includes = map[string]func(d *data, args []string) (string, error){
 	"components":    (*data).components,
 	"registries":    (*data).registries,
 	"types":         (*data).types,
+	"save-formats":  (*data).saveFormats,
 }
 
 func (d *data) include(arg string) (string, error) {
@@ -409,11 +414,25 @@ func (d *data) types(args []string) (string, error) {
 // codec again wherever a field is not a ref.
 var seenRecursive map[string]bool
 
+// saveFormats renders the save formats: what a reader takes off the tag and a
+// writer puts into it, from save_schema.json.
+func (d *data) saveFormats(args []string) (string, error) {
+	entries, _ := d.save["formats"].(map[string]any)
+	if entries == nil {
+		return "", fmt.Errorf("save_schema.json has no formats")
+	}
+	return renderNbtEntries("save", entries), nil
+}
+
 func (d *data) nbtSection(section string) (string, error) {
 	entries, _ := d.nbt[section].(map[string]any)
 	if entries == nil {
 		return "", fmt.Errorf("nbt_schema.json has no %s", section)
 	}
+	return renderNbtEntries(section, entries), nil
+}
+
+func renderNbtEntries(section string, entries map[string]any) string {
 	var sb strings.Builder
 	keys := sortedKeys(entries)
 	sb.WriteString("| entry | Java | shape |\n|---|---|---|\n")
@@ -430,6 +449,9 @@ func (d *data) nbtSection(section string) (string, error) {
 		if f := str(e["field"]); f != "" {
 			fmt.Fprintf(&sb, ".%s", f)
 		}
+		if m := str(e["methods"]); m != "" {
+			fmt.Fprintf(&sb, " — read from its %s", m)
+		}
 		sb.WriteString("\n\n")
 		if c := str(e["coverage"]); c != "full" {
 			fmt.Fprintf(&sb, "Coverage: %s.\n\n", c)
@@ -438,7 +460,7 @@ func (d *data) nbtSection(section string) (string, error) {
 		sb.WriteString(nbtTree(t, 0))
 		sb.WriteString("\n")
 	}
-	return sb.String(), nil
+	return sb.String()
 }
 
 // ---- trees --------------------------------------------------------------------------

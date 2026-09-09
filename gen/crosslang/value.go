@@ -6,6 +6,11 @@
 // Nothing here special-cases a packet: the reader is driven by the node kind.
 //
 //	go run . --data <dir> --nodes <nodes.json> --capture <file.jsonl> [--verbose]
+//	go run . --data <dir> --nodes <nodes.json> --world <world> [--verbose]
+//
+// The second form reads a world instead of a session: the region container
+// from nodes.json, every chunk, entity and player file as generic NBT, checked
+// against save_schema.json.
 //
 // It is a module of its own so that it cannot import the Go library or the
 // generators: what it can read, the JSON describes.

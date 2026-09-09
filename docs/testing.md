@@ -62,7 +62,19 @@ assembled with), starts a server as above, and runs:
 | `autofish` | logs in, reaches game start |
 | `pressureTest` | three bots log in and reach game start |
 | `mcadump` | after the server stopped, dumps an overworld region file it wrote |
-| `savechunk` | every chunk of a region file the server wrote is converted to a `level.Chunk` and back (`go test ./level -run TestSaveChunk` in the kit tree, with the file's path). The saved shapes are generated from the reader and the writer Mojang parses and writes a chunk with, and this is the only place a real save file of the version is read; the scenario fails when the test matches nothing, so it cannot pass by checking nothing |
+| `saveschema` | the same world read by `gen/crosslang`, the reader that has only the JSON (`--world`): the region container from `nodes.json`'s `region` entry; every chunk of the overworld's region files, every entity of its entity region files (each by the format of its type, which its `id` names), every player file and `level.dat`, as generic NBT through the tags table, re-encoded byte for byte, and walked against `save_schema.json` — a key on disk the schema does not name, a key whose tag does not fit its node, a required key absent, each a finding. A schema that is complete only to a reader who already has this library fails here. The daze scenario runs `save-all flush` while its bot is online so there is a player file to read |
+| `savechunk` | every chunk of every region file the server wrote is converted to a `level.Chunk` and back (`go test ./level -run TestSaveChunk` in the kit tree, with the file's path). The saved shapes are generated from the reader and the writer Mojang parses and writes a chunk with, and this is the only place a real save file of the version is read; the scenario fails when the test matches nothing, so it cannot pass by checking nothing |
+
+The save package's own tests read a small world offline, `save/testdata/world` in the built
+library: four chunks around the spawn, four entity chunks, `level.dat` and one player file,
+each sector as the server wrote it, in region files of the same names. The end-to-end run cuts
+it from its server's world (its last scenario, `fixtures`; also `go run ./gen/cmd/mc26 fixtures
+--version <v>` from the world `mc26 e2e` left) into `gen/src/save/testdata/<version>/`, with a
+`SOURCE` note; the build ships the version's own and no other, and lists its files in `COPIED`.
+The worlds of released versions are committed (68 KB each); a pre-release's or snapshot's is
+written the same way but ignored by git, since it changes with every pre-release. A version's
+first build, before its end-to-end run, has none, and the save tests skip with a note; the next
+build has it. The files are not edited by hand.
 
 The `daze` example has a console: a line on stdin is sent as chat, a `/line` as a command. That
 is how the harness drives bots; it works for a person too.
@@ -90,7 +102,9 @@ without complaint, so reading all of it is the test. Then `gen/crosslang`, a rea
 written from `packet_schema.json` (its `prims` section included), `packets.json`,
 `registries.json`, `entity_data.json` and `nodes.json` and nothing else, decodes each packet and encodes it again; the
 command passes only when every packet comes back byte for byte. `--keep` re-reads the capture
-that is already there without starting a server. `gen/crosslang/FINDINGS.md` records what that
+that is already there without starting a server. The same reader reads a world with `--world`
+(the `saveschema` scenario of the end-to-end run): the region container from `nodes.json`, the
+chunks, the entities by their type and the player files from `save_schema.json`. `gen/crosslang/FINDINGS.md` records what that
 decoder found the JSON did and did not say when it was first written, and what has closed since.
 
 ## Everything at once

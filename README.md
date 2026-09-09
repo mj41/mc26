@@ -29,6 +29,7 @@ go run ./gen/cmd/mc26 extract  --version 26.2           # only the JSON: temp/da
 go run ./gen/cmd/mc26 build    --data 26.2              # the library: temp/lib/26.2, and the kit against it: temp/kit/26.2
 go run ./gen/cmd/mc26 smoke    --version 26.2           # the kit's bot and the library's management client against a vanilla server
 go run ./gen/cmd/mc26 e2e      --version 26.2           # the kit's example bots against a vanilla server
+go run ./gen/cmd/mc26 fixtures --version 26.2           # the save tests' small world, cut from what e2e left
 go run ./gen/cmd/mc26 crosscheck --version 26.2         # a recorded session read back from the JSON alone, in another language
 go run ./gen/cmd/schemacov 26.2                         # how much of the packet schema is typed
 go run ./gen/cmd/packetdiff 26.1 26.2                   # wire-layout changes between two versions

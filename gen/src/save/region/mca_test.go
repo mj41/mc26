@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mj41/go-mc26/nbt"
@@ -25,8 +26,22 @@ func TestIn(t *testing.T) {
 	}
 }
 
+// fixtureRegion is the region file cut from a vanilla server's world of this
+// version (`mc26 fixtures`, ../testdata/world/SOURCE).
+func fixtureRegion(t *testing.T) string {
+	t.Helper()
+	if _, err := os.Stat("../testdata/world/SOURCE"); err != nil {
+		t.Skip("no fixture world for this version yet: the end-to-end run writes it (`mc26 fixtures`)")
+	}
+	files, _ := filepath.Glob("../testdata/world/region/r.*.mca")
+	if len(files) == 0 {
+		t.Fatal("no fixture region under ../testdata/world")
+	}
+	return files[0]
+}
+
 func TestReadRegion(t *testing.T) {
-	r, err := Open("../testdata/region/r.0.-1.mca")
+	r, err := OpenReadOnly(fixtureRegion(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +97,7 @@ func TestFindSpace(t *testing.T) {
 }
 
 func TestCountChunks(t *testing.T) {
-	r, err := Open("../testdata/region/r.-1.-1.mca")
+	r, err := OpenReadOnly(fixtureRegion(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +110,9 @@ func TestCountChunks(t *testing.T) {
 				count++
 			}
 		}
+	}
+	if count == 0 {
+		t.Fatal("the fixture region holds no chunk")
 	}
 	t.Logf("chunk count: %d", count)
 }

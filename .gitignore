@@ -1,1 +1,6 @@
 /temp/
+
+# fixture worlds of pre-releases and snapshots: the end-to-end run writes them, releases' are committed
+gen/src/save/testdata/*-pre-*
+gen/src/save/testdata/*-rc*
+gen/src/save/testdata/[0-9][0-9]w[0-9][0-9]*

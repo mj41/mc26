@@ -79,3 +79,9 @@ func Lib(version string) string { return filepath.Join(Temp(), "lib", version) }
 
 // Kit is the kit tree assembled against the built library of a version.
 func Kit(version string) string { return filepath.Join(Temp(), "kit", version) }
+
+// Fixtures is the small world the save package's tests read for a version
+// (`mc26 fixtures`); the build copies it into the library as save/testdata/world.
+func Fixtures(version string) string {
+	return filepath.Join(MustRoot(), "gen", "src", "save", "testdata", version)
+}

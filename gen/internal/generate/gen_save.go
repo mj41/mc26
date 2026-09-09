@@ -25,15 +25,38 @@ func genSave(jsonDir, outRoot string) error {
 		return fmt.Errorf("genSave: %w (re-run extraction; the data must include GenSaveSchema's output)", err)
 	}
 	g := &nbtGen{pkgs: map[string]*nbtPkg{"save": {name: "save", taken: map[string]*nbtType{}}}, byJava: map[string]string{}, byName: map[string]string{}}
+	// The codec-built records of a world save are in nbt_schema.json (the
+	// world options, the dimensions, the respawn data, the data-pack lists):
+	// they belong to the same package, so they are rendered with the formats.
+	var nbtSchema nbtSchemaFile
+	if err := readJSON(filepath.Join(jsonDir, "nbt_schema.json"), &nbtSchema); err != nil {
+		return fmt.Errorf("genSave: %w", err)
+	}
+	records := map[string]nbtEntry{}
+	for key, e := range nbtSchema.Types {
+		if strings.HasPrefix(e.Class, "net.minecraft.world.") && e.Type["k"] != "recursive" {
+			records[key] = e
+		}
+	}
 	var roots []map[string]any
 	for _, key := range sortedKeys(schema.Formats) {
 		roots = append(roots, schema.Formats[key].Type)
+	}
+	for _, key := range sortedKeys(records) {
+		roots = append(roots, records[key].Type)
 	}
 	g.findGenericsIn(roots)
 	var holes []string
 	for _, key := range sortedKeys(schema.Formats) {
 		e := schema.Formats[key]
 		if _, _, err := g.typeOf(e.Type, "save", "the saved "+key); err != nil {
+			return fmt.Errorf("genSave: %s: %w", key, err)
+		}
+		holes = append(holes, holePaths(e.Type, key)...)
+	}
+	for _, key := range sortedKeys(records) {
+		e := records[key]
+		if _, _, err := g.typeOf(e.Type, "save", "a record of level.dat, "+shortJava(e.Class)+"."+e.Field); err != nil {
 			return fmt.Errorf("genSave: %s: %w", key, err)
 		}
 		holes = append(holes, holePaths(e.Type, key)...)
@@ -48,7 +71,7 @@ func genSave(jsonDir, outRoot string) error {
 	if err := writeGo(filepath.Join(outRoot, "save", "save_gen.go"), out); err != nil {
 		return fmt.Errorf("genSave: %w", err)
 	}
-	logf("genSave: wrote save/save_gen.go (%d formats, %d types)", len(schema.Formats), len(g.pkgs["save"].types))
+	logf("genSave: wrote save/save_gen.go (%d formats, %d level.dat records, %d types)", len(schema.Formats), len(records), len(g.pkgs["save"].types))
 	return nil
 }
 
