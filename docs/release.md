@@ -46,9 +46,13 @@ the library step is skipped. `26.3-pre-2` was seeded into `mc26-data-pre` that w
 ## In GitHub Actions
 
 `.github/workflows/release.yml`, `workflow_dispatch` with the version and a `push` switch
-(default on). It clones the three target repositories with the secret `MC26_PUSH_TOKEN` — a
-fine-grained token with *contents: write* on `mc26-data`, `mc26-data-pre` and `go-mc26` — and
-runs the local command with `--e2e --push`. This is the only place tags are created for
+(default on). It clones the three target repositories over SSH, each with its own deploy key:
+a write deploy key on `mc26-data`, `mc26-data-pre` and `go-mc26`, whose private halves are the
+secrets `MC26_DATA_DEPLOY_KEY`, `MC26_DATA_PRE_DEPLOY_KEY` and `GO_MC26_DEPLOY_KEY` here; a key
+reaches its own repository and no other, and does not expire. Then it runs the local command
+with `--e2e --push`. To replace a key: `ssh-keygen -t ed25519 -N "" -f k`, `gh repo deploy-key
+add k.pub -R mj41/<repo> --allow-write`, `gh secret set <NAME> -R mj41/mc26 < k`, delete `k`
+and the old deploy key. This is the only place tags are created for
 published lines; a laptop release with `--push` is for bootstrapping.
 
 `pipeline.yml` never tags and never pushes.

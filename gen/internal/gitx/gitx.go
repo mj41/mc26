@@ -53,11 +53,15 @@ func BranchExists(dir, name string) bool {
 	return err == nil
 }
 
-// Checkout switches to branch, creating it from `from` when it does not exist.
+// Checkout switches to branch, creating it from origin's branch of that name
+// when only that exists (a fresh clone), and from `from` when neither does.
 func Checkout(dir, branch, from string) error {
 	if BranchExists(dir, branch) {
 		_, err := Run(dir, "checkout", "-q", branch)
 		return err
+	}
+	if _, err := Run(dir, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+branch); err == nil {
+		from = "origin/" + branch
 	}
 	// --no-track: with branch.autoSetupMerge=always the new branch would track
 	// `from`, and a push under push.default=upstream would land on it

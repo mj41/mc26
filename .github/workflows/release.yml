@@ -2,8 +2,9 @@
 # tag v0.<YYN>.<n>), build go-mc26 from it (branch mc-<version>, tag
 # v0.<YYN>.<patch>), smoke-test the build, push. Tags are created only here.
 #
-# Needs the secret MC26_PUSH_TOKEN: a fine-grained token with contents:write on
-# mj41/mc26-data, mj41/mc26-data-pre and mj41/go-mc26.
+# Needs three secrets, each the private half of a write deploy key on one target
+# repository: MC26_DATA_DEPLOY_KEY (mj41/mc26-data), MC26_DATA_PRE_DEPLOY_KEY
+# (mj41/mc26-data-pre) and GO_MC26_DEPLOY_KEY (mj41/go-mc26).
 name: release
 on:
   workflow_dispatch:
@@ -29,14 +30,27 @@ jobs:
           repository: mj41/go-mc26-kit
           path: temp/kit-src
       - name: data repositories
+        # each clone keeps its own key in core.sshCommand, so the release's push
+        # from it reaches that repository and no other
         run: |
-          git clone --depth 50 "https://x-access-token:${MC26_PUSH_TOKEN}@github.com/mj41/mc26-data.git" temp/repos/mc26-data
-          git clone --depth 50 "https://x-access-token:${MC26_PUSH_TOKEN}@github.com/mj41/mc26-data-pre.git" temp/repos/mc26-data-pre
-          git clone --depth 50 "https://x-access-token:${MC26_PUSH_TOKEN}@github.com/mj41/go-mc26.git" temp/repos/go-mc26
+          mkdir -p -m 700 ~/.ssh
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > ~/.ssh/known_hosts
+          clone() {
+            key=~/.ssh/deploy-$1
+            printf '%s\n' "$2" > "$key" && chmod 600 "$key"
+            ssh="ssh -i $key -o IdentitiesOnly=yes"
+            GIT_SSH_COMMAND="$ssh" git clone --depth 50 --no-single-branch "git@github.com:mj41/$1.git" "temp/repos/$1"
+            git -C "temp/repos/$1" config core.sshCommand "$ssh"
+          }
+          clone mc26-data "$MC26_DATA_DEPLOY_KEY"
+          clone mc26-data-pre "$MC26_DATA_PRE_DEPLOY_KEY"
+          clone go-mc26 "$GO_MC26_DEPLOY_KEY"
           git config --global user.name "mc26 release"
           git config --global user.email "mc26-release@users.noreply.github.com"
         env:
-          MC26_PUSH_TOKEN: ${{ secrets.MC26_PUSH_TOKEN }}
+          MC26_DATA_DEPLOY_KEY: ${{ secrets.MC26_DATA_DEPLOY_KEY }}
+          MC26_DATA_PRE_DEPLOY_KEY: ${{ secrets.MC26_DATA_PRE_DEPLOY_KEY }}
+          GO_MC26_DEPLOY_KEY: ${{ secrets.GO_MC26_DEPLOY_KEY }}
       - name: release
         run: |
           go run ./gen/cmd/mc26 release --version "${{ inputs.version }}" --e2e --kit-src temp/kit-src \

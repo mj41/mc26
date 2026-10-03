@@ -49,8 +49,7 @@ go run ./gen/cmd/mc26 release --version 26.2 --push
 - `pipeline` (`.github/workflows/pipeline.yml`): every pull request, and on demand for any
   version — the local `pipeline --smoke --e2e`, plus the coverage report and the artifacts.
 - `release` (`.github/workflows/release.yml`): on demand with a version — the local `release
-  --e2e --push`, using the `MC26_PUSH_TOKEN` secret (contents: write on the three target
-  repositories). Tags are created only here.
+  --e2e --push`, with a write deploy key per target repository (docs/release.md). Tags are created only here.
 
 The smoke test joins the server, waits for chunks and its own chat echo. The end-to-end run
 builds every example against the built library and checks: `mcping` reports the version;
