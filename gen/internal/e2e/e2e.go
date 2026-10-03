@@ -237,6 +237,12 @@ func scenarioDaze(o Options, bin string, srv *smoke.Server) error {
 		{`tellraw Daze {"text":"private hi"}`, ""},
 		{"give Daze minecraft:stone 3", "Gave 3"},
 		{"tp Daze ~ ~5 ~", "Teleported Daze"},
+		// the fixture cut needs entity chunks near the spawn, and the animals a
+		// flat world generates there are chance (a fresh 26.3 world had none):
+		// two of our own in two chunks, last run's pair removed first
+		{"kill @e[tag=e2e_fixture]", ""},
+		{`summon minecraft:sheep 3 -60 3 {NoAI:1b,Tags:["e2e_fixture"]}`, "Summoned"},
+		{`summon minecraft:cow -5 -60 -5 {NoAI:1b,Tags:["e2e_fixture"]}`, "Summoned"},
 		// the player's file: written for an online player by save-all, which is
 		// what the save-schema scenario reads afterwards
 		{"save-all flush", "Saved the game"},
