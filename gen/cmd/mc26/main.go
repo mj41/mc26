@@ -993,15 +993,29 @@ func updateIndex(repo, kind string) error {
 	if clean, err := gitx.IsClean(repo); err != nil || !clean {
 		return fmt.Errorf("%s has uncommitted changes", repo)
 	}
-	out, err := gitx.Run(repo, "branch", "--list", "--format=%(refname:short)", "mc-*")
+	// every mc-* branch, local or only on origin (a fresh clone checks out one):
+	// the index lists them all, read from the local branch where there is one
+	out, err := gitx.Run(repo, "for-each-ref", "--format=%(refname)", "refs/heads/mc-*", "refs/remotes/origin/mc-*")
 	if err != nil {
 		return err
 	}
-	branches := strings.Fields(out)
+	refOf := map[string]string{}
+	for _, r := range strings.Fields(out) {
+		if name, ok := strings.CutPrefix(r, "refs/heads/"); ok {
+			refOf[name] = r
+		} else if name, ok := strings.CutPrefix(r, "refs/remotes/origin/"); ok && refOf[name] == "" {
+			refOf[name] = r
+		}
+	}
+	var branches []string
+	for name := range refOf {
+		branches = append(branches, name)
+	}
 	sort.Slice(branches, func(i, j int) bool { return mcver.Less(branches[j][3:], branches[i][3:]) })
 	var rows []indexRow
-	for _, b := range branches {
-		row := indexRow{Branch: b, Version: b[3:], Tag: "—"}
+	for _, name := range branches {
+		b := refOf[name]
+		row := indexRow{Branch: name, Version: name[3:], Tag: "—"}
 		if kind == "lib" {
 			src, err := gitx.Run(repo, "show", b+":data/version/version.go")
 			if err != nil {
@@ -1048,7 +1062,7 @@ func updateIndex(repo, kind string) error {
 	if err := render(filepath.Join(root, "gen", "templates", "index-"+kind+".md.tmpl"), filepath.Join(repo, "README.md"), map[string]any{"Branches": rows}); err != nil {
 		return err
 	}
-	_, changed, err := gitx.Commit(repo, fmt.Sprintf("README: %d branches", len(rows)))
+	_, changed, err := gitx.Commit(repo, fmt.Sprintf("README: %d branch%s", len(rows), map[bool]string{true: "", false: "es"}[len(rows) == 1]))
 	if err != nil {
 		return err
 	}
