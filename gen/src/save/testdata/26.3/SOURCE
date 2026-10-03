@@ -1,0 +1,6 @@
+Written by `mc26 fixtures --version 26.3` from the world the end-to-end run's vanilla server wrote.
+Minecraft 26.3 (level.dat Version.Name "26.3", DataVersion 5023).
+region/r.0.0.mca: the 4 chunks nearest the spawn (chunk 0, 0), each sector as the server wrote it.
+entities/r.-1.-1.mca, r.0.0.mca: 2 entity chunks, the nearest to the spawn that hold entities.
+players/data/0d9b7ec8-babb-340e-b817-ca455a43e1c9.dat: one player's file, the end-to-end bot.
+level.dat: as written. Re-run the command after a version bump; do not edit by hand.

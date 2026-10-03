@@ -8,17 +8,10 @@ below is the order to do them. A finished task is removed: what is worth keeping
 
 | order | task | what is asked |
 |---|---|---|
-| 1 | [publish-repositories.md](publish-repositories.md) | create the four GitHub repositories, re-tag, first push |
-| 2 | [old-fork.md](old-fork.md) | the note on the old fork, the consumers repointed, the fork archived |
-| 3 | [zero-hand-written.md](zero-hand-written.md) | everything with data behind it is generated, the save formats included (nine defects came out, each in code that had been wrong against a real server or world). Two things left, both a call rather than work: ~1,900 lines that generating would only move into the generator, and ~7,500 of runtime for a module of its own |
+| 1 | [old-fork.md](old-fork.md) | the note on the old fork, the consumers repointed, the fork archived |
+| 2 | [zero-hand-written.md](zero-hand-written.md) | everything with data behind it is generated, the save formats included (nine defects came out, each in code that had been wrong against a real server or world). Two things left, both a call rather than work: ~1,900 lines that generating would only move into the generator, and ~7,500 of runtime for a module of its own |
 
-## 2. Next
-
-| order | task | what is asked |
-|---|---|---|
-| 4 | [release-26-3.md](release-26-3.md) | Minecraft 26.3 through `mc26 update`, then `release --push` and the kit's matrix |
-
-## 3. Research
+## 2. Research
 
 | task | what is asked |
 |---|---|

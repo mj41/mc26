@@ -19,7 +19,6 @@ comparison.
 2. `mc26 export --format <theirs> --version V`, with an alias table for names computed by
    matching packet ids; check the result with their client against a vanilla server.
 3. The read-only export for the format with the web IDE and the hex view.
-4. Publish `mc26-data` first ([publish-repositories.md](publish-repositories.md)): nothing above
-   is visible to anyone until then.
+4. `mc26-data` is public since 2026-10-03, so an export can name the data tag it was made from.
 
 Our JSON stays the source; exports are consumers, checked like the Go reader is.

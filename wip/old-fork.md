@@ -1,6 +1,6 @@
 # The old fork
 
-Status: **decision** — the owner's, after [publish-repositories.md](publish-repositories.md).
+Status: **decision** — the owner's; the new repositories are public since 2026-10-03.
 
 `go-mc26` is another approach, not a continuation of the owner's fork of Tnze/go-mc (decided
 2026-09-05): it starts at Minecraft 26.1, carries code from Tnze/go-mc under its MIT notice
