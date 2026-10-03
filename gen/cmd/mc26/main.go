@@ -806,7 +806,7 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 	}
 	if *dataOnly {
 		if *push {
-			if err := gitx.Push(repo, branch, dataTag); err != nil {
+			if err := gitx.Push(repo, "main", branch, dataTag); err != nil {
 				return "", "", err
 			}
 			logf("pushed %s %s %s", dataName, branch, dataTag)
@@ -842,10 +842,10 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 
 	// 3. push
 	if *push {
-		if err := gitx.Push(repo, branch, dataTag); err != nil {
+		if err := gitx.Push(repo, "main", branch, dataTag); err != nil {
 			return "", "", err
 		}
-		if err := gitx.Push(*libRepo, branch, libTag); err != nil {
+		if err := gitx.Push(*libRepo, "main", branch, libTag); err != nil {
 			return "", "", err
 		}
 		logf("pushed %s %s %s and go-mc26 %s %s", dataName, branch, dataTag, branch, libTag)

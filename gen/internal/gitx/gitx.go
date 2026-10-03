@@ -59,7 +59,9 @@ func Checkout(dir, branch, from string) error {
 		_, err := Run(dir, "checkout", "-q", branch)
 		return err
 	}
-	_, err := Run(dir, "checkout", "-q", "-b", branch, from)
+	// --no-track: with branch.autoSetupMerge=always the new branch would track
+	// `from`, and a push under push.default=upstream would land on it
+	_, err := Run(dir, "checkout", "-q", "--no-track", "-b", branch, from)
 	return err
 }
 
@@ -191,8 +193,24 @@ func Tags(dir, pattern string) ([]string, error) {
 	return tags, nil
 }
 
-// Push pushes refs (branches and tags) to origin.
+// Push pushes refs (branches and tags) to origin, each to the ref of its own
+// name: a bare name would follow the user's push.default, which may send a
+// branch to its upstream instead.
 func Push(dir string, refs ...string) error {
-	_, err := Run(dir, append([]string{"push", "origin"}, refs...)...)
+	args := []string{"push", "origin"}
+	for _, r := range refs {
+		switch {
+		case strings.HasPrefix(r, "refs/"):
+			args = append(args, r+":"+r)
+		case BranchExists(dir, r):
+			args = append(args, "refs/heads/"+r+":refs/heads/"+r)
+		default:
+			if _, err := Run(dir, "rev-parse", "--verify", "-q", "refs/tags/"+r); err != nil {
+				return fmt.Errorf("push %s: neither a local branch nor a tag", r)
+			}
+			args = append(args, "refs/tags/"+r+":refs/tags/"+r)
+		}
+	}
+	_, err := Run(dir, args...)
 	return err
 }
