@@ -71,6 +71,8 @@ each sector as the server wrote it, in region files of the same names. The end-t
 it from its server's world (its last scenario, `fixtures`; also `go run ./gen/cmd/mc26 fixtures
 --version <v>` from the world `mc26 e2e` left) into `gen/src/save/testdata/<version>/`, with a
 `SOURCE` note; the build ships the version's own and no other, and lists its files in `COPIED`.
+The end-to-end run cuts it only when the version has none yet, so `verify` leaves committed
+worlds alone; `mc26 fixtures` is how an existing one is cut again.
 The worlds of released versions are committed (68 KB each); a pre-release's or snapshot's is
 written the same way but ignored by git, since it changes with every pre-release. A version's
 first build, before its end-to-end run, has none, and the save tests skip with a note; the next

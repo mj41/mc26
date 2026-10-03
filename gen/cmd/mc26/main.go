@@ -190,11 +190,18 @@ func runE2E(version, dataDir, kitDir string, port int, runtime string) error {
 		return err
 	}
 	root := paths.MustRoot()
+	// a version's fixture world is cut once, by its first end-to-end run; every
+	// later run leaves it, so verify does not rewrite committed worlds and the
+	// build ships the world the sources hold (`mc26 fixtures` re-cuts it)
+	fixtureDir := paths.Fixtures(version)
+	if _, err := os.Stat(fixtureDir); err == nil {
+		fixtureDir = ""
+	}
 	return e2e.Run(e2e.Options{
 		Version: version, DataDir: dataDir, KitDir: kitDir, JarPath: jar,
 		CrossLang: filepath.Join(root, "gen", "crosslang"), NodesPath: filepath.Join(root, "gen", "hand-crafted", "nodes.json"),
 		WorkDir: filepath.Join(paths.Temp(), "e2e", version), Port: port, Runtime: runtime, Log: logf,
-		Fixtures: paths.Fixtures(version),
+		Fixtures: fixtureDir,
 	})
 }
 
