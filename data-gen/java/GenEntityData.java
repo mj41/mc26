@@ -28,6 +28,7 @@ public class GenEntityData {
     public static void main(String[] args) throws Exception {
         net.minecraft.SharedConstants.tryDetectVersion();
         net.minecraft.server.Bootstrap.bootStrap();
+        GenPacketSchema.loadPrims();   // the serializers' codecs end in named primitives
 
         Class<?> serializersClass = Class.forName(SERIALIZERS.replace('/', '.'));
         Class<?> serializerType = Class.forName("net.minecraft.network.syncher.EntityDataSerializer");

@@ -201,6 +201,8 @@ public class GenPacketSchema {
 
     /** The primitive a Java member stands for, or null: also null for the one being derived. */
     static String primOfMember(String member) {
+        // without the table every primitive would be walked into its raw reads (opaque)
+        if (PRIM_ENTRIES.isEmpty()) throw new IllegalStateException("loadPrims() was not called: the walker needs prims.json");
         String p = MEMBER_PRIM.get(member);
         return p == null || p.equals(derivingPrim) ? null : p;
     }
