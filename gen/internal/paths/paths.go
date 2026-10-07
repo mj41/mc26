@@ -18,7 +18,7 @@ import (
 // <root>/temp — that contains data-gen/java/ExtractAll.java.
 func Root() (string, error) {
 	if r := os.Getenv("MC26_ROOT"); r != "" {
-		return r, nil
+		return abs(r), nil
 	}
 	starts := []string{}
 	if wd, err := os.Getwd(); err == nil {
@@ -42,6 +42,15 @@ func Root() (string, error) {
 	return "", fmt.Errorf("not inside an mc26 checkout (set MC26_ROOT or run from the repository)")
 }
 
+// abs makes a directory named in the environment absolute: a relative one
+// given to podman -v would be a named volume, not the directory.
+func abs(dir string) string {
+	if a, err := filepath.Abs(dir); err == nil {
+		return a
+	}
+	return dir
+}
+
 // MustRoot is Root or exit.
 func MustRoot() string {
 	r, err := Root()
@@ -52,13 +61,18 @@ func MustRoot() string {
 	return r
 }
 
-// Temp is the scratch directory (gitignored).
-func Temp() string { return filepath.Join(MustRoot(), "temp") }
+// Temp is the scratch directory: MC26_TEMP or temp (gitignored).
+func Temp() string {
+	if d := os.Getenv("MC26_TEMP"); d != "" {
+		return abs(d)
+	}
+	return filepath.Join(MustRoot(), "temp")
+}
 
 // DataRoot holds one extracted directory per version: MC26_DATA or temp/data.
 func DataRoot() string {
 	if d := os.Getenv("MC26_DATA"); d != "" {
-		return d
+		return abs(d)
 	}
 	return filepath.Join(Temp(), "data")
 }
@@ -71,8 +85,13 @@ func Data(versionOrDir string) string {
 	return filepath.Join(DataRoot(), versionOrDir)
 }
 
-// Cache holds the downloaded server jars.
-func Cache() string { return filepath.Join(Temp(), "cache") }
+// Cache holds the downloaded server jars: MC26_CACHE or temp/cache.
+func Cache() string {
+	if d := os.Getenv("MC26_CACHE"); d != "" {
+		return abs(d)
+	}
+	return filepath.Join(Temp(), "cache")
+}
 
 // Lib is the built library tree of a version.
 func Lib(version string) string { return filepath.Join(Temp(), "lib", version) }

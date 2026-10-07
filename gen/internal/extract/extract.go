@@ -212,8 +212,18 @@ type assetIndex struct {
 }
 
 // ServerJar returns the cached server jar of version, downloading it from
-// Mojang's manifest when missing, and verifying the sha1 either way.
+// Mojang's manifest when missing, and verifying the sha1 either way. The sha1
+// the manifest gave is kept beside the jar (<version>-server.jar.sha1): a jar
+// that matches it is used without asking Mojang, so a cache filled once (a
+// test bench's image) runs with no way out.
 func ServerJar(cacheDir, version string, log func(string, ...any)) (string, error) {
+	path := filepath.Join(cacheDir, version+"-server.jar")
+	if want, err := os.ReadFile(path + ".sha1"); err == nil {
+		if sum, err := fileSHA1(path); err == nil && sum == strings.TrimSpace(string(want)) {
+			log("  server jar cached: %s", path)
+			return path, nil
+		}
+	}
 	detail, err := fetchDetail(version)
 	if err != nil {
 		return "", err
@@ -221,19 +231,19 @@ func ServerJar(cacheDir, version string, log func(string, ...any)) (string, erro
 	if detail.Downloads.Server.URL == "" {
 		return "", fmt.Errorf("version %s has no server download", version)
 	}
-	path := filepath.Join(cacheDir, version+"-server.jar")
-	if sum, err := fileSHA1(path); err == nil && sum == detail.Downloads.Server.SHA1 {
+	sha1 := detail.Downloads.Server.SHA1
+	if sum, err := fileSHA1(path); err == nil && sum == sha1 {
 		log("  server jar cached: %s", path)
-		return path, nil
+		return path, os.WriteFile(path+".sha1", []byte(sha1+"\n"), 0o644)
 	}
 	log("  downloading server jar %s", detail.Downloads.Server.URL)
 	if err := download(detail.Downloads.Server.URL, path); err != nil {
 		return "", err
 	}
-	if sum, err := fileSHA1(path); err != nil || sum != detail.Downloads.Server.SHA1 {
-		return "", fmt.Errorf("server jar sha1 %s, manifest says %s", sum, detail.Downloads.Server.SHA1)
+	if sum, err := fileSHA1(path); err != nil || sum != sha1 {
+		return "", fmt.Errorf("server jar sha1 %s, manifest says %s", sum, sha1)
 	}
-	return path, nil
+	return path, os.WriteFile(path+".sha1", []byte(sha1+"\n"), 0o644)
 }
 
 // ClientJar returns the cached client jar of version, downloading it from
