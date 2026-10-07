@@ -37,6 +37,10 @@ type Server struct {
 	MgmtSecret string
 	Runtime    string // "podman" or "docker" (detected when empty), or "host" for the host's java
 	Log        func(format string, args ...any)
+	// LevelType is the world's generator (minecraft:normal); empty is the
+	// flat world every scenario but one plays on. Seed is its seed.
+	LevelType string
+	Seed      string
 
 	cmd       *exec.Cmd
 	container string
@@ -100,6 +104,13 @@ func (s *Server) Start() error {
 	if s.Runtime != "host" {
 		port, rcon, mgmt, mgmtHost = 25565, 25575, 25585, "0.0.0.0"
 	}
+	// the flat world without villages: each version puts its own elsewhere,
+	// and a scenario would meet a dirt path or a house in one version only
+	levelType, structures := s.LevelType, true
+	if levelType == "" {
+		levelType, structures = "minecraft:flat", false
+	}
+	levelType = strings.ReplaceAll(levelType, ":", `\:`)
 	props := fmt.Sprintf(`online-mode=false
 white-list=false
 enforce-whitelist=false
@@ -112,7 +123,9 @@ management-server-host=%s
 management-server-port=%d
 management-server-secret=%s
 management-server-tls-enabled=false
-level-type=minecraft\:flat
+level-type=%s
+level-seed=%s
+generate-structures=%t
 level-name=world
 spawn-protection=0
 max-players=20
@@ -123,7 +136,7 @@ difficulty=peaceful
 enforce-secure-profile=false
 network-compression-threshold=256
 sync-chunk-writes=false
-`, port, rcon, s.RCONPassword, mgmtHost, mgmt, s.MgmtSecret)
+`, port, rcon, s.RCONPassword, mgmtHost, mgmt, s.MgmtSecret, levelType, s.Seed, structures)
 	if err := os.WriteFile(filepath.Join(s.WorkDir, "server.properties"), []byte(props), 0o644); err != nil {
 		return err
 	}
@@ -159,6 +172,13 @@ sync-chunk-writes=false
 			"-p", fmt.Sprintf("127.0.0.1:%d:25575", s.RCONPort),
 			"-p", fmt.Sprintf("127.0.0.1:%d:25585", s.MgmtPort),
 			"-v", work + ":/data", "-w", "/data",
+		}
+		// MC26_PLAY_ADDR: the game's port also on this address (a LAN one),
+		// for a person to join and watch the robots from their own client —
+		// the game only; RCON and the management protocol stay local
+		if a := os.Getenv("MC26_PLAY_ADDR"); a != "" {
+			args = append(args, "-p", fmt.Sprintf("%s:%d:25565", a, s.Port))
+			s.Log("players can join at %s:%d", a, s.Port)
 		}
 		if s.Runtime != "podman" {
 			if uid := os.Getuid(); uid > 0 {

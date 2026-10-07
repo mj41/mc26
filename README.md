@@ -11,7 +11,7 @@ Mojang jar ──► data-gen/ ──┬─► mc26-data      (releases)        
 | directory / repository | what |
 |---|---|
 | `data-gen/` | Java extractors: jar → JSON (`java.lang.classfile` reads the packet and component wire schemas) |
-| `gen/` | Go: the `mc26` command (extract, build, smoke, e2e, crosscheck, verify, update, release), the generators, the hand-written library sources (`gen/src`), templates, `cmd/packetdiff`, `cmd/nbtdiff`, `cmd/mcmeta`, `cmd/schemacov` |
+| `gen/` | Go: the `mc26` command (extract, build, smoke, e2e, crosscheck, verify, update, release), the generators, the hand-written library sources (`gen/src`), templates, `cmd/packetdiff`, `cmd/nbtdiff`, `cmd/mcmeta`, `cmd/schemacov`, `cmd/javap`, `cmd/source` |
 | [mc26-data](https://github.com/mj41/mc26-data) | the JSON of every release: `mc-<version>` branches, `v0.<YYN>.<n>` tags |
 | [mc26-data-pre](https://github.com/mj41/mc26-data-pre) | the same for snapshots and pre-releases |
 | [go-mc26](https://github.com/mj41/go-mc26) | the generated library: `mc-<version>` branches, `v0.<YYN>.<patch>` tags |
@@ -33,6 +33,7 @@ go run ./gen/cmd/mc26 fixtures --version 26.2           # the save tests' small 
 go run ./gen/cmd/mc26 crosscheck --version 26.2         # a recorded session read back from the JSON alone, in another language
 go run ./gen/cmd/schemacov 26.2                         # how much of the packet schema is typed
 go run ./gen/cmd/packetdiff 26.1 26.2                   # wire-layout changes between two versions
+go run ./gen/cmd/source 26.3 LocalPlayer                # a vanilla class as readable Java under temp/source/ (never committed)
 go run ./gen/cmd/mcmeta diff 26.2 26.3-pre-2            # registry preview without Java (misode/mcmeta)
 ```
 

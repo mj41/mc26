@@ -13,9 +13,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mj41/mc26/gen/internal/build"
@@ -37,7 +40,38 @@ type Options struct {
 	WorkDir   string
 	Port      int
 	Runtime   string // see smoke.Server
-	Log       func(format string, args ...any)
+	// Only, when set, runs just the scenarios it names (and skips the rest,
+	// which a scenario after the server stopped may depend on).
+	Only []string
+	Log  func(format string, args ...any)
+	// RunsDir keeps every robot run: its events and what it ran (runs.go),
+	// to be replayed later (go-mc26-robotview -replay); empty keeps none.
+	RunsDir string
+	KitSrc  string // the go-mc26-kit checkout the kit was assembled from, for its commit
+}
+
+// wanted reports whether the run includes the scenario name.
+func (o Options) wanted(name string) bool {
+	if len(o.Only) == 0 {
+		return true
+	}
+	for _, n := range o.Only {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// named reports whether the run names the scenario: the long ones run only
+// when asked for.
+func (o Options) named(name string) bool {
+	for _, n := range o.Only {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Run builds the bots, runs the scenarios and returns the first failure.
@@ -49,54 +83,106 @@ func Run(o Options) error {
 	if err != nil {
 		return err
 	}
-	bin, err := buildExamples(o)
-	if err != nil {
+	var (
+		bin string        // the built examples, once built
+		srv *smoke.Server // the flat world's server, once started
+	)
+	type scenario struct {
+		name string
+		long bool // run only when named (--only)
+		fn   func() error
+	}
+	// on the flat world's server
+	scenarios := []scenario{
+		{"mcping", false, func() error { return scenarioPing(o, bin, srv, v) }},
+		{"daze", false, func() error { return scenarioDaze(o, bin, srv) }},
+		{"twobots", false, func() error { return scenarioTwoBots(o, bin, srv) }},
+		{"minimal", false, func() error { return scenarioLogin(o, bin, srv, "minimal", "Minimal", 20*time.Second, "Login success") }},
+		{"autofish", false, func() error {
+			return scenarioLogin(o, bin, srv, "autofish", "Fisher", 25*time.Second, "Login success", "Game start")
+		}},
+		{"pressureTest", false, func() error { return scenarioPressure(o, bin, srv) }},
+		{"robot", false, func() error { return scenarioRobot(o, bin, srv) }},
+	}
+	// after it stopped: the world it wrote, then servers of their own
+	after := []scenario{
+		{"mcadump", false, func() error { return scenarioMcadump(o, bin, srv) }},
+		{"savechunk", false, func() error { return scenarioSaveChunk(o, srv) }},
+		{"saveschema", false, func() error { return scenarioSaveSchema(o, srv) }},
+		{"fixtures", false, func() error { return scenarioFixtures(o, srv) }},
+		{"survival", false, func() error { return scenarioSurvival(o, bin) }},
+		{"days", true, func() error { return scenarioDays(o, bin) }},
+		{"week", true, func() error { return scenarioWeek(o, bin) }},
+		{"village", true, func() error { return scenarioVillage(o, bin) }},
+		{"field", true, func() error { return scenarioField(o, bin) }},
+		{"fieldwild", true, func() error { return scenarioFieldWild(o, bin) }},
+		{"farmstart", true, func() error { return scenarioFarmStart(o, bin) }},
+		{"fish", true, func() error { return scenarioFish(o, bin) }},
+	}
+	// a name not known (a typo) would run nothing and pass
+	var known []string
+	for _, sc := range append(scenarios, after...) {
+		known = append(known, sc.name)
+	}
+	for _, n := range o.Only {
+		if !slices.Contains(known, n) {
+			return fmt.Errorf("--only: no scenario %q (known: %s)", n, strings.Join(known, ", "))
+		}
+	}
+	if bin, err = buildExamples(o); err != nil {
 		return err
 	}
-	srv := &smoke.Server{
+	// stopped from outside (a test bench's pod going, Ctrl-C): the robots'
+	// runs ended as a scenario's end would, every server running stopped
+	// (the flat world's, or a survival world's), then out
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(stop)
+	go func() {
+		s := <-stop
+		o.Log("e2e: %v: the robots stopped, their runs ended", s)
+		running.closeAll()
+		servers.stopAll()
+		os.Exit(128 + int(s.(syscall.Signal)))
+	}()
+	srv = &smoke.Server{
 		Version: o.Version, JarPath: o.JarPath, WorkDir: filepath.Join(o.WorkDir, "server"),
 		Port: o.Port, Runtime: o.Runtime, Log: o.Log,
 	}
-	if err := srv.Start(); err != nil {
+	if err := servers.start(srv); err != nil {
 		return err
 	}
-	defer srv.Stop()
+	defer servers.stop(srv)
 	if err := srv.WaitReady(4 * time.Minute); err != nil {
 		return err
 	}
 
-	type scenario struct {
-		name string
-		fn   func() error
-	}
-	scenarios := []scenario{
-		{"mcping", func() error { return scenarioPing(o, bin, srv, v) }},
-		{"daze", func() error { return scenarioDaze(o, bin, srv) }},
-		{"twobots", func() error { return scenarioTwoBots(o, bin, srv) }},
-		{"minimal", func() error { return scenarioLogin(o, bin, srv, "minimal", "Minimal", 20*time.Second, "Login success") }},
-		{"autofish", func() error {
-			return scenarioLogin(o, bin, srv, "autofish", "Fisher", 25*time.Second, "Login success", "Game start")
-		}},
-		{"pressureTest", func() error { return scenarioPressure(o, bin, srv) }},
-	}
-	failed := 0
+	failed, ran := 0, 0
 	for _, sc := range scenarios {
+		if !o.wanted(sc.name) {
+			continue
+		}
+		ran++
 		start := time.Now()
-		if err := sc.fn(); err != nil {
+		err := sc.fn()
+		runResult(sc.name, start, err)
+		if err != nil {
 			failed++
 			o.Log("e2e %-12s FAIL (%s): %v", sc.name, time.Since(start).Round(time.Second), err)
 			continue
 		}
 		o.Log("e2e %-12s ok   (%s)", sc.name, time.Since(start).Round(time.Second))
 	}
-	srv.Stop()
-	for _, sc := range []scenario{
-		{"mcadump", func() error { return scenarioMcadump(o, bin, srv) }},
-		{"savechunk", func() error { return scenarioSaveChunk(o, srv) }},
-		{"saveschema", func() error { return scenarioSaveSchema(o, srv) }},
-		{"fixtures", func() error { return scenarioFixtures(o, srv) }},
-	} {
-		if err := sc.fn(); err != nil {
+	servers.stop(srv)
+	for _, sc := range after {
+		if !o.wanted(sc.name) || sc.long && !o.named(sc.name) {
+			continue
+		}
+		ran++
+		start := time.Now()
+		err := sc.fn()
+		runResult(sc.name, start, err)
+		if err != nil {
 			failed++
 			o.Log("e2e %-12s FAIL: %v", sc.name, err)
 			continue
@@ -104,9 +190,57 @@ func Run(o Options) error {
 		o.Log("e2e %-12s ok", sc.name)
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d of %d scenarios failed", failed, len(scenarios)+4)
+		return fmt.Errorf("%d of %d scenarios failed", failed, ran)
 	}
 	return nil
+}
+
+// servers is the servers started and not yet stopped: stopped from outside,
+// the harness stops each (a survival world's too, not only the flat one's).
+var servers = &serverSet{m: map[*smoke.Server]*sync.Once{}}
+
+type serverSet struct {
+	mu sync.Mutex
+	m  map[*smoke.Server]*sync.Once
+}
+
+// start starts srv and keeps it in the set.
+func (s *serverSet) start(srv *smoke.Server) error {
+	if err := srv.Start(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.m[srv] = new(sync.Once)
+	s.mu.Unlock()
+	return nil
+}
+
+// stop stops srv once, whoever asks first (a scenario's end, the signal);
+// a second caller waits for the first one's stop.
+func (s *serverSet) stop(srv *smoke.Server) {
+	s.mu.Lock()
+	once := s.m[srv]
+	s.mu.Unlock()
+	if once == nil {
+		return // stopped before, or never started here
+	}
+	once.Do(srv.Stop)
+	s.mu.Lock()
+	delete(s.m, srv)
+	s.mu.Unlock()
+}
+
+// stopAll stops every server still running.
+func (s *serverSet) stopAll() {
+	s.mu.Lock()
+	all := make([]*smoke.Server, 0, len(s.m))
+	for srv := range s.m {
+		all = append(all, srv)
+	}
+	s.mu.Unlock()
+	for _, srv := range all {
+		s.stop(srv)
+	}
 }
 
 // buildExamples compiles every example of the kit tree (whose workspace

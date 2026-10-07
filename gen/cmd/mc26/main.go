@@ -74,7 +74,7 @@ func main() {
 		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag, "report": cmdReport,
 		"import-src": cmdImportSrc,
 		"crosscheck": cmdCrossCheck, "verify": cmdVerify, "update": cmdUpdate, "docs": cmdDocs, "index": cmdIndex,
-		"fixtures": cmdFixtures,
+		"fixtures": cmdFixtures, "kit": cmdKit, "rcon": cmdRCON,
 	}
 	fn, ok := commands[cmd]
 	if !ok {
@@ -93,7 +93,9 @@ func usage() {
   extract   --version V [--runtime podman|docker] [--dry-run] [--only GenNbtSchema,…]
   build     --data DIR --out DIR [--version V] [--data-source S] [--no-test] [--allow-holes]
   smoke     --version V [--kit DIR] [--port N] [--runtime podman|docker|host]
-  e2e       --version V [--kit DIR] [--port N] [--runtime …]
+  e2e       --version V [--kit DIR] [--port N] [--runtime …] [--only robot,…]
+  rcon      [--port N] "command" …                # a running test server's answers
+  kit       --version V [--test]       assemble the kit checkout against the built temp/lib/V again (after editing the kit)
   pipeline  --version V [--data DIR] [--out DIR] [--smoke] [--e2e] [--skip-extract]
   verify    [--versions 26.1,26.2] [--steps build,smoke,crosscheck,e2e] [--quiet] [--runtime …]
   update    [--version V | --pre] [--skip-extract] [--allow-holes] [--no-verify] [--no-commit] [--runtime …]
@@ -184,7 +186,7 @@ func runSmoke(version, kitDir string, port int, runtime string) error {
 
 // runE2E builds the kit's example bots and drives them against a vanilla
 // server of version.
-func runE2E(version, dataDir, kitDir string, port int, runtime string) error {
+func runE2E(version, dataDir, kitDir string, port int, runtime string, only ...string) error {
 	jar, err := extract.ServerJar(paths.Cache(), version, logf)
 	if err != nil {
 		return err
@@ -201,8 +203,24 @@ func runE2E(version, dataDir, kitDir string, port int, runtime string) error {
 		Version: version, DataDir: dataDir, KitDir: kitDir, JarPath: jar,
 		CrossLang: filepath.Join(root, "gen", "crosslang"), NodesPath: filepath.Join(root, "gen", "hand-crafted", "nodes.json"),
 		WorkDir: filepath.Join(paths.Temp(), "e2e", version), Port: port, Runtime: runtime, Log: logf,
-		Fixtures: fixtureDir,
+		Fixtures: fixtureDir, Only: only,
+		RunsDir: runsDir(), KitSrc: kitSrc,
 	})
+}
+
+// runsDir is where the e2e run keeps the robots' runs: MC26_RUNS, else the
+// mc26-runs repository beside this one (each run committed to it), else
+// temp/e2e/runs.
+func runsDir() string {
+	if d := os.Getenv("MC26_RUNS"); d != "" {
+		return d
+	}
+	if d := sibling("mc26-runs"); d != "" {
+		if st, err := os.Stat(filepath.Join(d, ".git")); err == nil && st.IsDir() {
+			return d
+		}
+	}
+	return filepath.Join(paths.Temp(), "e2e", "runs")
 }
 
 // commitTree puts tree on branch of repo (created from main when new), commits
@@ -639,6 +657,8 @@ func cmdE2E(args []string) error {
 	kitDir := fs.String("kit", "", "kit tree assembled against the built library (default temp/kit/<version>)")
 	port := fs.Int("port", smokePort, "server port")
 	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
+	only := fs.String("only", "", "comma-separated scenarios to run, the others skipped (robot,daze,…)")
+	kitSrcFlag(fs) // the kit's commit, kept with every robot run
 	fs.Parse(args)
 	if *version == "" {
 		return fmt.Errorf("--version is required")
@@ -649,7 +669,30 @@ func cmdE2E(args []string) error {
 	if *kitDir == "" {
 		*kitDir = paths.Kit(*version)
 	}
-	return runE2E(*version, *data, *kitDir, *port, *runtime)
+	var names []string
+	if *only != "" {
+		names = strings.Split(*only, ",")
+	}
+	return runE2E(*version, *data, *kitDir, *port, *runtime, names...)
+}
+
+// cmdKit assembles the kit checkout against a library built earlier, the step
+// a build ends with, without building the library again: the loop for work on
+// the kit (edit, `mc26 kit`, `mc26 e2e --only …`).
+func cmdKit(args []string) error {
+	fs := flag.NewFlagSet("kit", flag.ExitOnError)
+	version := fs.String("version", "", "Minecraft version whose built library (temp/lib/<version>) to assemble against")
+	test := fs.Bool("test", false, "also go test ./... in the result")
+	kitSrcFlag(fs)
+	fs.Parse(args)
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	lib := paths.Lib(*version)
+	if _, err := os.Stat(filepath.Join(lib, "go.mod")); err != nil {
+		return fmt.Errorf("no built library in %s (mc26 build first)", lib)
+	}
+	return kit.Assemble(kit.Options{SrcDir: kitSrc, LibDir: lib, OutDir: paths.Kit(*version), Test: *test, Log: logf})
 }
 
 // cmdFixtures cuts the save package's test world out of the world the
@@ -1236,3 +1279,21 @@ func cmdImportSrc(args []string) error {
 }
 
 var _ = strconv.Itoa
+
+// cmdRCON sends commands to a test server's RCON, one per argument, and
+// prints the answers: what a scenario's world holds while it runs
+// (mc26 rcon --port 25651 "execute if block 1 2 3 minecraft:water").
+func cmdRCON(args []string) error {
+	fs := flag.NewFlagSet("rcon", flag.ExitOnError)
+	port := fs.Int("port", smokePort+1, "the server's RCON port (its game port + 1)")
+	password := fs.String("password", "mc26", "the RCON password")
+	fs.Parse(args)
+	for _, c := range fs.Args() {
+		ans, err := e2e.RCON(fmt.Sprintf("127.0.0.1:%d", *port), *password, c)
+		if err != nil {
+			return fmt.Errorf("%s: %w", c, err)
+		}
+		fmt.Printf("%s -> %s\n", c, ans)
+	}
+	return nil
+}
