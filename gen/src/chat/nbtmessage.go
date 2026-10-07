@@ -46,16 +46,41 @@ func (m Message) MarshalNBT(w io.Writer) error {
 }
 
 func (m *Message) UnmarshalNBT(tagType byte, r nbt.DecoderReader) error {
+	var raw nbt.RawMessage
+	if err := raw.UnmarshalNBT(tagType, r); err != nil {
+		return err
+	}
+	if err := m.fromRaw(raw); err != nil {
+		return err
+	}
+	m.raw = raw
+	return nil
+}
+
+// Raw is the NBT the message was read from, as the server encoded it: the
+// component's exact form (an explicit "italic: false" included), which its
+// hash in a container click is made of. Type is 0 for a message made in Go.
+func (m Message) Raw() nbt.RawMessage { return m.raw }
+
+func (m *Message) fromRaw(raw nbt.RawMessage) error {
 	// Re-combine the tagType into the reader, and create a nbt decoder
-	tagReader := bytes.NewReader([]byte{tagType})
-	decoder := nbt.NewDecoder(io.MultiReader(tagReader, r))
+	tagReader := bytes.NewReader([]byte{raw.Type})
+	decoder := nbt.NewDecoder(io.MultiReader(tagReader, bytes.NewReader(raw.Data)))
 	decoder.NetworkFormat(true) // TagType directlly followed the body
 
-	switch tagType {
+	switch raw.Type {
 	case nbt.TagString:
 		_, err := decoder.Decode(&m.Text)
 		return err
 	case nbt.TagCompound:
+		// An element of a list whose elements are not all compounds is
+		// wrapped in one, under the empty key (NBT lists hold one type).
+		var wrapped map[string]nbt.RawMessage
+		if err := raw.Unmarshal(&wrapped); err == nil && len(wrapped) == 1 {
+			if inner, ok := wrapped[""]; ok {
+				return m.fromRaw(inner)
+			}
+		}
 		_, err := decoder.Decode((*rawMsgStruct)(m))
 		return err
 	case nbt.TagList:
@@ -71,7 +96,7 @@ func (m *Message) UnmarshalNBT(tagType byte, r nbt.DecoderReader) error {
 		m.Text = fmt.Sprint(v)
 		return nil
 	default:
-		return errors.New("unknown chat message type: '" + strconv.FormatUint(uint64(tagType), 16) + "'")
+		return errors.New("unknown chat message type: '" + strconv.FormatUint(uint64(raw.Type), 16) + "'")
 	}
 }
 

@@ -126,6 +126,9 @@
   "counted": {
    "summary": "Exactly N repetitions of `elem` with NO count of its own in front of them; N is the value of an earlier sibling field of the enclosing struct, named by `count`."
   },
+  "array": {
+   "summary": "Exactly `size` repetitions of `elem` with no count on the wire; `size` is a number in the node itself (the four lines of a sign, ByteBufCodecs.fixedSizeList(4))."
+  },
   "dispatch": {
    "summary": "The dispatch key, then — with no separator, length prefix, tag or padding — the whole payload of the codec that key selects; the union itself contributes no terminator and no size."
   },

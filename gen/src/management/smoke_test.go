@@ -3,6 +3,7 @@ package management_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,7 +91,9 @@ wait:
 	}
 	if added == nil {
 		t.Errorf("no allowlist/added notification within 10s")
-	} else if added.Player.Name != "Steve" {
+	} else if !strings.EqualFold(added.Player.Name, "Steve") {
+		// names are the same in any case: a server with no way to Mojang's
+		// profiles (offline, a cluster's job) says it as written, "steve"
 		t.Errorf("allowlist/added names %q", added.Player.Name)
 	}
 	if _, err := c.AllowlistRemove(ctx, []management.Player{{Name: "Steve"}}); err != nil {

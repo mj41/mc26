@@ -17,6 +17,7 @@ type RegistryCodec interface {
 	ReadTagsFrom(r io.Reader) (int64, error)
 	SetKeepRaw(on bool)
 	Unexpected() []error
+	KeyOf(id int32) (string, bool)
 }
 
 // KeepRaw makes every registry keep the NBT of the entries the server sends,

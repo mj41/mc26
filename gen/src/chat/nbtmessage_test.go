@@ -13,11 +13,14 @@ func TestMessage_UnmarshalJSON_string(t *testing.T) {
 		"{translate: sleep.players_sleeping, with: [I; 1, 37]}",
 		// the server's command feedback carries a list of plain int tags
 		"{translate: commands.fill.success, with: [512]}",
+		// a list of texts not all compounds: NbtOps wraps the others under ""
+		`{text: "Bold", extra: [{"": " and "}, {translate: "item.minecraft.stick"}]}`,
 	}
 
 	texts := []string{
 		"1/37 players sleeping",
 		"Successfully filled 512 block(s)",
+		"Bold and Stick",
 	}
 
 	chat.SetLanguage(en_us.Map)

@@ -77,6 +77,16 @@ func (r *Registry[E]) Unexpected() []error {
 	return out
 }
 
+// KeyOf returns the name of the entry id (minecraft:sharpness).
+func (r *Registry[E]) KeyOf(id int32) (string, bool) {
+	for k, i := range r.keys {
+		if i == id {
+			return k, true
+		}
+	}
+	return "", false
+}
+
 func (r *Registry[E]) Get(key string) (int32, *E) {
 	id, ok := r.keys[key]
 	if !ok {

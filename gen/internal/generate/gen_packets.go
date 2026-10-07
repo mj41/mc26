@@ -133,6 +133,22 @@ type pktEnumDef struct {
 	// IDs is set when the number on the wire is not the ordinal: an enum whose
 	// stream codec is an id mapper sends an id the constant carries instead.
 	IDs []int
+	// Serialized is, for an enum that travels as a number, the name each
+	// constant's codec writes (StringRepresentable), when it has one.
+	Serialized []string
+}
+
+// serializedNames records the names an enum node carries ("names") on the
+// enum it became.
+func (gs *genState) serializedNames(goName string, n map[string]any) {
+	e, ok := gs.enums[goName]
+	names, _ := n["names"].([]any)
+	if !ok || e.Serialized != nil || len(names) != len(e.Values) {
+		return
+	}
+	for _, v := range names {
+		e.Serialized = append(e.Serialized, v.(string))
+	}
 }
 
 type structDef struct {
@@ -1050,6 +1066,17 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 			return "", "", err
 		}
 		return fmt.Sprintf("%sList[%s, *%s]", gs.wire, et, et), "", nil
+	case "array":
+		// exactly size elements, no count on the wire: the length is the type [size]struct{}
+		et, _, err := gs.goType(schemaNode(n["elem"].(map[string]any)), owner)
+		if err != nil {
+			return "", "", err
+		}
+		size, ok := n["size"].(float64)
+		if !ok {
+			return "", "", fmt.Errorf("an array without a size")
+		}
+		return fmt.Sprintf("%sArray[%s, *%s, [%d]struct{}]", gs.wire, et, et, int(size)), "", nil
 	case "bits":
 		// one integer whose bits are several named values: the wire value is the
 		// integer, so it stays one field, read and written as a whole
@@ -1153,7 +1180,9 @@ func (gs *genState) goType(n schemaNode, owner string) (string, string, error) {
 		if err != nil {
 			return "", "", err
 		}
-		return gs.q + gs.enum(str(n["name"]), vals, ids), "", nil
+		name := gs.enum(str(n["name"]), vals, ids)
+		gs.serializedNames(name, n)
+		return gs.q + name, "", nil
 	case "stringenum":
 		vals, _ := n["values"].([]any)
 		names, _ := n["names"].([]any)
@@ -2363,6 +2392,17 @@ func (gs *genState) renderEnums() string {
 		fmt.Fprintf(&sb, "func (e *%s) ReadFrom(r io.Reader) (int64, error) { return (*pk.VarInt)(e).ReadFrom(r) }\n", name)
 		fmt.Fprintf(&sb, "func (e %s) WriteTo(w io.Writer) (int64, error)  { return pk.VarInt(e).WriteTo(w) }\n", name)
 		fmt.Fprintf(&sb, "// Count is the number of constants (EnumSet[%s] needs it for its bit set size).\nfunc (%s) Count() int { return %d }\n\n", name, name, len(e.Values))
+		if e.Serialized != nil && e.IDs == nil {
+			fmt.Fprintf(&sb, "var %sNames = [...]string{", lowerFirst(name))
+			for i, v := range e.Serialized {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				fmt.Fprintf(&sb, "%q", v)
+			}
+			sb.WriteString("}\n\n")
+			fmt.Fprintf(&sb, "// Name is the name the constant's codec writes, \"\" for a number out of range.\nfunc (e %s) Name() string {\n\tif e < 0 || int(e) >= len(%sNames) {\n\t\treturn \"\"\n\t}\n\treturn %sNames[e]\n}\n\n", name, lowerFirst(name), lowerFirst(name))
+		}
 	}
 	var sizes []int
 	for bits := range gs.fixedBits {
@@ -2400,6 +2440,13 @@ func renderStringEnum(sb *strings.Builder, e *pktEnumDef) {
 	sb.WriteString(")\n\n")
 	fmt.Fprintf(sb, "func (e *%s) ReadFrom(r io.Reader) (int64, error) { return (*pk.String)(e).ReadFrom(r) }\n", e.GoName)
 	fmt.Fprintf(sb, "func (e %s) WriteTo(w io.Writer) (int64, error)  { return pk.String(e).WriteTo(w) }\n\n", e.GoName)
+}
+
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
 }
 
 func goEnumConst(v string) string {

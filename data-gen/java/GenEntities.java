@@ -17,6 +17,9 @@ import java.util.*;
  *   width       — collision box width
  *   height      — collision box height
  *   category    — entity category name (e.g., "misc", "monster", "creature")
+ *   passengers  — the points its passengers sit at, by passenger (EntityAttachment.PASSENGER),
+ *                 relative to its position before its rotation (a boat places its own)
+ *   vehicle     — the point of it that sits at a vehicle's passenger point (VEHICLE)
  */
 public class GenEntities {
     public static void main(String[] args) throws Exception {
@@ -37,6 +40,8 @@ public class GenEntities {
             entry.put("width", dims.width());
             entry.put("height", dims.height());
             entry.put("category", type.getCategory().getName());
+            entry.put("passengers", points(dims.attachments(), "PASSENGER"));
+            entry.put("vehicle", points(dims.attachments(), "VEHICLE"));
 
             entities.add(entry);
         }
@@ -49,18 +54,33 @@ public class GenEntities {
             pw.println("[");
             for (int i = 0; i < entities.size(); i++) {
                 var e = entities.get(i);
-                pw.printf("  {\"id\": %d, \"name\": %s, \"width\": %s, \"height\": %s, \"category\": %s}%s%n",
+                pw.printf("  {\"id\": %d, \"name\": %s, \"width\": %s, \"height\": %s, \"category\": %s, \"passengers\": %s, \"vehicle\": %s}%s%n",
                     e.get("id"),
                     jsonStr((String) e.get("name")),
                     formatNum(e.get("width")),
                     formatNum(e.get("height")),
                     jsonStr((String) e.get("category")),
+                    e.get("passengers"),
+                    e.get("vehicle"),
                     i < entities.size() - 1 ? "," : "");
             }
             pw.println("]");
         }
 
         System.out.printf("GenEntities: wrote entities.json (%d entities)%n", entities.size());
+    }
+
+    /** points lists the attachment points of a kind, as JSON: [[x, y, z], …]. */
+    @SuppressWarnings("unchecked")
+    static String points(net.minecraft.world.entity.EntityAttachments attachments, String kind) throws Exception {
+        var f = net.minecraft.world.entity.EntityAttachments.class.getDeclaredField("attachments");
+        f.setAccessible(true);
+        var map = (Map<net.minecraft.world.entity.EntityAttachment, List<net.minecraft.world.phys.Vec3>>) f.get(attachments);
+        List<String> out = new ArrayList<>();
+        for (var v : map.getOrDefault(net.minecraft.world.entity.EntityAttachment.valueOf(kind), List.of())) {
+            out.add("[" + v.x + ", " + v.y + ", " + v.z + "]");
+        }
+        return "[" + String.join(", ", out) + "]";
     }
 
     static String jsonStr(String s) {

@@ -207,6 +207,34 @@ public class ExtractAll {
             Files.copy(schema, outputDir.resolve("json-rpc-api-schema.json"),
                        StandardCopyOption.REPLACE_EXISTING);
         }
+
+        // The data packs the same run writes next to the reports: every recipe, loot table,
+        // tag, advancement, the worldgen, the trades — the vanilla data pack as files.
+        copyTree(reportsDir.resolveSibling("data"), outputDir.resolve("data"));
+    }
+
+    /** copyTree replaces dst with a copy of src; a missing src copies nothing. */
+    static void copyTree(Path src, Path dst) throws Exception {
+        if (!Files.isDirectory(src)) return;
+        if (Files.exists(dst)) {
+            try (var walk = Files.walk(dst)) {
+                for (Path p : walk.sorted(Comparator.reverseOrder()).toList()) Files.delete(p);
+            }
+        }
+        long[] n = {0, 0};
+        try (var walk = Files.walk(src)) {
+            for (Path p : walk.toList()) {
+                Path to = dst.resolve(src.relativize(p).toString());
+                if (Files.isDirectory(p)) {
+                    Files.createDirectories(to);
+                } else {
+                    Files.copy(p, to, StandardCopyOption.REPLACE_EXISTING);
+                    n[0]++;
+                    n[1] += Files.size(p);
+                }
+            }
+        }
+        log("  %-25s %d files, %s", "data/", n[0], humanSize(n[1]));
     }
 
     // --- Step 5: Custom extractors ---
@@ -234,7 +262,7 @@ public class ExtractAll {
     }
 
     static void runCustomExtractors(Path serverJar, Path innerJar, Path outputDir) throws Exception {
-        String[] extractors = {"GenEntities", "GenComponents", "GenBlockEntities", "GenBlockProperties", "GenBiomes", "GenItems", "GenPacketSchema", "GenNbtSchema", "GenSaveSchema", "GenEntityData", "GenConstants"};
+        String[] extractors = {"GenEntities", "GenComponents", "GenBlockEntities", "GenBlockProperties", "GenBiomes", "GenItems", "GenPacketSchema", "GenNbtSchema", "GenSaveSchema", "GenEntityData", "GenConstants", "GenBlockBehaviour", "GenComponentHashes"};
         List<String> found = new ArrayList<>();
 
         for (String name : extractors) {

@@ -19,6 +19,13 @@ func (c *ctx) encode(n node, v Value, w *writer, params node) error {
 		l := v.(*listV)
 		encVarInt(w, int64(len(l.items)))
 		return c.encItems(n, l.items, w)
+	case "array":
+		size, _ := asInt(n["size"])
+		l := v.(*listV)
+		if int(size) != len(l.items) {
+			return wireErr("array: %d entries, the node says %d", len(l.items), size)
+		}
+		return c.encItems(n, l.items, w)
 	case "counted":
 		sib := c.siblings[len(c.siblings)-1]
 		cv, _, err := fieldValue(sib.node, sib.vals, len(sib.vals), str(n["count"]))

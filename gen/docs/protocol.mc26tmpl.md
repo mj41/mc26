@@ -187,6 +187,18 @@ was checked.
 **In Go.** types.Counted[T, *T] (gen/src/wire/wire.go), a plain slice of the element. The count is not part of the type: fieldsOf puts `types.CountedOf(&$.Field, int($.Count))` in the field's Ref, and fieldRefs writes that into the pk.Tuple in place of `&p.Field`, so the count is read by the time the repetition is. countedOf.ReadFrom reads exactly that many elements and refuses a negative count; WriteTo refuses a slice whose length disagrees with the count field, which would produce a packet nothing could read back.
 <!-- mc26 end -->
 
+### array
+
+**On the wire.** Exactly `size` repetitions of `elem` with no count on the wire; `size` is a number in the node itself.
+
+**Keys.** `size` = the number of elements, always the same; `elem` = the node repeated. A writer with another number of elements has nothing to write: the reader could not know.
+
+<!-- mc26 internal -->
+**Where it comes from.** Extractor: ByteBufCodecs.fixedSizeList(n), a codec operation applied to the element codec, and fixedSizeCollection(constructor, n) or (constructor, element, n). From 26.3: the four lines of a sign in the sign_text_front and sign_text_back components (twice, the second inside an optional) and in sign_update; 26.1 and 26.2 have none.
+
+**In Go.** wire.Array[T, *T, [n]struct{}] (gen/src/wire/wire.go), a plain slice of the element whose length is the array type's: it reads exactly n elements and refuses to write another number, and since the length is in the type it is a field like any other, in an optional too.
+<!-- mc26 end -->
+
 ### dispatch
 
 **On the wire.** The dispatch key, then — with no separator, length prefix, tag or padding — the whole payload of the codec that key selects; the union itself contributes no terminator and no size. A key of kind `registry` is a single VarInt (ByteBufCodecs$28.decode = `VarInt.read(buf)` then `byId.apply`; ByteBufCodecs$29.decode = `VarInt.read(buf)` then `getRegistryOrThrow(...).byIdOrThrow`). Both `enum` keys in 26.2 are also a single VarInt, but by two different routes: TrackedWaypoint$Type through `FriendlyByteBuf.readEnum` (= `getEnumConstants()[readVarInt()]`) and ItemAttributeModifiers$Display$Type through `ByteBufCodecs.idMapper(BY_ID, Type::id)`, which is the same ByteBufCodecs$28 VarInt. An `either` key is one boolean byte (ByteBufCodecs$26.decode = `readBoolean()`; true = left) followed by the VarInt id from the left or the right registry.

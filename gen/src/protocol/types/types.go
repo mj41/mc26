@@ -29,6 +29,7 @@ type (
 	Either[L pk.FieldEncoder, PL wire.Ptr[L], R pk.FieldEncoder, PR wire.Ptr[R]] = wire.Either[L, PL, R, PR]
 	LenPrefixed[T pk.FieldEncoder, PT wire.Ptr[T]]                               = wire.LenPrefixed[T, PT]
 	Counted[T pk.FieldEncoder, PT wire.Ptr[T]]                                   = wire.Counted[T, PT]
+	Array[T pk.FieldEncoder, PT wire.Ptr[T], N any]                              = wire.Array[T, PT, N]
 	Rest[T pk.FieldEncoder, PT wire.Ptr[T]]                                      = wire.Rest[T, PT]
 	Packed                                                                       = wire.Packed
 	IDSet                                                                        = wire.IDSet

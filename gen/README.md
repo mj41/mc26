@@ -47,9 +47,12 @@ rather than copying its fields avoids most overlays.
 | version | `version.json` | `data/version/version.go` — `Name`, `ProtocolVersion`, `DataVersion`, pack and Java versions, `DataSource`, `Generator` |
 | packetid | `packets.json` | `data/packetid/packetid.go` — ids per state and flow, `String()` |
 | soundid | `registries.json` | `data/soundid/soundid.go` |
-| item | `items.json` + `registries.json` | `data/item/item.go` |
+| recipes | `data/minecraft/recipe/*.json` (the data packs) | `data/recipe/recipes_gen.go` — every crafting, smelting and cutting recipe: result, count, grid, ingredients (items or tags); `data/recipe/recipe.go`: `For`, `All` — what a player can make before the server has put it in the recipe book |
+| loot | `data/minecraft/loot_table/blocks/*.json` (the data packs) | `data/loot/blocks_gen.go` — every block's possible drops and what each needs (nothing, silk touch, shears, chance); `data/loot/loot.go`: `BlockDrops`, `DroppedBy` |
+| item | `items.json` + `registries.json` | `data/item/item.go`; `data/item/defaults_gen.go`, every item's default components in their network encoding, decoded by `data/item/defaults.go` with the item-stack patch decoder (`DefaultComponents`, `DefaultComponent[*component.Tool]`) |
 | blocks | `blocks.json` + `block_properties.json` | `level/block/blocks.go`, `block_states.nbt`, `properties_enum.go` |
 | entity | `entities.json` | `data/entity/entity.go` |
+| componenthash | `component_hashes.json` | `level/component/hash_gen_test.go` — decodes every sample and checks `HashWith` gives the game's hash |
 | component | `components.json` + the `components` section of `packet_schema.json` (the stream codec of every `DataComponents` registration) | `level/component/components.go` (registry), one `<name>_gen.go` per component, `enums_gen.go`, `structs_gen.go`, a round-trip test |
 | blockentities | `block_entities.json` | `level/block/blockentity.go`, `blockentities.go` |
 | registryid | `registries.json` | `data/registryid/*.go` |
@@ -57,6 +60,7 @@ rather than copying its fields avoids most overlays.
 | lang | `lang/*.json` | `data/lang/<locale>/<locale>.go` |
 | packets | `packet_schema.json` (its `prims` section defines the primitives; one with no Go type of its own, `CHUNK_SECTIONS`, is rendered from its definition) + `packets.json` | `protocol/<state>/{clientbound,serverbound}_gen.go` (+ round-trip tests), `protocol/types/{enums,structs}_gen.go`, `level/section_gen.go` (the chunk section and its paletted containers, with the width function of each packed run) |
 | entity data (inside packets) | `entity_data.json` | `protocol/types/entitydata_gen.go` (serializer names, `NewEntityDataValue`), `data/entitydata/entitydata_gen.go` (field index constants per class, the fields of every entity type) |
+| block behaviour | `block_behaviour.json` | `level/block/behaviour_gen.go` — the shape table and per block its behaviour and per-state values; looked up by `level/block/behaviour.go` (`CollisionShape`, `OutlineShape`, `BehaviourOf`, `DestroySpeed`, `RequiresCorrectTool`, `SturdyFaces`, `MapColor`, `FluidOf`) |
 | constants | `constants.json` | `data/constants/constants_gen.go` — the compile-time constants of a few classes (inventory slot layout, section geometry, level limits, living-entity NBT keys) |
 | save | `save_schema.json` + the world records of `nbt_schema.json` | `save/save_gen.go` (a saved chunk down to the palettes of a section; every entity type's NBT and a player's file, each from the save chain of its class; `level.dat` from its writer; the codec-built records of a world: the world options, the dimensions and their generators, the respawn data, the data-pack lists; `save/chunk.go` and `save/playerdata.go` keep the compression wrapper and the short names) |
 | nbt | `nbt_schema.json` | `registry/elements_gen.go` (the registry elements sent in the configuration phase, their enums and records, a decode test), `registry/registries_gen.go` (the `Registries` struct), `chat/style_gen.go` (`Style`, `ClickEvent`, `HoverEvent`, `Decoration`) |

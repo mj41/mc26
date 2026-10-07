@@ -120,6 +120,7 @@ func (gs *genState) componentDef(name string, e schemaEntry) (componentDef, erro
 		def.Java = str(n["name"])
 		// The component type is the enum itself, under the component's name.
 		enumName := gs.enumNamed(def.GoName, def.Java, vals, ids)
+		gs.serializedNames(enumName, n)
 		if enumName != def.GoName {
 			def.Kind = "value"
 			def.Value = enumName

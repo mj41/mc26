@@ -7,6 +7,7 @@
 package wire
 
 import (
+	"reflect"
 	"bytes"
 	"encoding/binary"
 	"fmt"
@@ -194,6 +195,47 @@ func (l List[T, P]) WriteTo(w io.Writer) (n int64, err error) {
 	for i := range l {
 		var m int64
 		m, err = l[i].WriteTo(w)
+		n += m
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+// Array is exactly as many T as the array type N is long, with no count on
+// the wire (ByteBufCodecs.fixedSizeList: the four lines of a sign). The
+// length is a type, [4]struct{}, so an Array reads and writes like any other
+// field, in an optional too.
+type Array[T pk.FieldEncoder, P Ptr[T], N any] []T
+
+func arrayLen[N any]() int { return reflect.TypeFor[N]().Len() }
+
+func (a *Array[T, P, N]) ReadFrom(r io.Reader) (n int64, err error) {
+	*a = make([]T, arrayLen[N]())
+	for i := range *a {
+		var m int64
+		m, err = P(&(*a)[i]).ReadFrom(r)
+		n += m
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+// WriteTo writes the elements; an empty Array writes as many zero values,
+// as the zero value of any other field writes its zero.
+func (a Array[T, P, N]) WriteTo(w io.Writer) (n int64, err error) {
+	if len(a) == 0 {
+		a = make(Array[T, P, N], arrayLen[N]())
+	}
+	if len(a) != arrayLen[N]() {
+		return 0, fmt.Errorf("an array of %d entries holds %d", arrayLen[N](), len(a))
+	}
+	for i := range a {
+		var m int64
+		m, err = a[i].WriteTo(w)
 		n += m
 		if err != nil {
 			return

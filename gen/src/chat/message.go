@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	en_us "github.com/mj41/go-mc26/data/lang/en-us"
+	"github.com/mj41/go-mc26/nbt"
 )
 
 const (
@@ -73,6 +74,8 @@ type Message struct {
 	Translate string        `json:"translate,omitempty" nbt:"translate,omitempty"`
 	With      TranslateArgs `json:"with,omitempty" nbt:"with,omitempty"`
 	Extra     []Message     `json:"extra,omitempty" nbt:"extra,omitempty"`
+
+	raw nbt.RawMessage // what it was read from (Raw)
 }
 
 type TranslateArgs []any
@@ -97,6 +100,8 @@ type translateMsg struct {
 	Translate string        `json:"translate,omitempty" nbt:"translate,omitempty"`
 	With      TranslateArgs `json:"with,omitempty" nbt:"with,omitempty"`
 	Extra     []Message     `json:"extra,omitempty" nbt:"extra,omitempty"`
+
+	raw nbt.RawMessage
 }
 
 type rawMsgStruct Message

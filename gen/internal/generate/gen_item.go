@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // --- JSON models ---
@@ -100,5 +101,47 @@ func genItem(jsonDir, goMCRoot string) error {
 		return fmt.Errorf("genItem: %w", err)
 	}
 	logf("genItem: wrote %s (%d items, %d bytes)", outPath, len(entries), len(out))
+	return nil
+}
+
+// genItemDefaults generates data/item/defaults_gen.go: every item's default
+// components as items.json's "wire" has them (a DataComponentPatch in its
+// network encoding, base64), by item id; data/item/defaults.go decodes them
+// with level/component.
+func genItemDefaults(jsonDir, outRoot string) error {
+	var items map[string]struct {
+		Wire    string   `json:"wire"`
+		Skipped []string `json:"wire_skipped"`
+	}
+	if err := readJSON(filepath.Join(jsonDir, "items.json"), &items); err != nil {
+		return fmt.Errorf("genItemDefaults: %w", err)
+	}
+	var regs registriesJSON
+	if err := readJSON(filepath.Join(jsonDir, "registries.json"), &regs); err != nil {
+		return fmt.Errorf("genItemDefaults: %w", err)
+	}
+	reg := regs["minecraft:item"]
+	wire := make([]string, len(reg.Entries))
+	for name, e := range reg.Entries {
+		it, ok := items[name]
+		if !ok || it.Wire == "" {
+			return fmt.Errorf("genItemDefaults: %s has no wire components (re-run extraction; GenItems writes them)", name)
+		}
+		wire[e.ProtocolID] = it.Wire
+	}
+	var sb strings.Builder
+	sb.WriteString(generatedHeader("gen_item.go", "items.json", "registries.json"))
+	sb.WriteString("\npackage item\n\n")
+	sb.WriteString("// defaultWire holds every item's default components by item id: a\n")
+	sb.WriteString("// DataComponentPatch in its network encoding, base64.\n")
+	sb.WriteString("var defaultWire = [...]string{\n")
+	for _, w := range wire {
+		fmt.Fprintf(&sb, "\t%q,\n", w)
+	}
+	sb.WriteString("}\n")
+	if err := writeGo(filepath.Join(outRoot, "data", "item", "defaults_gen.go"), sb.String()); err != nil {
+		return fmt.Errorf("genItemDefaults: %w", err)
+	}
+	logf("genItemDefaults: %d items", len(wire))
 	return nil
 }

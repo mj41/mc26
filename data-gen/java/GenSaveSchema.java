@@ -623,8 +623,17 @@ public class GenSaveSchema {
         if (target == null) return;
         List<Integer> slots = GenPacketSchema.paramSlots(desc, isStatic);
         Map<Integer, SV> locals = new HashMap<>();
-        for (int i = 0; i < args.size() && i < slots.size(); i++) if (args.get(i) instanceof TagV) locals.put(slots.get(i), args.get(i));
-        if (locals.isEmpty()) return;
+        boolean tagged = false;
+        for (int i = 0; i < args.size() && i < slots.size(); i++) {
+            if (args.get(i) instanceof TagV) {
+                locals.put(slots.get(i), args.get(i));
+                tagged = true;
+            } else if (args.get(i) instanceof ConstV) {
+                // the key a helper writes under, handed in: EntityReference.store(ref, output, "LoveCause")
+                locals.put(slots.get(i), args.get(i));
+            }
+        }
+        if (!tagged) return;
         depth++;
         try {
             run(target, locals);

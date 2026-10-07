@@ -287,6 +287,9 @@ func (c *ctx) decode(n node, r *reader, params node) (Value, error) {
 		}
 		count, _ := asInt(cv)
 		return c.decRepeat(n, r, int(count))
+	case "array":
+		size, _ := asInt(n["size"])
+		return c.decRepeat(n, r, int(size))
 	case "lenprefixed":
 		// the byte count is a var int right here unless `length` names an
 		// earlier sibling that already carried it

@@ -173,6 +173,26 @@ func (s *schema) saveCheck(n node, tag byte, v Value, path string, out *[]string
 					collect(inner)
 					continue
 				}
+				// an inline either of records (Codec.mapEither: a profile resolved
+				// or its parts): the keys of either side, none of them required —
+				// which side is on disk the keys tell, not the schema
+				if f["inline"] == true && ft["k"] == "either" {
+					for _, side := range []string{"left", "right"} {
+						st, _ := ft[side].(node)
+						st = unrecurse(st)
+						inner, _ := st["fields"].([]any)
+						for _, ia := range inner {
+							i, _ := ia.(node)
+							it, _ := i["type"].(node)
+							if k := str(i["key"]); k != "" {
+								if old, ok := known[k]; !ok || old == nil {
+									known[k] = unrecurse(it)
+								}
+							}
+						}
+					}
+					continue
+				}
 				key := str(f["key"])
 				known[key] = ft
 				if f["optional"] != true {

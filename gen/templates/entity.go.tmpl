@@ -13,6 +13,12 @@ type Entity struct {
 	Width       float64
 	Height      float64
 	Type        string
+	// Passengers are the points its passengers sit at, by passenger, relative
+	// to its position before its rotation (EntityAttachment.PASSENGER); a boat
+	// places its own (AbstractBoat.getPassengerAttachmentPoint).
+	Passengers [][3]float64
+	// Vehicle is the point of it that sits at a vehicle's passenger point.
+	Vehicle [3]float64
 }
 
 var (
@@ -25,9 +31,18 @@ var (
 		Width:       {{.Width}},
 		Height:      {{.Height}},
 		Type:        {{printf "%q" .Category}},
+		Passengers:  {{.Passengers}},
+		Vehicle:     {{.Vehicle}},
 	}
 {{- end}}
 )
+
+// ByName is an index of minecraft entities by their name (minecraft:cow).
+var ByName = map[string]*Entity{
+{{- range .Entities}}
+	{{printf "%q" (print "minecraft:" .ShortName)}}: &{{.GoName}},
+{{- end}}
+}
 
 // ByID is an index of minecraft entities by their ID.
 var ByID = map[ID]*Entity{

@@ -59,6 +59,11 @@ var Generators = []Generator{
 	{"nbt", genNBT},
 	{"save", genSave},
 	{"constants", genConstants},
+	{"blockbehaviour", genBlockBehaviour},
+	{"itemdefaults", genItemDefaults},
+	{"loot", genLoot},
+	{"componenthash", genComponentHash},
+	{"recipes", genRecipes},
 	{"rpc", genRPC},
 }
 

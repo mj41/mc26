@@ -27,6 +27,8 @@ public class GenConstants {
         "net.minecraft.world.level.Level",
         "net.minecraft.world.entity.player.Player",
         "net.minecraft.world.entity.LivingEntity",
+        "net.minecraft.world.entity.player.Input",
+        "net.minecraft.network.protocol.game.ServerboundMovePlayerPacket",
     };
 
     public static void main(String[] args) throws Exception {

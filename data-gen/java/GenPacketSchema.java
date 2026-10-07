@@ -128,6 +128,8 @@ public class GenPacketSchema {
     );
     /** Naming hints for values a reader produces without storing them in a field: the read method's noun. */
     static final Map<Map<String, Object>, String> hintOf = new IdentityHashMap<>();
+    /** the nodes named after the local variable they were read into */
+    static final Set<Map<String, Object>> localHinted = Collections.newSetFromMap(new IdentityHashMap<>());
     static int guardExpansions = 0;
     static boolean inKnownRegion = false;   // the reader is inside a branch region whose condition is known
     static Map<String, Object> opaque(String java) { return node("opaque", "java", java); }
@@ -492,6 +494,9 @@ public class GenPacketSchema {
     /** An enum node that remembers which class it is, so a dispatch on it can be read. */
     static Map<String, Object> enumNode(String internalName) {
         Map<String, Object> n = node("enum", "name", shortName(internalName), "values", enumValues(internalName));
+        // the names its codec writes (StringRepresentable), which a component's hash is made of
+        List<String> names = serializedNames(internalName);
+        if (names != null && n.get("values") instanceof List<?> v && v.size() == names.size()) n.put("names", names);
         enumClassOf.put(n, internalName);
         return n;
     }
@@ -868,6 +873,13 @@ public class GenPacketSchema {
                     stack.push(new CodecV(node("list", "elem", nodeOf(arg(args, 1)), "max", args.size() > 2 ? constOf(arg(args, 2)) : null))); return;
                 }
                 case "optional" -> { stack.push(new CodecV(node("optional", "elem", nodeOf(arg(args, 0))))); return; }
+                // fixedSizeList(n), fixedSizeCollection(ctor, n): exactly n elements, no count on the
+                // wire (26.3's sign text); fixedSizeCollection(ctor, elem, n) is the codec itself
+                case "fixedSizeList" -> { stack.push(new FnV("fixedSize", constOf(arg(args, 0)))); return; }
+                case "fixedSizeCollection" -> {
+                    if (args.size() == 2) { stack.push(new FnV("fixedSize", constOf(arg(args, 1)))); return; }
+                    stack.push(new CodecV(node("array", "elem", nodeOf(arg(args, 1)), "size", constOf(arg(args, 2))))); return;
+                }
                 case "map" -> {
                     if (args.size() == 1) { stack.push(new FnV("map", null)); return; }
                     stack.push(new CodecV(node("map", "key", nodeOf(arg(args, 1)), "val", nodeOf(arg(args, 2)), "max", args.size() > 3 ? constOf(arg(args, 3)) : null))); return;
@@ -1843,6 +1855,7 @@ public class GenPacketSchema {
         if (fn instanceof FnV f) {
             return switch (f.kind()) {
                 case "list" -> node("list", "elem", base, "max", f.arg());
+                case "fixedSize" -> node("array", "elem", base, "size", f.arg());
                 // lengthPrefixed(max) puts the value's byte count in front of it, which is
                 // what lets a reader step over a value it does not understand.
                 case "lengthPrefixed" -> node("lenprefixed", "elem", base);
@@ -2218,7 +2231,7 @@ public class GenPacketSchema {
                     String local = localName(localNames, st.slot(), bciAfter);
                     if (v instanceof CodecV cv) {
                         unstored.remove(cv.n());
-                        if (local != null) hintOf.put(cv.n(), local);
+                        if (local != null) { hintOf.put(cv.n(), local); localHinted.add(cv.n()); }
                     }
                 }
                 case NewPrimitiveArrayInstruction na -> { if (!stack.isEmpty()) stack.push(new ArrayV(stack.pop())); }
@@ -3524,7 +3537,7 @@ public class GenPacketSchema {
             // this(v1, v2, …): a delegating constructor names the values by its parameters
             List<String> params = ctorParamNames(owner, desc);
             if (params != null && params.size() == args.size()) {
-                for (int i = 0; i < args.size(); i++) if (args.get(i) instanceof CodecV c) hintOf.put(c.n(), params.get(i));
+                for (int i = 0; i < args.size(); i++) if (args.get(i) instanceof CodecV c && !localHinted.contains(c.n())) hintOf.put(c.n(), params.get(i));
             }
             return;
         } else if (name.equals("<init>") && recv instanceof OtherV ov && ov.what().startsWith("new:")) {
@@ -3550,7 +3563,7 @@ public class GenPacketSchema {
                     if (comps != null && comps.size() == args.size()) params = comps;
                 }
                 if (params != null && params.size() == args.size()) {
-                    for (int i = 0; i < args.size(); i++) if (args.get(i) instanceof CodecV c) hintOf.put(c.n(), params.get(i));
+                    for (int i = 0; i < args.size(); i++) if (args.get(i) instanceof CodecV c && !localHinted.contains(c.n())) hintOf.put(c.n(), params.get(i));
                 }
                 produced = null;
             } else {
@@ -3756,6 +3769,7 @@ public class GenPacketSchema {
             case "list" -> { List<String> in = new ArrayList<>(); tokens((Map<String, Object>) n.get("elem"), in, false); out.add("list{" + String.join(", ", in) + "}"); }
             case "counted" -> { List<String> in = new ArrayList<>(); tokens((Map<String, Object>) n.get("elem"), in, false); out.add("counted{" + String.join(", ", in) + "}"); }
             case "optional" -> { List<String> in = new ArrayList<>(); tokens((Map<String, Object>) n.get("elem"), in, false); out.add("optional{" + String.join(", ", in) + "}"); }
+            case "array" -> { List<String> in = new ArrayList<>(); tokens((Map<String, Object>) n.get("elem"), in, false); out.add("array[" + n.get("size") + "]{" + String.join(", ", in) + "}"); }
             case "map" -> { List<String> a = new ArrayList<>(), b = new ArrayList<>(); tokens((Map<String, Object>) n.get("key"), a, false); tokens((Map<String, Object>) n.get("val"), b, false); out.add("map{" + String.join(", ", a) + " → " + String.join(", ", b) + "}"); }
             case "either" -> out.add("either");
             case "dispatch" -> out.add("dispatch");

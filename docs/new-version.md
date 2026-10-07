@@ -88,3 +88,22 @@ it that way.
 - A new DataFixerUpper combinator in a registry codec (`invoke` in `GenNbtSchema.java`) or a
   registry codec class that moved (they are matched by short class name, as
   `net/minecraft/resources` became `net/minecraft/core/registries/codec` in 26.3).
+
+## When the robot misbehaves
+
+The kit's robot is written from what the vanilla client does, and every file of it names the
+vanilla class and method it follows. When a new version breaks it, read those classes of both
+versions as source and compare them:
+
+```bash
+go run ./gen/cmd/source 26.2 LocalPlayer      # temp/source/26.2/net/minecraft/client/player/LocalPlayer.java
+go run ./gen/cmd/source 26.3 LocalPlayer
+diff -u temp/source/26.2/net/minecraft/client/player/LocalPlayer.java \
+        temp/source/26.3/net/minecraft/client/player/LocalPlayer.java
+```
+
+`source` decompiles the client jar (it holds the shared `net.minecraft.world` classes and the
+integrated server too; `-server` reads the dedicated server's jar) with Vineflower in the JDK
+container, a class with its nested classes, the rest of the jar on the library path; `-l` lists
+the names a suffix matches, `-all` decompiles everything. The output stays under `temp/`: it is
+for reading, never committed or copied.
