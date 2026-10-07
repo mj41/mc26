@@ -122,13 +122,15 @@ func (b *robotBot) ask(line string, timeout time.Duration) (string, error) {
 		default:
 		}
 		if time.Now().After(deadline) {
-			// what it was doing: the robot logs every goroutine's stack on
-			// SIGUSR1
+			// what it was doing: its last lines, and where in its own code it
+			// is (the robot logs every goroutine's stack on SIGUSR1)
+			before := b.out.String()[from:]
 			if b.cmd.Process != nil {
 				b.cmd.Process.Signal(syscall.SIGUSR1)
 				time.Sleep(2 * time.Second)
 			}
-			return "", fmt.Errorf("robot %q: no answer in %s (its goroutines are in its log)\n%s", line, timeout, tail(b.out.String()[from:], 10))
+			dump := b.out.String()[from+len(before):]
+			return "", fmt.Errorf("robot %q: no answer in %s\n%s\nwhere, in the robot's code:\n%s", line, timeout, tail(before, 15), robotFrames(dump, 20))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -2739,4 +2741,22 @@ func robotBoat(r *robotBot, rcon *rconClient, name string, srv *smoke.Server) er
 		return fmt.Errorf("got out: %w", err)
 	}
 	return nil
+}
+
+// robotFrames are the lines of a goroutine dump in the robot's own code
+// (examples/robot/…), each once, at most n: where it is stuck.
+func robotFrames(dump string, n int) string {
+	var out []string
+	seen := map[string]bool{}
+	for _, l := range strings.Split(dump, "\n") {
+		l = strings.TrimSpace(l)
+		if i := strings.Index(l, "examples/robot/"); i >= 0 && !seen[l] {
+			seen[l] = true
+			out = append(out, "  "+l[i:])
+			if len(out) == n {
+				break
+			}
+		}
+	}
+	return strings.Join(out, "\n")
 }
