@@ -109,13 +109,21 @@ func genLootTables(jsonDir, outRoot, tablesDir string) error {
 		Predicates map[string]json.RawMessage `json:"predicates"`
 	}{map[string]json.RawMessage{}, map[string]json.RawMessage{}, map[string]json.RawMessage{}, map[string]json.RawMessage{}}
 	tablesRoot := filepath.Join(jsonDir, "data", "minecraft", "loot_table")
+	// a version before the game had named predicates (26.1, 26.2) also wrote its conditions and functions another way
+	// (lootformat.go): its tables are written in the shape the evaluator plays
+	_, serr := os.Stat(filepath.Join(jsonDir, "data", "minecraft", "predicate"))
+	oldFormat := errors.Is(serr, fs.ErrNotExist)
 	readTable := func(path string) (json.RawMessage, error) {
 		var v map[string]json.RawMessage
 		if err := readJSON(path, &v); err != nil {
 			return nil, fmt.Errorf("genLoot: %w", err)
 		}
 		delete(v, "random_sequence") // (the game's seed of its randomness: ours is the caller's)
-		return json.Marshal(v)
+		b, err := json.Marshal(v)
+		if err != nil || !oldFormat {
+			return b, err
+		}
+		return normalizeOldLoot(b)
 	}
 	readDir := func(dir string, into map[string]json.RawMessage) error {
 		return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
