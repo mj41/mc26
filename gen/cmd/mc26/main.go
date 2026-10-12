@@ -101,7 +101,7 @@ func main() {
 var commandList = []struct{ name, args, what string }{
 	{"extract", "--version V [--runtime podman|docker] [--dry-run] [--only GenNbtSchema,…]", "the server jar and the language files → temp/data/V (JSON), extracted in the JDK container"},
 	{"build", "--data V|DIR [--out DIR] [--no-test] [--allow-holes] [--no-kit-check] [--kit-src DIR]", "temp/data/V → the library in temp/lib/V (built, vetted, tested) and the kit against it in temp/kit/V"},
-	{"kit", "--version V [--test] [--no-kit-check] [--kit-src DIR]", "the kit checkout assembled again against temp/lib/V (after editing the kit)"},
+	{"kit", "--version V [--out DIR] [--test] [--no-kit-check] [--kit-src DIR]", "the kit checkout assembled again against temp/lib/V (after editing the kit), into temp/kit/V or DIR"},
 	{"smoke", "--version V [--kit DIR] [--port N] [--runtime podman|docker|host]", "the kit's bot and the library's management client against a vanilla server"},
 	{"e2e", "--version V [--kit DIR] [--port N] [--runtime …] [--only robot,…] | --list", "the kit's example bots against a vanilla server (long: the robot and survival scenarios); --list prints the scenarios, one JSON object a line"},
 	{"crosscheck", "--version V [--keep] [--capture FILE] [--port N] [--runtime …]", "a recorded session decoded again by the reader that has only the JSON (gen/crosslang)"},
@@ -833,6 +833,7 @@ func cmdKit(args []string) error {
 	version := fs.String("version", "", "Minecraft version whose built library (temp/lib/<version>) to assemble against")
 	test := fs.Bool("test", false, "also go test ./... in the result")
 	noCheck := fs.Bool("no-kit-check", false, "assemble only: no build and vet of the result (the delivery's check container does)")
+	out := fs.String("out", "", "the kit tree to produce (default temp/kit/<version>): a tree of its own for a workspace that must not change under it when another assembles")
 	kitSrcFlag(fs)
 	if err := parseFlags(fs, args); err != nil {
 		return err
@@ -840,11 +841,14 @@ func cmdKit(args []string) error {
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
+	if *out == "" {
+		*out = paths.Kit(*version)
+	}
 	lib := paths.Lib(*version)
 	if _, err := os.Stat(filepath.Join(lib, "go.mod")); err != nil {
 		return fmt.Errorf("no built library in %s (mc26 build first)", lib)
 	}
-	return kit.Assemble(kit.Options{SrcDir: kitSrcDir(), LibDir: lib, OutDir: paths.Kit(*version), Test: *test, NoCheck: *noCheck, Log: logf})
+	return kit.Assemble(kit.Options{SrcDir: kitSrcDir(), LibDir: lib, OutDir: *out, Test: *test, NoCheck: *noCheck, Log: logf})
 }
 
 // cmdFixtures cuts the save package's test world out of the world the
