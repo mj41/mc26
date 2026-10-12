@@ -1,15 +1,19 @@
-// gen_lang generates data/lang/<locale>/<locale>.go for every language.
+// gen_lang writes the library's languages: data/lang/en_us.lang (English, built in) and
+// data/lang/manifest_gen.go, the checksum of every language of the version — what package lang checks a
+// language a program registers against. The other languages are not in the library: mc26 lang writes them
+// as the modules of go-mc26-lang, from the same bytes (LangFiles).
 //
 // Language JSONs are downloaded by the Go host from the Mojang asset index
 // CDN into <jsonDir>/lang/ before the container extraction phase runs.
 //
-// Java format strings (%2$s) are converted to Go format strings (%[2]s).
-//
-// The en_us package is the "default" language (no chat.SetLanguage init).
-// All other packages call chat.SetLanguage(Map) in their init() function.
+// A .lang file is a language's keys and strings, sorted by key, each followed by a NUL byte, Java's
+// positional placeholders (%2$s) written as Go's (%[2]s). package lang (gen/src/data/lang) reads it.
 package generate
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,93 +24,89 @@ import (
 
 var javaFmtArg = regexp.MustCompile(`%(\d+)\$s`)
 
-// transJavaFormat converts Java positional format strings to Go format.
-// e.g., "%2$s" → "%[2]s"
-func transJavaFormat(s string) string {
-	return javaFmtArg.ReplaceAllStringFunc(s, func(m string) string {
-		var idx int
-		fmt.Sscanf(m, "%%%d$s", &idx)
-		return fmt.Sprintf("%%[%d]s", idx)
-	})
+// EncodeLang is a language's strings as a .lang file. A NUL inside a key or a string is an error: the
+// format has none.
+func EncodeLang(m map[string]string) ([]byte, error) {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b bytes.Buffer
+	for _, k := range keys {
+		v := m[k]
+		if strings.ContainsRune(k, 0) || strings.ContainsRune(v, 0) {
+			return nil, fmt.Errorf("a NUL in %q", k)
+		}
+		b.WriteString(k)
+		b.WriteByte(0)
+		b.WriteString(javaFmtArg.ReplaceAllString(v, "%[$1]s"))
+		b.WriteByte(0)
+	}
+	return b.Bytes(), nil
 }
 
-func genLang(jsonDir, goMCRoot string) error {
-	langJsonDir := filepath.Join(jsonDir, "lang")
+// LangSum is a .lang file's checksum, as package lang's Manifest has it.
+func LangSum(data []byte) string {
+	h := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(h[:])
+}
 
-	entries, err := os.ReadDir(langJsonDir)
+// LangFiles is every language of an extraction as .lang files, by locale ("en_us").
+func LangFiles(jsonDir string) (map[string][]byte, error) {
+	dir := filepath.Join(jsonDir, "lang")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("genLang: reading lang dir: %w", err)
+		return nil, fmt.Errorf("languages: %w", err)
 	}
-
-	generated := 0
+	out := map[string][]byte{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		name := strings.TrimSuffix(e.Name(), ".json") // e.g. "en_us", "de_de"
-		if err := genOneLang(langJsonDir, goMCRoot, name); err != nil {
-			return err
+		locale := strings.TrimSuffix(e.Name(), ".json")
+		var m map[string]string
+		if err := readJSON(filepath.Join(dir, e.Name()), &m); err != nil {
+			return nil, fmt.Errorf("language %s: %w", locale, err)
 		}
-		generated++
+		if out[locale], err = EncodeLang(m); err != nil {
+			return nil, fmt.Errorf("language %s: %w", locale, err)
+		}
 	}
-
-	logf("genLang: generated %d language files", generated)
-	return nil
+	if out["en_us"] == nil {
+		return nil, fmt.Errorf("languages: no en_us in %s", dir)
+	}
+	return out, nil
 }
 
-// genOneLang generates data/lang/<dir>/<name>.go for a single language.
-func genOneLang(langJsonDir, goMCRoot, name string) error {
-	jsonPath := filepath.Join(langJsonDir, name+".json")
-
-	// Directory name: underscores → hyphens (e.g. "en_us" → "en-us").
-	dirName := strings.ReplaceAll(name, "_", "-")
-	outPath := filepath.Join(goMCRoot, "data", "lang", dirName, name+".go")
-
-	var langMap map[string]string
-	if err := readJSON(jsonPath, &langMap); err != nil {
-		return fmt.Errorf("genLang(%s): %w", name, err)
+func genLang(jsonDir, goMCRoot string) error {
+	files, err := LangFiles(jsonDir)
+	if err != nil {
+		return fmt.Errorf("genLang: %w", err)
+	}
+	dir := filepath.Join(goMCRoot, "data", "lang")
+	if err := writeFile(filepath.Join(dir, "en_us.lang"), files["en_us"]); err != nil {
+		return fmt.Errorf("genLang: %w", err)
 	}
 
-	// Apply Java→Go format string conversion.
-	for k, v := range langMap {
-		if javaFmtArg.MatchString(v) {
-			langMap[k] = transJavaFormat(v)
-		}
+	locales := make([]string, 0, len(files))
+	for l := range files {
+		locales = append(locales, l)
 	}
-
-	// Sort keys for deterministic output.
-	keys := make([]string, 0, len(langMap))
-	for k := range langMap {
-		keys = append(keys, k)
+	sort.Strings(locales)
+	var b strings.Builder
+	b.WriteString(generatedHeader("gen_lang.go", "lang/*.json"))
+	b.WriteString("package lang\n\n")
+	fmt.Fprintf(&b, "// Version is the Minecraft version the languages are of.\nconst Version = %q\n\n", jsonVersion)
+	b.WriteString("// Manifest is the checksum (Sum) of every language of this version, by locale: a language's file is\n")
+	b.WriteString("// this version's when its checksum is the one here (Register).\nvar Manifest = map[string]string{\n")
+	for _, l := range locales {
+		fmt.Fprintf(&b, "\t%q: %q,\n", l, LangSum(files[l]))
 	}
-	sort.Strings(keys)
-
-	// Package name is the locale with hyphens removed (Go package names
-	// can't contain hyphens). For most locales name == package name since
-	// they use underscores (e.g. "de_de"). For special cases like "bar"
-	// or "brb" it's already fine.
-	pkgName := name
-
-	var buf strings.Builder
-	buf.WriteString(generatedHeader("gen_lang.go", name+".json"))
-
-	buf.WriteString("\npackage ")
-	buf.WriteString(pkgName)
-	buf.WriteString("\n")
-
-	// Non-English languages register themselves via init().
-	if name != "en_us" {
-		buf.WriteString("\nimport \"github.com/mj41/go-mc26/chat\"\n\nfunc init() { chat.SetLanguage(Map) }\n")
+	b.WriteString("}\n")
+	if err := writeGo(filepath.Join(dir, "manifest_gen.go"), b.String()); err != nil {
+		return fmt.Errorf("genLang: %w", err)
 	}
-
-	buf.WriteString("\nvar Map = map[string]string{\n")
-	for _, k := range keys {
-		fmt.Fprintf(&buf, "\t%q: %q,\n", k, langMap[k])
-	}
-	buf.WriteString("}\n")
-
-	if err := writeFile(outPath, []byte(buf.String())); err != nil {
-		return fmt.Errorf("genLang(%s): %w", name, err)
-	}
+	logf("genLang: en_us built in, %d languages in the manifest", len(locales))
 	return nil
 }

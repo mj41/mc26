@@ -1,21 +1,19 @@
-// Package chat implements Minecraft's chat message encoding system.
+// Package chat is Minecraft's text component, Message: text or a translation with
+// its arguments, its style, click and hover events, and the components that follow
+// it (Extra). Build one with Text or TranslateMsg. The protocol carries it as NBT
+// (Message's ReadFrom and WriteTo); JsonMessage is the same message where the
+// protocol still writes JSON.
 //
-// The type Message is the Minecraft chat message. Can be encoded as JSON
-// or net/packet.Field .
-//
-// It's very recommended that use SetLanguage before using Message.String or Message.ClearString,
-// or the `github.com/mj41/go-mc26/data/en-us` will be used.
-// Note: The package of data/lang/... will SetLanguage on theirs init() so you don't need to call by your self.
-//
-// Some of these docs is copied from https://wiki.vg/Chat.
+// String renders a message with ANSI colours, ClearString without them. A
+// translation is looked up the way the game looks it up: the language set with
+// SetLanguage, then en_us, then the component's fallback, then the key itself.
 package chat
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
-	en_us "github.com/mj41/go-mc26/data/lang/en-us"
+	"github.com/mj41/go-mc26/data/lang"
 	"github.com/mj41/go-mc26/nbt"
 )
 
@@ -50,19 +48,22 @@ const (
 	White       = "white"
 )
 
-// Message is a message sent by other
+// Message is a text component: its own text or translation, its style, and the
+// components after it (Extra), which inherit the style.
 type Message struct {
 	Text string `json:"text" nbt:"text"`
 
-	Bold          bool `json:"bold,omitempty" nbt:"bold,omitempty"`                   // 粗体
-	Italic        bool `json:"italic,omitempty" nbt:"italic,omitempty"`               // 斜体
-	UnderLined    bool `json:"underlined,omitempty" nbt:"underlined,omitempty"`       // 下划线
-	StrikeThrough bool `json:"strikethrough,omitempty" nbt:"strikethrough,omitempty"` // 删除线
-	Obfuscated    bool `json:"obfuscated,omitempty" nbt:"obfuscated,omitempty"`       // 随机
-	// Font of the message, could be one of minecraft:uniform, minecraft:alt or minecraft:default
-	// This option is only valid on 1.16+, otherwise the property is ignored.
-	Font  string `json:"font,omitempty" nbt:"font,omitempty"`   // 字体
-	Color string `json:"color,omitempty" nbt:"color,omitempty"` // 颜色
+	Bold          bool `json:"bold,omitempty" nbt:"bold,omitempty"`
+	Italic        bool `json:"italic,omitempty" nbt:"italic,omitempty"`
+	UnderLined    bool `json:"underlined,omitempty" nbt:"underlined,omitempty"`
+	StrikeThrough bool `json:"strikethrough,omitempty" nbt:"strikethrough,omitempty"`
+	Obfuscated    bool `json:"obfuscated,omitempty" nbt:"obfuscated,omitempty"` // shown as changing random characters
+	// Font is the font's resource location: minecraft:default, minecraft:uniform,
+	// minecraft:alt, or one of a resource pack.
+	Font string `json:"font,omitempty" nbt:"font,omitempty"`
+	// Color is a color name (Black … White, as the constants of this package) or
+	// "#rrggbb".
+	Color string `json:"color,omitempty" nbt:"color,omitempty"`
 
 	// Insertion contains text to insert. Only used for messages in chat.
 	// When shift is held, clicking the component inserts the given text
@@ -72,6 +73,7 @@ type Message struct {
 	HoverEvent *HoverEvent `json:"hover_event,omitempty" nbt:"hover_event,omitempty"`
 
 	Translate string        `json:"translate,omitempty" nbt:"translate,omitempty"`
+	Fallback  string        `json:"fallback,omitempty" nbt:"fallback,omitempty"` // shown when no language has Translate
 	With      TranslateArgs `json:"with,omitempty" nbt:"with,omitempty"`
 	Extra     []Message     `json:"extra,omitempty" nbt:"extra,omitempty"`
 
@@ -98,6 +100,7 @@ type translateMsg struct {
 	HoverEvent *HoverEvent `json:"hover_event,omitempty" nbt:"hover_event,omitempty"`
 
 	Translate string        `json:"translate,omitempty" nbt:"translate,omitempty"`
+	Fallback  string        `json:"fallback,omitempty" nbt:"fallback,omitempty"` // shown when no language has Translate
 	With      TranslateArgs `json:"with,omitempty" nbt:"with,omitempty"`
 	Extra     []Message     `json:"extra,omitempty" nbt:"extra,omitempty"`
 
@@ -185,16 +188,29 @@ var colors = map[string]string{
 	White:       "97",
 }
 
-// translateMap is the translation table.
-// By default, it's en-us.
-var translateMap = en_us.Map
+// translateMap is the language String and ClearString render in, en_us under it (translation); nil: en_us
+// alone.
+var translateMap map[string]string
 
-// SetLanguage set the default language used by String() and ClearString().
+// SetLanguage sets the language String and ClearString render in: its translations (lang.Get, lang.Parse);
+// a key it lacks is en_us's. nil goes back to en_us alone.
 func SetLanguage(trans map[string]string) {
 	translateMap = trans
 }
 
-// ClearString return the message String without escape sequence for ansi color.
+// SetLocale sets the language String and ClearString render in by its locale ("cs_cz"): one lang has
+// registered (en_us always; another a program registers, package lang).
+func SetLocale(locale string) error {
+	m, err := lang.Get(locale)
+	if err != nil {
+		return err
+	}
+	SetLanguage(m)
+	return nil
+}
+
+// ClearString returns the message's text without color or style: what a player
+// reads.
 func (m Message) ClearString() string {
 	var msg strings.Builder
 	text, _ := TransCtrlSeq(m.Text, false)
@@ -202,17 +218,7 @@ func (m Message) ClearString() string {
 
 	// handle translate
 	if m.Translate != "" {
-		args := make([]any, len(m.With))
-		for i, v := range m.With {
-			switch v := v.(type) {
-			case Message:
-				args[i] = v.ClearString()
-			default:
-				args[i] = v
-			}
-		}
-
-		_, _ = fmt.Fprintf(&msg, translateMap[m.Translate], args...)
+		msg.WriteString(translate(translation(m.Translate, m.Fallback), translateArgs(m.With, Message.ClearString)))
 	}
 
 	if m.Extra != nil {
@@ -223,9 +229,9 @@ func (m Message) ClearString() string {
 	return msg.String()
 }
 
-// String return the message string with escape sequence for ansi color.
-// To convert Translated Message to string, you must set
-// On Windows, you may want print this string using github.com/mattn/go-colorable.
+// String returns the message's text with ANSI escape sequences for its colors and
+// styles; ClearString is the same without them. On Windows, print it through a
+// writer that understands ANSI sequences (github.com/mattn/go-colorable, say).
 func (m Message) String() string {
 	var msg, format strings.Builder
 	if m.Bold {
@@ -252,7 +258,7 @@ func (m Message) String() string {
 
 	// handle translate
 	if m.Translate != "" {
-		_, _ = fmt.Fprintf(&msg, translateMap[m.Translate], m.With...)
+		msg.WriteString(translate(translation(m.Translate, m.Fallback), translateArgs(m.With, Message.String)))
 	}
 
 	if m.Extra != nil {

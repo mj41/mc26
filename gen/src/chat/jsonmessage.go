@@ -59,15 +59,30 @@ func (m *Message) UnmarshalJSON(raw []byte) (err error) {
 	}
 }
 
+// UnmarshalJSON reads a translatable component's arguments as the game's
+// TranslatableContents.ARG_CODEC does: a number or a boolean is an argument
+// of its own (kept as json.Number and bool, so it is written back as it came
+// and shown as its text), anything else a component.
 func (t *TranslateArgs) UnmarshalJSON(raw []byte) error {
-	var v []Message
-	err := json.Unmarshal(raw, &v)
-	if err != nil {
+	var v []json.RawMessage
+	if err := json.Unmarshal(raw, &v); err != nil {
 		return err
 	}
 
-	for _, v := range v {
-		*t = append(*t, v)
+	for _, e := range v {
+		e = bytes.TrimSpace(e)
+		switch {
+		case len(e) > 0 && (e[0] == '-' || e[0] >= '0' && e[0] <= '9'):
+			*t = append(*t, json.Number(e))
+		case bytes.Equal(e, []byte("true")), bytes.Equal(e, []byte("false")):
+			*t = append(*t, e[0] == 't')
+		default:
+			var m Message
+			if err := json.Unmarshal(e, &m); err != nil {
+				return err
+			}
+			*t = append(*t, m)
+		}
 	}
 	return nil
 }

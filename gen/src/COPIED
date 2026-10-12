@@ -5,8 +5,9 @@
 LICENSE	upstream
 chat/clickevent.go	modified
 chat/decoration.go	modified
+chat/english_golden_test.go	new
 chat/hoverevent.go	modified
-chat/jsonmessage.go	upstream
+chat/jsonmessage.go	modified
 chat/jsonmessage_test.go	modified
 chat/message.go	modified
 chat/nbtmessage.go	modified
@@ -15,10 +16,17 @@ chat/sign/cache.go	upstream
 chat/sign/cache_test.go	upstream
 chat/sign/session.go	upstream
 chat/sign/sign.go	modified
+chat/testdata/en_us_26.3.tsv.gz	new
+chat/translate.go	new
+chat/translate_test.go	new
+cmd/langget/main.go	new
+cmd/langget/main_test.go	new
 data/README.md	modified
+data/lang/lang.go	new
+data/lang/lang_test.go	new
 go.mod	upstream
 go.sum	upstream
-level/bitstorage.go	upstream
+level/bitstorage.go	modified
 level/bitstorage_test.go	upstream
 level/block/block.go	modified
 level/block/block_entities.nbt	modified
@@ -32,7 +40,7 @@ level/component/delimited_test.go	new
 level/savepalette.go	new
 level/palette.go	modified
 level/palette_test.go	upstream
-nbt/README.md	upstream
+nbt/README.md	modified
 nbt/decode.go	upstream
 nbt/decode_test.go	upstream
 nbt/dynbt/bigTest_test.snbt	upstream
@@ -46,7 +54,7 @@ nbt/encode.go	modified
 nbt/encode_test.go	upstream
 nbt/example_test.go	upstream
 nbt/interface.go	upstream
-nbt/nbt.go	upstream
+nbt/nbt.go	modified
 nbt/rawmsg.go	upstream
 nbt/rawmsg_test.go	upstream
 nbt/snbt.go	upstream
@@ -63,7 +71,7 @@ nbt/testdata/level.dat.snbt	upstream
 nbt/typeinfo.go	upstream
 net/CFB8/cfb8.go	upstream
 net/CFB8/cfb8_test.go	upstream
-net/conn.go	upstream
+net/conn.go	modified
 net/interface.go	upstream
 net/packet/builder.go	upstream
 net/packet/joingame_test.bin	upstream
@@ -95,7 +103,7 @@ save/region/mca.go	modified
 save/region/mca_test.go	modified
 yggdrasil/user/property.go	upstream
 yggdrasil/user/pubkey.go	modified
-yggdrasil/user/user.go	upstream
+yggdrasil/user/user.go	modified
 yggdrasil/user/validator.go	upstream
 yggdrasil/user/yggdrasil_session_pubkey.der	upstream
 level/component/types.go	new

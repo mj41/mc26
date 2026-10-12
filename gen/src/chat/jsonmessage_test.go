@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/mj41/go-mc26/chat"
-	en_us "github.com/mj41/go-mc26/data/lang/en-us"
+	"github.com/mj41/go-mc26/data/lang"
 	pk "github.com/mj41/go-mc26/net/packet"
 )
 
@@ -61,7 +61,7 @@ var clearTexts = []string{
 }
 
 func TestMessage_String(t *testing.T) {
-	chat.SetLanguage(en_us.Map)
+	chat.SetLanguage(lang.English())
 	for i, v := range jsons {
 		var cm chat.Message
 		err := cm.UnmarshalJSON([]byte(v))
@@ -75,7 +75,7 @@ func TestMessage_String(t *testing.T) {
 }
 
 func TestMessage_ClearString(t *testing.T) {
-	chat.SetLanguage(en_us.Map)
+	chat.SetLanguage(lang.English())
 	for i, v := range jsons {
 		var cm chat.Message
 		err := json.Unmarshal([]byte(v), &cm)
@@ -91,7 +91,7 @@ func TestMessage_ClearString(t *testing.T) {
 }
 
 func TestJsonMessage_WriteTo(t *testing.T) {
-	chat.SetLanguage(en_us.Map)
+	chat.SetLanguage(lang.English())
 	var codeMsg bytes.Buffer
 	_, _ = chat.JsonMessage{Translate: "multiplayer.disconnect.server_full"}.WriteTo(&codeMsg)
 
@@ -176,7 +176,8 @@ func TestMessage_UnmarshalJSON_hoverEvent(t *testing.T) {
 func ExampleTranslateMsg() {
 	fmt.Println(chat.TranslateMsg("translation.test.none"))
 	fmt.Println(chat.TranslateMsg(
-		// translation.test.complex == "Prefix, %s%[2]s again %s and %[1]s lastly %s and also %[1]s again!"
+		// translation.test.complex == "Prefix, %s%2$s again %s and %1$s lastly %s and also %1$s again!":
+		// %2$s does not move the next %s on, so the second %s is the second argument, as in the game
 		"translation.test.complex",
 		chat.Text("1111"),
 		chat.Text("2222"),
@@ -184,5 +185,5 @@ func ExampleTranslateMsg() {
 	).String())
 	// Output:
 	// Hello, world!
-	// Prefix, 11112222 again 3333 and 1111 lastly 2222 and also 1111 again!
+	// Prefix, 11112222 again 2222 and 1111 lastly 3333 and also 1111 again!
 }

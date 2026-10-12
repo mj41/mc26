@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/mj41/go-mc26/chat"
-	en_us "github.com/mj41/go-mc26/data/lang/en-us"
+	"github.com/mj41/go-mc26/data/lang"
 	"github.com/mj41/go-mc26/nbt"
 )
 
@@ -23,7 +23,7 @@ func TestMessage_UnmarshalJSON_string(t *testing.T) {
 		"Bold and Stick",
 	}
 
-	chat.SetLanguage(en_us.Map)
+	chat.SetLanguage(lang.English())
 	for i, v := range snbts {
 		bytes, err := nbt.Marshal(nbt.StringifiedMessage(v))
 		if err != nil {

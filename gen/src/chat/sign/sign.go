@@ -1,3 +1,7 @@
+// Package sign is what signed player chat needs: a message's signature, the
+// last-seen signatures it refers to and the cache that resolves them (Unpack,
+// SignatureCache), and a player's chat Session, which verifies each message
+// against the player's public key.
 package sign
 
 import (
