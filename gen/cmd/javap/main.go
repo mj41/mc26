@@ -51,7 +51,7 @@ func main() {
 		}
 	}
 	if _, err := os.Stat(jar); err != nil {
-		fail("%s not found; run `mc26 extract -version %s` first", jar, version)
+		fail("%s not found; run `mc26 extract --version %s` first", jar, version)
 	}
 	classes, err := jarclass.Names(jar)
 	if err != nil {

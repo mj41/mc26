@@ -37,7 +37,13 @@ type Options struct {
 	DataSource string // recorded in version.go and the README, e.g. "mc26-data v0.262.0"
 	Generator  string // recorded likewise, e.g. "mc26 1a2b3c4d5e6f"
 	Test       bool   // run go test ./... in the result
-	AllowHoles bool   // build although a schema has a hole (an opaque node, a partial entry, a dangling ref)
+	// Atomic builds beside OutDir (OutDir.new) and takes its place in one step when the build and the kit's
+	// checks pass: a library tree other sessions build against (temp/lib/<version>) is never half made, nor
+	// left so by a build that fails. The kit tree (KitOut) is staged and swapped the same way. Off, the build
+	// is made in OutDir itself, which may be a repository whose .git is kept.
+	Atomic     bool
+	AllowHoles bool // build although a schema has a hole (an opaque node, a partial entry, a dangling ref)
+	NoKitCheck bool // the kit is assembled against the library but not built or vetted there (the delivery's check does)
 	Log        func(format string, args ...any)
 }
 
@@ -81,39 +87,68 @@ func ReadVersionGo(libDir string) (string, error) {
 
 // Run builds the library and returns the version it was built for.
 func Run(o Options) (*Info, error) {
+	if !o.Atomic {
+		v, _, err := run(o, "")
+		return v, err
+	}
+	final := o.OutDir
+	o.OutDir = final + ".new"
+	if err := os.RemoveAll(o.OutDir); err != nil {
+		return nil, err
+	}
+	v, kitStage, err := run(o, final)
+	if err != nil {
+		os.RemoveAll(o.OutDir)
+		return nil, err
+	}
+	if err := gitx.SwapDir(final, o.OutDir); err != nil { // the library first: the kit's workspace names it
+		return nil, err
+	}
+	os.RemoveAll(o.OutDir)
+	if kitStage != "" {
+		if err := kit.Commit(o.KitOut, kitStage); err != nil {
+			return nil, err
+		}
+	}
+	return v, nil
+}
+
+// run builds into o.OutDir; with final set, o.OutDir is a stage that will take final's place, and the kit
+// is assembled and checked in its stage (returned) with a workspace that names final.
+func run(o Options, final string) (*Info, string, error) {
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
 	}
 	v, err := ReadVersion(o.DataDir)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if o.Version != "" && v.ID != o.Version {
-		return nil, fmt.Errorf("data in %s is %s, not %s", o.DataDir, v.ID, o.Version)
+		return nil, "", fmt.Errorf("data in %s is %s, not %s", o.DataDir, v.ID, o.Version)
 	}
 	src := filepath.Join(o.GenRoot, "src")
 	if _, err := os.Stat(filepath.Join(src, "go.mod")); err != nil {
-		return nil, fmt.Errorf("no library sources in %s (run import-src first)", src)
+		return nil, "", fmt.Errorf("no library sources in %s (run import-src first)", src)
 	}
 
 	o.Log("build %s: sources", v.ID)
 	if err := os.MkdirAll(o.OutDir, 0o755); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := gitx.ReplaceTree(o.OutDir, src); err != nil {
-		return nil, fmt.Errorf("copying sources: %w", err)
+		return nil, "", fmt.Errorf("copying sources: %w", err)
 	}
 	// Files a version needs different from the newest one (a packet that
 	// gained a field, …) live under src/_versions/<version>/ with the same
 	// relative paths and replace the common sources; the directory itself
 	// (ignored by the go tool because of the underscore) is not shipped.
 	if err := os.RemoveAll(filepath.Join(o.OutDir, "_versions")); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	overlay := filepath.Join(src, "_versions", v.ID)
 	if fi, err := os.Stat(overlay); err == nil && fi.IsDir() {
 		if err := gitx.CopyTree(overlay, o.OutDir, nil); err != nil {
-			return nil, fmt.Errorf("applying %s: %w", overlay, err)
+			return nil, "", fmt.Errorf("applying %s: %w", overlay, err)
 		}
 		o.Log("build %s: overlay %s applied", v.ID, overlay)
 	}
@@ -122,7 +157,7 @@ func Run(o Options) (*Info, error) {
 	// save/testdata/world; the other versions' worlds are not shipped, and
 	// COPIED names the files where the library has them.
 	if err := shipFixtures(src, o.OutDir, v.ID, o.Log); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// Every primitive the schema leaves as a name has to have a definition, or
@@ -131,28 +166,28 @@ func Run(o Options) (*Info, error) {
 	// the jar; a version that introduces one nobody has named stops here.
 	defs, err := prims.Load(filepath.Join(o.DataDir, "packet_schema.json"))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	used, err := prims.Used(filepath.Join(o.DataDir, "packet_schema.json"))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if r := prims.Check(defs, used); !r.OK() {
-		return nil, fmt.Errorf("primitives: %w", r.Err())
+		return nil, "", fmt.Errorf("primitives: %w", r.Err())
 	}
 	nodes, err := prims.LoadNodes(filepath.Join(o.GenRoot, "hand-crafted", "nodes.json"))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	kinds, err := prims.Kinds(filepath.Join(o.DataDir, "packet_schema.json"))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if missing := prims.CheckKinds(nodes, kinds); len(missing) > 0 {
-		return nil, fmt.Errorf("node kinds used but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
+		return nil, "", fmt.Errorf("node kinds used but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
 	}
 	if missing := prims.CheckKinds(nodes, prims.DefKinds(defs)); len(missing) > 0 {
-		return nil, fmt.Errorf("node kinds used by the primitive definitions but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
+		return nil, "", fmt.Errorf("node kinds used by the primitive definitions but not defined in hand-crafted/nodes.json: %s", strings.Join(missing, ", "))
 	}
 	hand := 0
 	for _, d := range defs {
@@ -169,7 +204,7 @@ func Run(o Options) (*Info, error) {
 	}
 	sort.Strings(kindNames)
 	if problems := docgen.Check(filepath.Join(o.GenRoot, "docs"), filepath.Join(o.GenRoot, "hand-crafted"), kindNames); len(problems) > 0 {
-		return nil, fmt.Errorf("documentation templates: %s", strings.Join(problems, "; "))
+		return nil, "", fmt.Errorf("documentation templates: %s", strings.Join(problems, "; "))
 	}
 	o.Log("build %s: the documentation templates cover every node kind", v.ID)
 
@@ -178,11 +213,11 @@ func Run(o Options) (*Info, error) {
 	// stops here; AllowHoles lets a build through while the extractor is fixed.
 	sc, err := schemacheck.Check(o.DataDir)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !sc.OK() {
 		if !o.AllowHoles {
-			return nil, fmt.Errorf("schemas: %w\n(build --allow-holes to go on regardless)", sc.Err())
+			return nil, "", fmt.Errorf("schemas: %w\n(build --allow-holes to go on regardless)", sc.Err())
 		}
 		o.Log("build %s: %d holes in the schemas, allowed", v.ID, len(sc.Problems))
 	} else {
@@ -194,46 +229,50 @@ func Run(o Options) (*Info, error) {
 	if err := generate.Run(generate.Config{
 		JSONDir: o.DataDir, OutRoot: o.OutDir, AssetsDir: o.GenRoot, Log: o.Log,
 	}); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	o.Log("build %s: README and workflow", v.ID)
 	if err := renderFile(filepath.Join(o.GenRoot, "templates", "README.md.tmpl"), filepath.Join(o.OutDir, "README.md"), map[string]any{
-		"V": v, "DataSource": o.DataSource, "Generator": o.Generator, "Module": generate.Module,
+		"V": v, "DataSource": o.DataSource, "Generator": o.Generator, "Module": generate.Module, "Install": installQuery(v.ID),
 	}); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := copyFile(filepath.Join(o.GenRoot, "templates", "lib-ci.yml"), filepath.Join(o.OutDir, ".github", "workflows", "ci.yml")); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	o.Log("build %s: go mod tidy, gofmt, build, vet%s", v.ID, map[bool]string{true: ", test", false: ""}[o.Test])
 	if err := goRun(o.OutDir, "mod", "tidy"); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Generated files are formatted here rather than by every generator.
 	if out, err := exec.Command("gofmt", "-w", o.OutDir).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("gofmt: %v: %s", err, out)
+		return nil, "", fmt.Errorf("gofmt: %v: %s", err, out)
 	}
 	for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}} {
 		if err := goRun(o.OutDir, args...); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	if o.Test {
 		if err := goRun(o.OutDir, "test", "./..."); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
+	kitStage := ""
 	if o.KitOut != "" {
 		o.Log("build %s: the kit against the library", v.ID)
-		if err := kit.Assemble(kit.Options{
-			SrcDir: o.KitSrc, LibDir: o.OutDir, OutDir: o.KitOut, Test: o.Test, Log: o.Log,
-		}); err != nil {
-			return nil, err
+		ko := kit.Options{SrcDir: o.KitSrc, LibDir: o.OutDir, OutDir: o.KitOut, LibRef: final, Test: o.Test, NoCheck: o.NoKitCheck, Log: o.Log}
+		if final != "" {
+			if kitStage, err = kit.AssembleStage(ko); err != nil {
+				return nil, "", err
+			}
+		} else if err := kit.Assemble(ko); err != nil {
+			return nil, "", err
 		}
 	}
-	return v, nil
+	return v, kitStage, nil
 }
 
 // goRun runs the go command in dir and returns its output as the error text.
@@ -313,4 +352,14 @@ func shipFixtures(src, out, version string, log func(string, ...any)) error {
 		lines = append(lines, f+"\tnew")
 	}
 	return os.WriteFile(copied, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+}
+
+// installQuery is what the README's go get asks for: a release's tag prefix
+// ("26.3" → "v0.263"), which the go command resolves to the newest tag with it;
+// a pre-release's branch, since its tags ("v0.263.0-pre2.1") are no prefix query.
+func installQuery(version string) string {
+	if strings.Contains(version, "-") {
+		return "mc-" + version
+	}
+	return "v0." + strings.ReplaceAll(version, ".", "")
 }

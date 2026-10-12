@@ -78,15 +78,28 @@ func Run(o Options) (*Meta, error) {
 	if _, err := os.Stat(filepath.Join(o.JavaDir, "ExtractAll.java")); err != nil {
 		return nil, fmt.Errorf("ExtractAll.java not found in %s", o.JavaDir)
 	}
-	for _, d := range []string{o.CacheDir, o.OutDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return nil, err
-		}
-	}
 	if o.Runtime == "" {
 		o.Runtime = DetectRuntime()
 		if o.Runtime == "" {
 			return nil, fmt.Errorf("neither podman nor docker found in PATH")
+		}
+	}
+	args := containerArgs(o.Runtime, o.Version, o.CacheDir, filepath.Dir(o.OutDir), o.JavaDir)
+	if len(o.Only) > 0 {
+		args = append(args, "--only="+strings.Join(o.Only, ","))
+	}
+	if o.DryRun { // the container command only: nothing downloaded or created
+		o.Log("  %s %s", o.Runtime, strings.Join(args, " "))
+		return nil, nil
+	}
+	// the version must exist before its directory does: a mistyped one would
+	// otherwise be left behind as an "extracted" version
+	if _, err := fetchDetail(o.Version); err != nil {
+		return nil, fmt.Errorf("%w (mc26 latest shows the newest)", err)
+	}
+	for _, d := range []string{o.CacheDir, o.OutDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return nil, err
 		}
 	}
 
@@ -102,14 +115,6 @@ func Run(o Options) (*Meta, error) {
 	}
 
 	o.Log("Phase 2: extraction in %s (%s)", JDKImage, o.Runtime)
-	args := containerArgs(o.Runtime, o.Version, o.CacheDir, filepath.Dir(o.OutDir), o.JavaDir)
-	if len(o.Only) > 0 {
-		args = append(args, "--only="+strings.Join(o.Only, ","))
-	}
-	if o.DryRun {
-		o.Log("  %s %s", o.Runtime, strings.Join(args, " "))
-		return nil, nil
-	}
 	pull := exec.Command(o.Runtime, "pull", "--quiet", JDKImage)
 	pull.Stdout, pull.Stderr = os.Stderr, os.Stderr
 	if err := pull.Run(); err != nil {

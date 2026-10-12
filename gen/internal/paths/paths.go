@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Root returns the mc26 checkout: MC26_ROOT, or the nearest ancestor of the
@@ -80,6 +81,9 @@ func DataRoot() string {
 // Data resolves a version id or an existing directory to a data directory.
 func Data(versionOrDir string) string {
 	if fi, err := os.Stat(versionOrDir); err == nil && fi.IsDir() {
+		return versionOrDir
+	}
+	if strings.ContainsAny(versionOrDir, `/\`) { // a path, even one that does not exist: not a version id
 		return versionOrDir
 	}
 	return filepath.Join(DataRoot(), versionOrDir)

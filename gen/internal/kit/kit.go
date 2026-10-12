@@ -27,8 +27,15 @@ type Options struct {
 	SrcDir string // a go-mc26-kit checkout: the kit's sources
 	LibDir string // a built library tree of one version
 	OutDir string // the kit tree to produce (temp/kit/<version>)
-	Test   bool   // run go test ./... in the result
-	Log    func(format string, args ...any)
+	// LibRef is the library path the finished tree's workspace names, when the
+	// library is checked at one path (a stage) and lives at another (LibDir
+	// until it is swapped in); "" is LibDir.
+	LibRef string
+	Test   bool // run go test ./... in the result
+	// NoCheck assembles only: the sources copied and the workspace written, nothing built or vetted — the
+	// delivery's check container builds and vets the tree it signs (the private stack's delivery build).
+	NoCheck bool
+	Log     func(format string, args ...any)
 }
 
 // WorkFile is the workspace file of an assembled kit tree.
@@ -40,43 +47,90 @@ func Env(kitDir string, extra ...string) []string {
 	return limits.GoEnv(append([]string{"GOWORK=" + WorkFile(kitDir)}, extra...)...)
 }
 
-// Assemble copies the sources, writes the workspace and checks the tree.
+// Assemble copies the sources, writes the workspace and checks the tree — in
+// a stage beside OutDir (OutDir.new), which takes OutDir's place in one step
+// when it passes: a tree that is being made, or fails, is never what a reader
+// of OutDir sees.
 func Assemble(o Options) error {
+	stage, err := AssembleStage(o)
+	if err != nil {
+		return err
+	}
+	return Commit(o.OutDir, stage)
+}
+
+// Commit puts a checked stage in the place of the kit tree and removes the old one.
+func Commit(outDir, stage string) error {
+	if err := gitx.SwapDir(outDir, stage); err != nil {
+		return err
+	}
+	return os.RemoveAll(stage)
+}
+
+// AssembleStage assembles and checks the tree in the stage OutDir+".new" and
+// returns it, its workspace naming LibRef (else LibDir); the caller commits it.
+// A stage that fails is removed.
+func AssembleStage(o Options) (stage string, err error) {
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
 	}
 	if _, err := os.Stat(filepath.Join(o.SrcDir, "go.mod")); err != nil {
-		return fmt.Errorf("no go-mc26-kit checkout in %s (clone github.com/mj41/go-mc26-kit there, or --kit-src DIR)", o.SrcDir)
+		return "", fmt.Errorf("no go-mc26-kit checkout in %s (clone github.com/mj41/go-mc26-kit there, or --kit-src DIR)", o.SrcDir)
 	}
 	lib, err := filepath.Abs(o.LibDir)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if err := os.MkdirAll(o.OutDir, 0o755); err != nil {
-		return err
+	stage = o.OutDir + ".new"
+	if err := os.RemoveAll(stage); err != nil {
+		return "", err
 	}
-	if err := gitx.ReplaceTree(o.OutDir, o.SrcDir); err != nil {
-		return fmt.Errorf("copying the kit sources: %w", err)
+	defer func() {
+		if err != nil {
+			os.RemoveAll(stage)
+		}
+	}()
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return "", err
+	}
+	if err := gitx.ReplaceTree(stage, o.SrcDir); err != nil {
+		return "", fmt.Errorf("copying the kit sources: %w", err)
 	}
 	// `use` of the library tree would make the go command fetch the tag the
 	// kit's go.mod requires, which is not published while this runs; a
 	// replace to the directory does not.
-	work := fmt.Sprintf("go 1.25\n\nuse .\n\nreplace %s => %s\n", LibModule, lib)
-	if err := os.WriteFile(WorkFile(o.OutDir), []byte(work), 0o644); err != nil {
-		return err
+	work := func(libDir string) string {
+		return fmt.Sprintf("go 1.25\n\nuse .\n\nreplace %s => %s\n", LibModule, libDir)
+	}
+	if err := os.WriteFile(WorkFile(stage), []byte(work(lib)), 0o644); err != nil {
+		return "", err
 	}
 	steps := [][]string{{"build", "./..."}, {"vet", "./..."}}
 	if o.Test {
 		steps = append(steps, []string{"test", "./..."})
 	}
-	o.Log("kit: build, vet%s against %s", map[bool]string{true: ", test", false: ""}[o.Test], lib)
+	if o.NoCheck {
+		steps = nil
+		o.Log("kit: assembled against %s, not built or vetted (--no-kit-check)", lib)
+	} else {
+		o.Log("kit: build, vet%s against %s", map[bool]string{true: ", test", false: ""}[o.Test], lib)
+	}
 	for _, args := range steps {
 		cmd := exec.Command("go", args...)
-		cmd.Dir = o.OutDir
-		cmd.Env = Env(o.OutDir)
+		cmd.Dir = stage
+		cmd.Env = Env(stage)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("kit: go %s: %v\n%s", strings.Join(args, " "), err, out)
+			return "", fmt.Errorf("kit: go %s: %v\n%s", strings.Join(args, " "), err, out)
 		}
 	}
-	return nil
+	if o.LibRef != "" {
+		ref, err := filepath.Abs(o.LibRef)
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(WorkFile(stage), []byte(work(ref)), 0o644); err != nil {
+			return "", err
+		}
+	}
+	return stage, nil
 }

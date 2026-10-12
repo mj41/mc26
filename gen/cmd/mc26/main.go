@@ -1,16 +1,12 @@
 // mc26 runs the chain from Mojang's server jar to a tagged go-mc26 library —
-// locally and in GitHub Actions alike:
+// locally and in GitHub Actions alike. `mc26 help` lists the commands (the
+// table commandList), `mc26 <command> -h` a command's flags:
 //
-//	mc26 extract  --version 26.2                 # jar → temp/data/26.2 (JSON + _meta.json)
-//	mc26 build    --data temp/data/26.2 --out temp/lib/26.2   # data → library tree, built and tested
-//	mc26 smoke    --version 26.2 --lib temp/lib/26.2          # vanilla server (container) ↔ bot smoke test
-//	mc26 e2e      --version 26.2                                  # the kit's example bots against a vanilla server
-//	mc26 fixtures --version 26.2                                  # the save tests' small world, cut from the e2e run's
-//	mc26 pipeline --version 26.2 [--smoke] [--e2e]   # extract + build + test (+ smoke, + e2e), nothing committed
-//	mc26 release  --version 26.2 [--push]        # extract → mc26-data branch+tag → build → smoke → go-mc26 branch+tag
-//	mc26 commit   --repo DIR --branch B --from TREE --message M [--tag-base v0.262.]
-//	mc26 latest                                  # newest release and snapshot in Mojang's manifest
-//	mc26 import-src --from <go-mc tree>          # one-time: fill gen/src from the fork
+//	mc26 extract  --version 26.3                 # jar → temp/data/26.3 (JSON + _meta.json)
+//	mc26 build    --data 26.3                    # data → temp/lib/26.3, built and tested, and the kit against it
+//	mc26 smoke    --version 26.3                 # the kit's bot against a vanilla server
+//	mc26 pipeline --version 26.3 [--smoke] [--e2e]   # extract + build + test (+ smoke, + e2e), nothing committed
+//	mc26 release  --version 26.3 [--push]        # data and library committed and tagged in the sibling checkouts
 //
 // Scratch files live under <root>/temp (see internal/paths). Nothing is pushed
 // unless --push is given.
@@ -22,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,9 +35,11 @@ import (
 	"github.com/mj41/mc26/gen/internal/e2e"
 	"github.com/mj41/mc26/gen/internal/extract"
 	"github.com/mj41/mc26/gen/internal/fixtures"
+	"github.com/mj41/mc26/gen/internal/generate"
 	"github.com/mj41/mc26/gen/internal/gitx"
 	"github.com/mj41/mc26/gen/internal/importsrc"
 	"github.com/mj41/mc26/gen/internal/kit"
+	"github.com/mj41/mc26/gen/internal/langmods"
 	"github.com/mj41/mc26/gen/internal/limits"
 	"github.com/mj41/mc26/gen/internal/mcver"
 	"github.com/mj41/mc26/gen/internal/paths"
@@ -65,7 +64,7 @@ func logf(format string, args ...any) { fmt.Fprintf(logOut, format+"\n", args...
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		usage(os.Stderr)
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
@@ -74,11 +73,21 @@ func main() {
 		"pipeline": cmdPipeline, "release": cmdRelease, "latest": cmdLatest, "tag": cmdTag, "report": cmdReport,
 		"import-src": cmdImportSrc,
 		"crosscheck": cmdCrossCheck, "verify": cmdVerify, "update": cmdUpdate, "docs": cmdDocs, "index": cmdIndex,
-		"fixtures": cmdFixtures, "kit": cmdKit, "rcon": cmdRCON,
+		"fixtures": cmdFixtures, "kit": cmdKit, "rcon": cmdRCON, "lang": cmdLang,
+	}
+	switch cmd {
+	case "-h", "-help", "--help", "help":
+		if len(args) > 0 && commands[args[0]] != nil { // help <command>: its flags
+			cmd, args = args[0], []string{"-h"}
+			break
+		}
+		usage(os.Stdout)
+		return
 	}
 	fn, ok := commands[cmd]
 	if !ok {
-		usage()
+		fmt.Fprintf(os.Stderr, "mc26: unknown command %q\n\n", cmd)
+		usage(os.Stderr)
 		os.Exit(2)
 	}
 	if err := fn(args); err != nil {
@@ -87,31 +96,68 @@ func main() {
 	}
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, `usage: mc26 <command> [flags]
+// commandList is every command with its synopsis and what it does: the
+// top-level usage and each command's -h are printed from it.
+var commandList = []struct{ name, args, what string }{
+	{"extract", "--version V [--runtime podman|docker] [--dry-run] [--only GenNbtSchema,…]", "the server jar and the language files → temp/data/V (JSON), extracted in the JDK container"},
+	{"build", "--data V|DIR [--out DIR] [--no-test] [--allow-holes] [--no-kit-check] [--kit-src DIR]", "temp/data/V → the library in temp/lib/V (built, vetted, tested) and the kit against it in temp/kit/V"},
+	{"kit", "--version V [--test] [--no-kit-check] [--kit-src DIR]", "the kit checkout assembled again against temp/lib/V (after editing the kit)"},
+	{"smoke", "--version V [--kit DIR] [--port N] [--runtime podman|docker|host]", "the kit's bot and the library's management client against a vanilla server"},
+	{"e2e", "--version V [--kit DIR] [--port N] [--runtime …] [--only robot,…] | --list", "the kit's example bots against a vanilla server (long: the robot and survival scenarios); --list prints the scenarios, one JSON object a line"},
+	{"crosscheck", "--version V [--keep] [--capture FILE] [--port N] [--runtime …]", "a recorded session decoded again by the reader that has only the JSON (gen/crosslang)"},
+	{"fixtures", "--version V [--world DIR] [--out DIR] [--chunks N]", "the save tests' small world, cut from what e2e left"},
+	{"rcon", "[--port N] [--password P] COMMAND…", "commands sent to a running test server, with its answers"},
+	{"lang", "--version V [--data DIR] [--out DIR] [--repo DIR]", "the languages go-mc26 does not carry, as go-mc26-lang's modules in temp/lang/V; with --repo committed and tagged in that checkout (nothing pushed)"},
+	{"pipeline", "--version V [--data DIR] [--out DIR] [--skip-extract] [--smoke] [--e2e]", "extract, build and test (and smoke, e2e); nothing committed"},
+	{"verify", "[--versions V,…] [--steps build,smoke,crosscheck,e2e] [--quiet]", "those steps for every extracted version, one table at the end"},
+	{"update", "[--version V | --pre] [--skip-extract] [--no-verify] [--no-commit]", "a new Minecraft version from the manifest to local commits and tags, never a push"},
+	{"release", "--version V [--skip-extract] [--no-smoke] [--e2e] [--data-only] [--push]", "data and library committed and tagged in the sibling checkouts; pushed with --push"},
+	{"commit", "--repo DIR --branch B --from TREE --message M [--tag-base v0.262.] [--push]", "a tree committed onto a branch of a checkout, tagged with the next free number"},
+	{"report", "--version V | --lib DIR", "generated versus hand-written lines of a built library"},
+	{"docs", "--version V [--data DIR] [--out DIR] [--internal]", "gen/docs/*.mc26tmpl.md rendered for a version"},
+	{"index", "--repo DIR --kind data|data-pre|lib", "the README on a generated repository's main: its branches and their tags"},
+	{"latest", "", "the newest release and snapshot in Mojang's manifest"},
+	{"tag", "--version V", "the first tag of a version (26.3 → v0.263.0)"},
+	{"import-src", "--from GOMC [--owner NAME]", "historical, one-time: filled gen/src from the go-mc fork (empties gen/src first)"},
+}
 
-  extract   --version V [--runtime podman|docker] [--dry-run] [--only GenNbtSchema,…]
-  build     --data DIR --out DIR [--version V] [--data-source S] [--no-test] [--allow-holes]
-  smoke     --version V [--kit DIR] [--port N] [--runtime podman|docker|host]
-  e2e       --version V [--kit DIR] [--port N] [--runtime …] [--only robot,…]
-  rcon      [--port N] "command" …                # a running test server's answers
-  kit       --version V [--test]       assemble the kit checkout against the built temp/lib/V again (after editing the kit)
-  pipeline  --version V [--data DIR] [--out DIR] [--smoke] [--e2e] [--skip-extract]
-  verify    [--versions 26.1,26.2] [--steps build,smoke,crosscheck,e2e] [--quiet] [--runtime …]
-  update    [--version V | --pre] [--skip-extract] [--allow-holes] [--no-verify] [--no-commit] [--runtime …]
-  release   --version V [--data-repo DIR] [--data-pre-repo DIR] [--lib-repo DIR] [--skip-extract] [--no-smoke] [--e2e] [--push]
-  commit    --repo DIR --branch B --from TREE --message M [--tag-base v0.262.] [--push]
-  report    --version V | --lib DIR      generated vs hand-written lines of a built library
-  docs      --version V [--out DIR] [--internal]   render gen/docs/*.mc26tmpl.md for a version
-  index     --repo DIR --kind data|data-pre|lib     rewrite the README on main: the branch and tag table
-  latest
-  tag       --version V
-  import-src        --from GOMC [--owner NAME]
-
+func usage(w io.Writer) {
+	fmt.Fprintln(w, "usage: mc26 <command> [flags]      mc26 <command> -h: its flags")
+	fmt.Fprintln(w)
+	for _, c := range commandList {
+		fmt.Fprintf(w, "  %-10s %s\n  %-10s   %s\n", c.name, c.args, "", c.what)
+	}
+	fmt.Fprintln(w, `
 The kit (bot, server, accounts, examples) is a checkout of go-mc26-kit next to this repository
-(--kit-src DIR to point elsewhere): the pipeline builds and tests it against every library it
-builds, since its bot is the test client; it does not own or release it.
+(--kit-src DIR to point elsewhere): every build assembles and tests it against the library it
+made, since its bot is the test client; this repository does not own or release it.
 Scratch: <root>/temp (data/<version>, cache, lib/<version>, kit/<version>, smoke/<version>).`)
+}
+
+// newFlagSet is a command's flag set, whose -h prints the command's synopsis
+// and what it does (commandList) before its flags.
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs.Usage = func() {
+		out := fs.Output()
+		for _, c := range commandList {
+			if c.name == name {
+				fmt.Fprintf(out, "usage: mc26 %s %s\n\n%s.\n\nflags:\n", name, c.args, c.what)
+			}
+		}
+		fs.PrintDefaults()
+	}
+	return fs
+}
+
+// parseFlags parses a command's flags; an argument left over is a mistake (a
+// flag without its dashes, a misplaced value), not something to ignore.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	fs.Parse(args)
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected argument %q (mc26 %s -h for the flags)", fs.Arg(0), fs.Name())
+	}
+	return nil
 }
 
 // ---- pieces shared by the commands --------------------------------------------
@@ -149,12 +195,62 @@ func extractVersion(version, runtime string, dryRun bool, only ...string) (strin
 // other command builds strictly.
 var allowHoles bool
 
+// noKitCheck (--no-kit-check on build and kit) assembles the kit without building or vetting it: the delivery's
+// check container does that, with a Go cache that outlives the build.
+var noKitCheck bool
+
 // kitSrc is the go-mc26-kit checkout every build assembles and tests against
 // the library it produced (--kit-src on the commands that build).
 var kitSrc string
 
 func kitSrcFlag(fs *flag.FlagSet) {
-	fs.StringVar(&kitSrc, "kit-src", sibling("go-mc26-kit"), "checkout of go-mc26-kit, built and tested against the library")
+	fs.StringVar(&kitSrc, "kit-src", "", "checkout of go-mc26-kit (default: go-mc26-kit next to this repository)")
+}
+
+// needKit fails before any work when the kit checkout is missing: every build
+// assembles and tests it against the library it made, and finding it missing
+// only then would throw that library away.
+func needKit() error {
+	d := kitSrcDir()
+	if _, err := os.Stat(filepath.Join(d, "go.mod")); err != nil {
+		return fmt.Errorf("no go-mc26-kit checkout in %s (clone github.com/mj41/go-mc26-kit there, or --kit-src DIR): every build builds and tests the kit against the library", d)
+	}
+	return nil
+}
+
+// needAssembledKit fails before a server is started when the kit has not been
+// assembled against the version's library.
+func needAssembledKit(version, kitDir string) error {
+	if _, err := os.Stat(filepath.Join(kitDir, "go.mod")); err != nil {
+		return fmt.Errorf("no kit assembled in %s (mc26 build --data %s first, or mc26 kit --version %s)", kitDir, version, version)
+	}
+	return nil
+}
+
+// extractedData resolves --data, a version under temp/data or a directory, and
+// fails, naming the versions there are, when it holds no extraction.
+func extractedData(arg string) (string, error) {
+	dir := paths.Data(arg)
+	if _, err := os.Stat(filepath.Join(dir, "version.json")); err == nil {
+		return dir, nil
+	}
+	if strings.ContainsAny(arg, `/\`) {
+		return "", fmt.Errorf("%s is not an extraction (no version.json)", arg)
+	}
+	have := "none"
+	if vs, err := extractedVersions(); err == nil {
+		have = strings.Join(vs, ", ")
+	}
+	return "", fmt.Errorf("no data for %s in %s (have: %s): mc26 extract --version %s, or --data DIR", arg, paths.DataRoot(), have, arg)
+}
+
+// kitSrcDir is --kit-src, or the checkout next to this repository: resolved
+// when used, so -h works outside a checkout.
+func kitSrcDir() string {
+	if kitSrc == "" {
+		return sibling("go-mc26-kit")
+	}
+	return kitSrc
 }
 
 // buildLib builds the library from dataDir into outDir, and the kit against
@@ -165,15 +261,21 @@ func buildLib(dataDir, outDir, version, dataSource string, test bool) (*build.In
 	if err != nil {
 		return nil, err
 	}
+	// the scratch library (temp/lib/<version>) is what other sessions build against: made beside and swapped in
+	atomic := strings.HasPrefix(filepath.Clean(outDir)+string(filepath.Separator), filepath.Clean(paths.Temp())+string(filepath.Separator))
 	return build.Run(build.Options{
-		GenRoot: filepath.Join(root, "gen"), DataDir: dataDir, OutDir: outDir, KitSrc: kitSrc, KitOut: paths.Kit(v.ID), Version: version,
-		DataSource: dataSource, Generator: "mc26 " + gitx.ShortHead(root), Test: test, AllowHoles: allowHoles, Log: logf,
+		Atomic:  atomic,
+		GenRoot: filepath.Join(root, "gen"), DataDir: dataDir, OutDir: outDir, KitSrc: kitSrcDir(), KitOut: paths.Kit(v.ID), Version: version,
+		DataSource: dataSource, Generator: "mc26 " + gitx.ShortHead(root), Test: test, AllowHoles: allowHoles, NoKitCheck: noKitCheck, Log: logf,
 	})
 }
 
 // runSmoke starts a vanilla server of version and runs the smoke tests from
 // the kit tree assembled against that version's library.
 func runSmoke(version, kitDir string, port int, runtime string) error {
+	if err := needAssembledKit(version, kitDir); err != nil {
+		return err
+	}
 	jar, err := extract.ServerJar(paths.Cache(), version, logf)
 	if err != nil {
 		return err
@@ -187,6 +289,9 @@ func runSmoke(version, kitDir string, port int, runtime string) error {
 // runE2E builds the kit's example bots and drives them against a vanilla
 // server of version.
 func runE2E(version, dataDir, kitDir string, port int, runtime string, only ...string) error {
+	if err := needAssembledKit(version, kitDir); err != nil {
+		return err
+	}
 	jar, err := extract.ServerJar(paths.Cache(), version, logf)
 	if err != nil {
 		return err
@@ -204,7 +309,7 @@ func runE2E(version, dataDir, kitDir string, port int, runtime string, only ...s
 		CrossLang: filepath.Join(root, "gen", "crosslang"), NodesPath: filepath.Join(root, "gen", "hand-crafted", "nodes.json"),
 		WorkDir: filepath.Join(paths.Temp(), "e2e", version), Port: port, Runtime: runtime, Log: logf,
 		Fixtures: fixtureDir, Only: only,
-		RunsDir: runsDir(), KitSrc: kitSrc,
+		RunsDir: runsDir(), KitSrc: kitSrcDir(),
 	})
 }
 
@@ -324,12 +429,14 @@ func sibling(name string) string { return filepath.Join(filepath.Dir(paths.MustR
 // ---- commands --------------------------------------------------------------------
 
 func cmdExtract(args []string) error {
-	fs := flag.NewFlagSet("extract", flag.ExitOnError)
+	fs := newFlagSet("extract")
 	version := fs.String("version", "", "Minecraft version id (26.1 or later)")
 	runtime := fs.String("runtime", "", "podman or docker (detected)")
-	dryRun := fs.Bool("dry-run", false, "print the container command only")
+	dryRun := fs.Bool("dry-run", false, "print the container command only: nothing downloaded or written")
 	only := fs.String("only", "", "run just these extractors (comma-separated, e.g. GenNbtSchema) into the existing temp/data/<version>")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
@@ -348,20 +455,32 @@ func cmdExtract(args []string) error {
 }
 
 func cmdBuild(args []string) error {
-	fs := flag.NewFlagSet("build", flag.ExitOnError)
+	fs := newFlagSet("build")
 	data := fs.String("data", "", "extracted data directory (or a version id under temp/data)")
 	out := fs.String("out", "", "library tree to produce (default temp/lib/<version>)")
 	version := fs.String("version", "", "expected version id")
 	source := fs.String("data-source", "", "recorded in version.go (default: the data path)")
 	noTest := fs.Bool("no-test", false, "skip go test")
 	holes := fs.Bool("allow-holes", false, "build although a schema has a hole (while the extractor is being fixed)")
+	fs.BoolVar(&noKitCheck, "no-kit-check", false, "assemble the kit against the library without building or vetting it (the delivery's check container does)")
 	kitSrcFlag(fs)
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	allowHoles = *holes
 	if *data == "" {
-		return fmt.Errorf("--data is required")
+		*data = *version // build --version 26.3, as the other commands take it
 	}
-	dataDir := paths.Data(*data)
+	if *data == "" {
+		return fmt.Errorf("--data (or --version) is required: mc26 build --data 26.3")
+	}
+	dataDir, err := extractedData(*data)
+	if err != nil {
+		return err
+	}
+	if err := needKit(); err != nil {
+		return err
+	}
 	v, err := build.ReadVersion(dataDir)
 	if err != nil {
 		return err
@@ -380,12 +499,14 @@ func cmdBuild(args []string) error {
 }
 
 func cmdSmoke(args []string) error {
-	fs := flag.NewFlagSet("smoke", flag.ExitOnError)
+	fs := newFlagSet("smoke")
 	version := fs.String("version", "", "Minecraft version of the server jar")
 	kitDir := fs.String("kit", "", "kit tree assembled against the built library (default temp/kit/<version>)")
 	port := fs.Int("port", smokePort, "server port")
 	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
@@ -406,7 +527,7 @@ func cmdSmoke(args []string) error {
 // JSON as what it receives, and until this went through the proxy only the play
 // packets a bot happened to receive were ever checked.
 func cmdCrossCheck(args []string) error {
-	fs := flag.NewFlagSet("crosscheck", flag.ExitOnError)
+	fs := newFlagSet("crosscheck")
 	version := fs.String("version", "", "Minecraft version of the server jar")
 	data := fs.String("data", "", "data directory (default temp/data/<version>)")
 	kitDir := fs.String("kit", "", "kit tree assembled against the built library (default temp/kit/<version>)")
@@ -414,7 +535,9 @@ func cmdCrossCheck(args []string) error {
 	keep := fs.Bool("keep", false, "decode the capture that is already there, without starting a server")
 	port := fs.Int("port", smokePort, "server port")
 	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
@@ -435,6 +558,9 @@ func cmdCrossCheck(args []string) error {
 func runCrossCheck(version, data, kitDir, capturePath string, keep bool, port int, runtime string) error {
 	root := paths.MustRoot()
 	if !keep {
+		if err := needAssembledKit(version, kitDir); err != nil {
+			return err
+		}
 		jar, err := extract.ServerJar(paths.Cache(), version, logf)
 		if err != nil {
 			return err
@@ -520,15 +646,24 @@ func runCrossCheck(version, data, kitDir, capturePath string, keep bool, port in
 // prints one table. A failed step does not stop the other versions; a failed
 // build skips the steps of that version that need the library.
 func cmdVerify(args []string) error {
-	fs := flag.NewFlagSet("verify", flag.ExitOnError)
+	fs := newFlagSet("verify")
 	versions := fs.String("versions", "", "comma-separated Minecraft versions (default: every extracted one under temp/data)")
 	steps := fs.String("steps", "build,smoke,crosscheck,e2e", "comma-separated steps to run, in this order")
 	port := fs.Int("port", smokePort, "server port")
 	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
 	quiet := fs.Bool("quiet", false, "progress goes to the log files only, not to stderr")
-	logDir := fs.String("log-dir", filepath.Join(paths.Temp(), "verify"), "one log file per version and step")
+	logDir := fs.String("log-dir", "", "one log file per version and step (default temp/verify)")
 	kitSrcFlag(fs)
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	for _, step := range strings.Split(*steps, ",") {
+		switch step {
+		case "build", "smoke", "crosscheck", "e2e":
+		default:
+			return fmt.Errorf("unknown step %q (build, smoke, crosscheck, e2e)", step)
+		}
+	}
 	var vs []string
 	if *versions != "" {
 		vs = strings.Split(*versions, ",")
@@ -537,6 +672,14 @@ func cmdVerify(args []string) error {
 		if vs, err = extractedVersions(); err != nil {
 			return err
 		}
+	}
+	if strings.Contains(","+*steps+",", ",build,") {
+		if err := needKit(); err != nil {
+			return err
+		}
+	}
+	if *logDir == "" {
+		*logDir = filepath.Join(paths.Temp(), "verify")
 	}
 	return runVerify(vs, strings.Split(*steps, ","), *port, *runtime, *quiet, *logDir)
 }
@@ -651,15 +794,21 @@ func runVerify(vs, wanted []string, port int, runtime string, quiet bool, logDir
 }
 
 func cmdE2E(args []string) error {
-	fs := flag.NewFlagSet("e2e", flag.ExitOnError)
+	fs := newFlagSet("e2e")
 	version := fs.String("version", "", "Minecraft version of the server jar")
 	data := fs.String("data", "", "data directory (default temp/data/<version>)")
 	kitDir := fs.String("kit", "", "kit tree assembled against the built library (default temp/kit/<version>)")
 	port := fs.Int("port", smokePort, "server port")
 	runtime := fs.String("runtime", "", "podman or docker for the server (detected), or host for the host's java")
 	only := fs.String("only", "", "comma-separated scenarios to run, the others skipped (robot,daze,…)")
+	list := fs.Bool("list", false, "print the scenarios, one JSON object a line (name, what, long), and exit: no server, no build, no version")
 	kitSrcFlag(fs) // the kit's commit, kept with every robot run
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if *list {
+		return e2e.List(os.Stdout)
+	}
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
@@ -680,11 +829,14 @@ func cmdE2E(args []string) error {
 // a build ends with, without building the library again: the loop for work on
 // the kit (edit, `mc26 kit`, `mc26 e2e --only …`).
 func cmdKit(args []string) error {
-	fs := flag.NewFlagSet("kit", flag.ExitOnError)
+	fs := newFlagSet("kit")
 	version := fs.String("version", "", "Minecraft version whose built library (temp/lib/<version>) to assemble against")
 	test := fs.Bool("test", false, "also go test ./... in the result")
+	noCheck := fs.Bool("no-kit-check", false, "assemble only: no build and vet of the result (the delivery's check container does)")
 	kitSrcFlag(fs)
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
@@ -692,19 +844,21 @@ func cmdKit(args []string) error {
 	if _, err := os.Stat(filepath.Join(lib, "go.mod")); err != nil {
 		return fmt.Errorf("no built library in %s (mc26 build first)", lib)
 	}
-	return kit.Assemble(kit.Options{SrcDir: kitSrc, LibDir: lib, OutDir: paths.Kit(*version), Test: *test, Log: logf})
+	return kit.Assemble(kit.Options{SrcDir: kitSrcDir(), LibDir: lib, OutDir: paths.Kit(*version), Test: *test, NoCheck: *noCheck, Log: logf})
 }
 
 // cmdFixtures cuts the save package's test world out of the world the
 // end-to-end run's server wrote, so the library's own tests read what this
 // version's server writes.
 func cmdFixtures(args []string) error {
-	fs := flag.NewFlagSet("fixtures", flag.ExitOnError)
+	fs := newFlagSet("fixtures")
 	version := fs.String("version", "", "Minecraft version whose end-to-end world to cut from")
-	world := fs.String("world", "", "world directory (default temp/e2e/<version>/server/world, what `mc26 e2e` leaves)")
+	world := fs.String("world", "", "world directory (default temp/e2e/<version>/server/world, what mc26 e2e leaves)")
 	out := fs.String("out", "", "fixture directory (default gen/src/save/testdata/<version>; the build copies it to save/testdata/world)")
 	chunks := fs.Int("chunks", 4, "chunks to keep around the spawn, and entity chunks")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
@@ -726,7 +880,7 @@ func cmdFixtures(args []string) error {
 }
 
 func cmdPipeline(args []string) error {
-	fs := flag.NewFlagSet("pipeline", flag.ExitOnError)
+	fs := newFlagSet("pipeline")
 	version := fs.String("version", "", "Minecraft version id")
 	data := fs.String("data", "", "use this data directory instead of extracting")
 	out := fs.String("out", "", "library tree to produce (default temp/lib/<version>)")
@@ -735,7 +889,12 @@ func cmdPipeline(args []string) error {
 	skipExtract := fs.Bool("skip-extract", false, "reuse temp/data/<version> when it exists")
 	runtime := fs.String("runtime", "", "podman or docker (detected); host runs the server on the host's java")
 	kitSrcFlag(fs)
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if err := needKit(); err != nil {
+		return err
+	}
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
@@ -777,8 +936,8 @@ func containerRuntime(r string) string { return r }
 
 // releaseOpts are release's flags; update fills them in too.
 type releaseOpts struct {
-	version, dataRepo, dataPreRepo, libRepo, runtime string
-	skipExtract, noSmoke, dataOnly, e2e, push        bool
+	version, dataRepo, dataPreRepo, libRepo, runtime, langBase string
+	skipExtract, noSmoke, dataOnly, e2e, push                  bool
 }
 
 func releaseFlags(fs *flag.FlagSet, o *releaseOpts) {
@@ -787,11 +946,12 @@ func releaseFlags(fs *flag.FlagSet, o *releaseOpts) {
 	fs.StringVar(&o.dataPreRepo, "data-pre-repo", sibling("mc26-data-pre"), "checkout of mc26-data-pre (pre-releases and snapshots)")
 	fs.StringVar(&o.libRepo, "lib-repo", sibling("go-mc26"), "checkout of go-mc26")
 	fs.StringVar(&o.runtime, "runtime", "", "podman or docker (detected)")
+	fs.StringVar(&o.langBase, "lang-base", langmods.BlobsBase, "where go-mc26-lang's files are by checksum: a push of go-mc26 needs all of the version's there")
 	kitSrcFlag(fs)
 }
 
 func cmdRelease(args []string) error {
-	fs := flag.NewFlagSet("release", flag.ExitOnError)
+	fs := newFlagSet("release")
 	var o releaseOpts
 	releaseFlags(fs, &o)
 	fs.BoolVar(&o.skipExtract, "skip-extract", false, "reuse temp/data/<version> when it exists")
@@ -799,12 +959,42 @@ func cmdRelease(args []string) error {
 	fs.BoolVar(&o.dataOnly, "data-only", false, "stop after the data commit and tag (a pre-release whose library needs work)")
 	fs.BoolVar(&o.e2e, "e2e", false, "also run the example bots against a vanilla server before committing the library")
 	fs.BoolVar(&o.push, "push", false, "push the branches and tags to origin")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if o.version == "" {
 		return fmt.Errorf("--version is required")
 	}
+	if err := needKit(); err != nil {
+		return err
+	}
 	_, _, err := runRelease(o)
 	return err
+}
+
+// langPublished checks, before anything is pushed, that go-mc26-lang has every language of this extraction
+// under base: the library's manifest names them by checksum, and langget fetches them from there. Mojang
+// changes translations without a new version, so they must come from the same data as this release.
+func langPublished(base, version, dataDir string) error {
+	files, err := generate.LangFiles(dataDir)
+	if err != nil {
+		return err
+	}
+	missing, err := langmods.Missing(&http.Client{Timeout: time.Minute}, base, files)
+	if err != nil {
+		return fmt.Errorf("go-mc26-lang: %w", err)
+	}
+	if len(missing) > 0 {
+		shown := missing
+		if len(shown) > 5 {
+			shown = append(shown[:5:5], "…")
+		}
+		return fmt.Errorf("go-mc26-lang has not %d of %s's %d languages as this extraction has them (%s) under %s: "+
+			"mc26 lang --version %s --data %s --repo <go-mc26-lang checkout>, push its blobs, mc-%s and tags, then release again",
+			len(missing), version, len(files)-1, strings.Join(shown, " "), base, version, dataDir, version)
+	}
+	logf("release %s: go-mc26-lang has all %d languages", version, len(files)-1)
+	return nil
 }
 
 // runRelease is release's body: data commit and tag, the library built from
@@ -834,6 +1024,11 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 	meta, err := extract.ReadMeta(dataDir)
 	if err != nil {
 		return "", "", err
+	}
+	if *push && !*dataOnly {
+		if err := langPublished(o.langBase, *version, dataDir); err != nil {
+			return "", "", err
+		}
 	}
 	stage, err := stageData(dataDir, repo)
 	if err != nil {
@@ -905,7 +1100,7 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 // needed: a hole in a schema (the extractor), a compile error (gen/src), a
 // failed test.
 func cmdUpdate(args []string) error {
-	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	fs := newFlagSet("update")
 	var o releaseOpts
 	releaseFlags(fs, &o)
 	pre := fs.Bool("pre", false, "without --version: the newest snapshot or pre-release instead of the newest release")
@@ -913,7 +1108,12 @@ func cmdUpdate(args []string) error {
 	holes := fs.Bool("allow-holes", false, "go on although a schema has a hole")
 	noVerify := fs.Bool("no-verify", false, "skip smoke, crosscheck and e2e")
 	noCommit := fs.Bool("no-commit", false, "stop after verify: no data or library commit")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if err := needKit(); err != nil {
+		return err
+	}
 	start := time.Now()
 	if o.version == "" {
 		release, snapshot, err := extract.LatestVersions()
@@ -1014,10 +1214,12 @@ func cmdUpdate(args []string) error {
 // cmdIndex rewrites the README of a generated repository's main branch: what
 // the repository is, and the table of its branches with their latest tags.
 func cmdIndex(args []string) error {
-	fs := flag.NewFlagSet("index", flag.ExitOnError)
+	fs := newFlagSet("index")
 	repo := fs.String("repo", "", "checkout of mc26-data, mc26-data-pre or go-mc26")
 	kind := fs.String("kind", "", "data, data-pre or lib")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *repo == "" || *kind == "" {
 		return fmt.Errorf("--repo and --kind are required")
 	}
@@ -1133,17 +1335,23 @@ func tagLess(a, b, base string) bool {
 
 // cmdDocs renders the documentation templates for one version.
 func cmdDocs(args []string) error {
-	fs := flag.NewFlagSet("docs", flag.ExitOnError)
+	fs := newFlagSet("docs")
 	version := fs.String("version", "", "Minecraft version id")
 	data := fs.String("data", "", "data directory (default temp/data/<version>)")
 	out := fs.String("out", "", "output directory (default temp/docs/<version>)")
 	internal := fs.Bool("internal", false, "keep the blocks meant for this repository's readers (where things live, the Go types)")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *version == "" {
 		return fmt.Errorf("--version is required")
 	}
 	if *data == "" {
-		*data = paths.Data(*version)
+		d, err := extractedData(*version)
+		if err != nil {
+			return err
+		}
+		*data = d
 	}
 	if *out == "" {
 		*out = filepath.Join(paths.Temp(), "docs", *version)
@@ -1180,14 +1388,16 @@ func renderDocs(version, dataDir, outDir string, internal bool) (int, error) {
 }
 
 func cmdCommit(args []string) error {
-	fs := flag.NewFlagSet("commit", flag.ExitOnError)
+	fs := newFlagSet("commit")
 	repo := fs.String("repo", "", "checkout to commit into")
 	branch := fs.String("branch", "", "branch (created from main when missing)")
 	from := fs.String("from", "", "tree to commit")
 	message := fs.String("message", "", "commit message")
 	base := fs.String("tag-base", "", "tag prefix, e.g. v0.262. (next free number is used)")
 	push := fs.Bool("push", false, "push branch and tag")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *repo == "" || *branch == "" || *from == "" || *message == "" {
 		return fmt.Errorf("--repo, --branch, --from and --message are required")
 	}
@@ -1205,18 +1415,20 @@ func cmdCommit(args []string) error {
 }
 
 func cmdReport(args []string) error {
-	fs := flag.NewFlagSet("report", flag.ExitOnError)
+	fs := newFlagSet("report")
 	lib := fs.String("lib", "", "built library tree (default temp/lib/<version>)")
 	version := fs.String("version", "", "Minecraft version, to find the default tree")
 	kitSrcFlag(fs)
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *lib == "" {
 		if *version == "" {
 			return fmt.Errorf("--lib or --version is required")
 		}
 		*lib = filepath.Join(paths.Temp(), "lib", *version)
 	}
-	r, err := report.Run(report.Options{LibDir: *lib, GenRoot: filepath.Join(paths.MustRoot(), "gen"), KitSrc: kitSrc})
+	r, err := report.Run(report.Options{LibDir: *lib, GenRoot: filepath.Join(paths.MustRoot(), "gen"), KitSrc: kitSrcDir()})
 	if err != nil {
 		return err
 	}
@@ -1244,6 +1456,9 @@ func cmdReport(args []string) error {
 }
 
 func cmdLatest(args []string) error {
+	if err := parseFlags(newFlagSet("latest"), args); err != nil {
+		return err
+	}
 	release, snapshot, err := extract.LatestVersions()
 	if err != nil {
 		return err
@@ -1253,9 +1468,11 @@ func cmdLatest(args []string) error {
 }
 
 func cmdTag(args []string) error {
-	fs := flag.NewFlagSet("tag", flag.ExitOnError)
+	fs := newFlagSet("tag")
 	version := fs.String("version", "", "Minecraft version id")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	base, err := tagBase(*version)
 	if err != nil {
 		return err
@@ -1265,10 +1482,12 @@ func cmdTag(args []string) error {
 }
 
 func cmdImportSrc(args []string) error {
-	fs := flag.NewFlagSet("import-src", flag.ExitOnError)
+	fs := newFlagSet("import-src")
 	from := fs.String("from", "", "go-mc working tree")
 	owner := fs.String("owner", "mj41", "copyright holder added to LICENSE")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if *from == "" {
 		return fmt.Errorf("--from is required")
 	}
@@ -1284,10 +1503,13 @@ var _ = strconv.Itoa
 // prints the answers: what a scenario's world holds while it runs
 // (mc26 rcon --port 25651 "execute if block 1 2 3 minecraft:water").
 func cmdRCON(args []string) error {
-	fs := flag.NewFlagSet("rcon", flag.ExitOnError)
+	fs := newFlagSet("rcon")
 	port := fs.Int("port", smokePort+1, "the server's RCON port (its game port + 1)")
 	password := fs.String("password", "mc26", "the RCON password")
 	fs.Parse(args)
+	if fs.NArg() == 0 {
+		return fmt.Errorf("no command given (mc26 rcon \"list\")")
+	}
 	for _, c := range fs.Args() {
 		ans, err := e2e.RCON(fmt.Sprintf("127.0.0.1:%d", *port), *password, c)
 		if err != nil {
@@ -1295,5 +1517,49 @@ func cmdRCON(args []string) error {
 		}
 		fmt.Printf("%s -> %s\n", c, ans)
 	}
+	return nil
+}
+
+// cmdLang writes the languages go-mc26 does not carry as the modules of go-mc26-lang (one per language, its
+// file and its checksum), and with --repo commits them there: the branch mc-<version>, the files by checksum
+// on the branch blobs, a tag per language whose file changed since its last tag of the version. Nothing is
+// pushed.
+func cmdLang(args []string) error {
+	fs := newFlagSet("lang")
+	version := fs.String("version", "", "Minecraft version id")
+	data := fs.String("data", "", "extracted data directory (default temp/data/<version>)")
+	out := fs.String("out", "", "where the modules are written (default temp/lang/<version>)")
+	repo := fs.String("repo", "", "a checkout of go-mc26-lang to commit and tag them in (nothing pushed)")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if *version == "" {
+		return fmt.Errorf("--version is required")
+	}
+	if *data == "" {
+		d, err := extractedData(*version)
+		if err != nil {
+			return err
+		}
+		*data = d
+	}
+	if *out == "" {
+		*out = filepath.Join(paths.Temp(), "lang", *version)
+	}
+	base, err := tagBase(*version)
+	if err != nil {
+		return err
+	}
+	o := langmods.Options{DataDir: *data, Version: *version, TagBase: base, OutDir: *out,
+		Generator: gitx.ShortHead(paths.MustRoot()), Log: logf}
+	files, err := langmods.Write(o)
+	if err != nil || *repo == "" {
+		return err
+	}
+	tags, err := langmods.Release(o, *repo, files)
+	if err != nil {
+		return err
+	}
+	logf("mc26 lang: %d languages of %s committed in %s, %d tags (nothing pushed)", len(files), *version, *repo, len(tags))
 	return nil
 }
