@@ -226,31 +226,18 @@ func scenarioSurvival(o Options, bin string) error {
 	if _, err := fmt.Sscanf(ans, "%s at %d %d %d facing %d %d", &how, &x, &y, &z, &fdx, &fdz); err != nil {
 		return fmt.Errorf("shelter answered %q", ans)
 	}
-	// going in: right is (-fdz, fdx); a dug room's tunnel leaves the far wall
-	tunnel := func(dx, dz, dy int) bool {
-		return how == "dug" && dx == 2*fdx && dz == 2*fdz && dy >= 0 && dy <= 1
-	}
 	if _, err := ask("wait 10", 5*time.Second); err != nil { // its last steps reach the server
 		return err
 	}
 	if _, err := r.agree(rcon, name); err != nil {
 		return fmt.Errorf("in the shelter: %w", err)
 	}
-	// closed: the room three by three and two high open, everything round it
-	// (walls, the way in, floor, roof) something a monster does not pass
-	for dx := -2; dx <= 2; dx++ {
-		for dz := -2; dz <= 2; dz++ {
-			for dy := -1; dy <= 2; dy++ {
-				inside := dx >= -1 && dx <= 1 && dz >= -1 && dz <= 1 && dy >= 0 && dy <= 1
-				corner := (dx == -2 || dx == 2) && (dz == -2 || dz == 2)
-				if inside || corner || tunnel(dx, dz, dy) {
-					continue
-				}
-				at := fmt.Sprintf("%d %d %d", x+dx, y+dy, z+dz)
-				if resp, err := rcon.command("execute if block " + at + " #minecraft:replaceable"); err != nil || !strings.Contains(resp, "failed") {
-					return fmt.Errorf("the shelter at %d %d %d is open at %s (%q %v)", x, y, z, at, resp, err)
-				}
-			}
+	// closed: the room three by three and two high open, everything that touches it (walls, the way in,
+	// floor, roof) something a monster does not pass (shelterShell)
+	for _, c := range shelterShell(how, fdx, fdz) {
+		at := fmt.Sprintf("%d %d %d", x+c[0], y+c[2], z+c[1])
+		if resp, err := rcon.command("execute if block " + at + " #minecraft:replaceable"); err != nil || !strings.Contains(resp, "failed") {
+			return fmt.Errorf("the shelter at %d %d %d is open at %s (%q %v)", x, y, z, at, resp, err)
 		}
 	}
 	// furnished along the right wall, going in: crafting table, chest, furnace
