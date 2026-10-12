@@ -30,21 +30,37 @@ const botDayDawnGrace = 60 * time.Second
 // rconCmd runs a server command (rconClient.command, or a fake).
 type rconCmd func(command string) (string, error)
 
+// dayTicks is the length of a game day in ticks.
+const dayTicks = 24000
+
+var clockRe = regexp.MustCompile(`is at (-?[0-9]+) tick`)
+
+// serverClock reads the server's day clock: the ticks the default clock (the overworld's) has run, from
+// `time query time` — "Clock minecraft:overworld is at 13560 tick(s)". Since 26.1 the game has world clocks and
+// no `time query day` or `daytime`: the server answers those with "Unknown or incomplete command", which is
+// no error of the RCON call, and the number is not the last word of the answer. ok is false when the answer is
+// not a clock.
+func serverClock(cmd rconCmd) (ticks int, ok bool) {
+	resp, err := cmd("time query time")
+	if err != nil {
+		return 0, false
+	}
+	m := clockRe.FindStringSubmatch(resp)
+	if m == nil {
+		return 0, false
+	}
+	t, err := strconv.Atoi(m[1])
+	return t, err == nil
+}
+
 // serverNight reports whether the server's day clock is in the night (mobs spawn), and false for ok when
 // the clock could not be read.
 func serverNight(cmd rconCmd) (night, ok bool) {
-	resp, err := cmd("time query daytime")
-	if err != nil {
+	t, ok := serverClock(cmd)
+	if !ok {
 		return false, false
 	}
-	f := strings.Fields(resp)
-	if len(f) == 0 {
-		return false, false
-	}
-	t, err := strconv.Atoi(f[len(f)-1])
-	if err != nil {
-		return false, false
-	}
+	t %= dayTicks
 	return t >= 13000 && t < 23000, true
 }
 

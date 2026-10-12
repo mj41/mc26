@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,8 +20,13 @@ type fakeServer struct {
 
 func (f *fakeServer) cmd(c string) (string, error) {
 	switch {
-	case strings.HasPrefix(c, "time query daytime"):
-		return "The time is " + f.daytime, nil
+	case c == "time query time":
+		// what the server answers (26.1 on: world clocks): the clock's total ticks, here three days in
+		n, _ := strconv.Atoi(f.daytime)
+		return fmt.Sprintf("Clock minecraft:overworld is at %d tick(s)", 3*24000+n), nil
+	case strings.HasPrefix(c, "time query"):
+		// the commands of before 26.1 (`day`, `daytime`) are no commands now: the answer is no error of the call
+		return "Unknown or incomplete command, see below for error<--[HERE]", nil
 	case strings.HasPrefix(c, "execute at"):
 		if f.underSky {
 			return "Test passed", nil
@@ -216,5 +222,36 @@ func TestPollRcon(t *testing.T) {
 	err := pollRcon(func(string) (string, error) { return "No entity", nil }, 600*time.Millisecond, "data get entity X OnGround", "1b")
 	if err == nil || !strings.Contains(err.Error(), "OnGround") || !strings.Contains(err.Error(), "No entity") {
 		t.Errorf("never: %v", err)
+	}
+}
+
+// serverClock reads the answer a real server gives (26.1 on), and reads none from what is not a clock.
+func TestServerClock(t *testing.T) {
+	for _, c := range []struct {
+		resp          string
+		ticks         int
+		ok            bool
+		night, nightK bool
+	}{
+		{"Clock minecraft:overworld is at 13560 tick(s)", 13560, true, true, true},
+		{"Clock minecraft:overworld is at 72000 tick(s)", 72000, true, false, true},
+		{"Clock minecraft:overworld is at 96500 tick(s)", 96500, true, false, true},  // 4 days and 500: day
+		{"Clock minecraft:overworld is at 109000 tick(s)", 109000, true, true, true}, // 4 days and 13000
+		{"Unknown or incomplete command, see below for error<--[HERE]", 0, false, false, false},
+		{"", 0, false, false, false},
+	} {
+		cmd := func(string) (string, error) { return c.resp, nil }
+		ticks, ok := serverClock(cmd)
+		if ticks != c.ticks || ok != c.ok {
+			t.Errorf("%q: %d %v, want %d %v", c.resp, ticks, ok, c.ticks, c.ok)
+		}
+		if night, ok := serverNight(cmd); night != c.night || ok != c.nightK {
+			t.Errorf("%q: night %v ok %v, want %v %v", c.resp, night, ok, c.night, c.nightK)
+		}
+	}
+	// the clock that cannot be asked: no verdict (the wait judge leaves the verdict as it was)
+	fails := func(string) (string, error) { return "", fmt.Errorf("rcon closed") }
+	if _, ok := serverNight(fails); ok {
+		t.Error("a night read from a failed call")
 	}
 }

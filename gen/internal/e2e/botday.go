@@ -329,15 +329,8 @@ func scenarioBotDay(o Options, n, days int, mobs string) error {
 // once: on the ground (the surface over where it is) dx, dz off it.
 func botDayScripted(o Options, rcon *rconClient, scenario, name string, start time.Time, done []bool) {
 	day, daytime := -1, -1
-	if resp, err := rcon.command("time query day"); err == nil {
-		if f := strings.Fields(resp); len(f) > 0 {
-			day, _ = strconv.Atoi(f[len(f)-1])
-		}
-	}
-	if resp, err := rcon.command("time query daytime"); err == nil {
-		if f := strings.Fields(resp); len(f) > 0 {
-			daytime, _ = strconv.Atoi(f[len(f)-1])
-		}
+	if t, ok := serverClock(rcon.command); ok {
+		day, daytime = t/dayTicks, t%dayTicks
 	}
 	for i, ev := range botDayScript {
 		if done[i] {
