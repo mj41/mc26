@@ -37,7 +37,7 @@ func worldSeed() string {
 // robot joined and put in the world's nearest forest, the clock at noon and
 // stopped — or, with cycle, running from the morning as it does. done stops
 // them both.
-func forestStart(o Options, bin, name, logName string, cycle bool) (srv *smoke.Server, r *robotBot, rcon *rconClient, done func(), err error) {
+func forestStart(o Options, bin, name, logName string, cycle bool, extra ...string) (srv *smoke.Server, r *robotBot, rcon *rconClient, done func(), err error) {
 	var closers []func()
 	done = func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -80,7 +80,7 @@ func forestStart(o Options, bin, name, logName string, cycle bool) (srv *smoke.S
 		return
 	}
 	_ = os.Remove(strings.TrimSuffix(filepath.Join(o.WorkDir, logName), ".log") + ".memory.json") // a new world: nothing remembered
-	if r, err = startRobot(o, bin, filepath.Join(o.WorkDir, logName), srv, name); err != nil {
+	if r, err = startRobot(o, bin, filepath.Join(o.WorkDir, logName), srv, name, extra...); err != nil {
 		return
 	}
 	closers = append(closers, r.close)

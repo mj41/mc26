@@ -34,6 +34,10 @@ type run struct {
 	dir   string
 	index string // <RunsDir>/runs.jsonl
 	meta  runMeta
+	hmark int // where the harness's lines were when the run began (harness.log)
+
+	pressure *sampler        // the pod's cgroup pressure while the run lives (pause.go)
+	evidence *serverEvidence // the server's own log and its collector's, followed and kept
 }
 
 // runsByScenario is the latest run of each scenario, for its result.
@@ -60,6 +64,11 @@ type runMeta struct {
 	// Bench is the test bench it ran on (MC26_BENCH: a cluster's
 	// "bench-1"), empty on a workstation
 	Bench string `json:"bench,omitempty"`
+	// BenchVersion is the version of the bench's code that ran it
+	// (MC26_BENCH_VERSION: a release tag such as "v0.5.23", a revision
+	// with "-dirty" when not built from a tag, or "unknown"); left out on
+	// a workstation, where the variable is not set
+	BenchVersion string `json:"benchVersion,omitempty"`
 	// Delivery is the robot's code when a bench's supervisor put it there
 	// (MC26_DELIVERY_FILE: a JSON object — commit, signer, who, when), as
 	// it stood when this run started
@@ -67,6 +76,24 @@ type runMeta struct {
 	Resumes  string          `json:"resumes,omitempty"` // the run this one goes on from (held, the robot started again)
 	Result   string          `json:"result,omitempty"`  // "ok", "fail", or "held" (resumed by a run after it)
 	Error    string          `json:"error,omitempty"`   // why it failed
+	// Conditions are what the run was played under — its seed, the
+	// difficulty, the hostile mobs (off, scripted, natural) and the script's
+	// version: fitness is compared only between runs under the same
+	Conditions map[string]any `json:"conditions,omitempty"`
+	// Fitness is the judge's scorecard, on every run: seconds from the bot's
+	// start to each milestone (null: not reached), deaths, the longest time
+	// standing still, the run's length
+	Fitness map[string]any `json:"fitness,omitempty"`
+}
+
+// score notes the run's conditions and its scorecard (written with its end
+// and its result).
+func (r *run) score(conditions, fitness map[string]any) {
+	if r == nil {
+		return
+	}
+	r.meta.Conditions, r.meta.Fitness = conditions, fitness
+	_ = r.write()
 }
 
 type gitCommit struct {
@@ -92,6 +119,32 @@ func deliveryOf(path string) json.RawMessage {
 	return json.RawMessage(bytes.TrimSpace(b))
 }
 
+// runDirName is a run's directory's name: <time>_<version>_<scenario>_<robot>,
+// the scenario's part letters, digits and dashes only, the robot's those and
+// underscores — what a store of runs takes as a run's name. Anything else in
+// them is a dash (a stage's world "brick: fell a tree" went in with its colon,
+// and no store took those runs).
+func runDirName(at time.Time, version, scenario, robot string) string {
+	return fmt.Sprintf("%s_%s_%s_%s", at.Format("20060102-150405"), version, namePart(scenario, false), namePart(robot, true))
+}
+
+// namePart keeps letters, digits and dashes (and underscores when asked), the
+// rest a dash, no two dashes together, none at the ends.
+func namePart(s string, underscore bool) string {
+	var b strings.Builder
+	for _, r := range s {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || underscore && r == '_'
+		if !ok {
+			r = '-'
+		}
+		if r == '-' && strings.HasSuffix(b.String(), "-") {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 // newRun makes the run's directory and writes its meta.json; nil, nil when
 // runs are not kept.
 func newRun(o Options, scenario, robot string, srv *smoke.Server) (*run, error) {
@@ -99,7 +152,7 @@ func newRun(o Options, scenario, robot string, srv *smoke.Server) (*run, error) 
 		return nil, nil
 	}
 	now := time.Now()
-	dir := filepath.Join(o.RunsDir, fmt.Sprintf("%s_%s_%s_%s", now.Format("20060102-150405"), o.Version, scenario, robot))
+	dir := filepath.Join(o.RunsDir, runDirName(now, o.Version, scenario, robot))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -108,13 +161,19 @@ func newRun(o Options, scenario, robot string, srv *smoke.Server) (*run, error) 
 		Started: now.Format(time.RFC3339), Version: o.Version, Scenario: scenario, Robot: robot,
 		Server: srv.Addr(), LevelType: srv.LevelType, Seed: srv.Seed,
 		Mc26: commitOf(paths.MustRoot()), Kit: commitOf(o.KitSrc), Host: host,
-		Bench: os.Getenv("MC26_BENCH"), Delivery: deliveryOf(os.Getenv("MC26_DELIVERY_FILE")),
+		Bench: os.Getenv("MC26_BENCH"), BenchVersion: os.Getenv("MC26_BENCH_VERSION"), Delivery: deliveryOf(os.Getenv("MC26_DELIVERY_FILE")),
 	}}
+	r.hmark = harnessMark()
+	noteHarness(fmt.Sprintf("run started: scenario %s, robot %s, server %s, %s", scenario, robot, r.meta.Server, dir))
+	tell := func(line string) { noteHarness(line); r.writeHarness() } // (written at once: a run killed in a pause has its lines)
+	r.pressure = startSampler(pressureDir, pressureEvery, tell)
+	r.evidence = watchServer(srv.LogPath(), srv.GCLogPath(), evidenceEvery, tell)
 	runsMu.Lock()
 	if prev := runsByScenario[scenario]; prev != nil && prev.meta.Result == "held" {
 		r.meta.Resumes = filepath.Base(prev.dir)
 	}
 	runsByScenario[scenario] = r
+	openRuns[r] = true
 	runsMu.Unlock()
 	if err := r.write(); err != nil {
 		return nil, err
@@ -161,6 +220,8 @@ func runResult(scenario string, since time.Time, err error) {
 		r.meta.Result, r.meta.Error = "fail", err.Error()
 	}
 	_ = r.write()
+	noteHarness(fmt.Sprintf("verdict: scenario %s %s %s", r.meta.Scenario, r.meta.Result, r.meta.Error))
+	r.writeHarness()
 	r.announce("run-result", map[string]any{"result": r.meta.Result, "error": r.meta.Error})
 	r.commit()
 }
@@ -173,6 +234,8 @@ func (r *run) hold(err error) {
 	}
 	r.meta.Result, r.meta.Error = "held", err.Error()
 	_ = r.write()
+	noteHarness(fmt.Sprintf("verdict: scenario %s held: %s", r.meta.Scenario, r.meta.Error))
+	r.writeHarness()
 	r.announce("run-result", map[string]any{"result": "held", "error": r.meta.Error})
 	r.commit()
 }
@@ -240,10 +303,45 @@ func (r *run) end(output string) {
 	if r == nil {
 		return
 	}
+	runsMu.Lock()
+	open := openRuns[r]
+	delete(openRuns, r)
+	runsMu.Unlock()
+	if !open {
+		return // ended already (stopped from outside, then the scenario's own end)
+	}
 	r.meta.Ended = time.Now().Format(time.RFC3339)
 	_ = r.write()
 	_ = os.WriteFile(filepath.Join(r.dir, "robot.log"), []byte(output), 0o644)
+	if r.pressure != nil {
+		noteHarness(r.pressure.summary())
+		noteHarness(memoryOf(pressureDir))
+		noteHarness(r.evidence.summary())
+		r.evidence.keep(r.dir)
+	}
+	noteHarness(fmt.Sprintf("run ended (the robot stopped): scenario %s", r.meta.Scenario))
+	r.writeHarness()
 	r.announce("run-stopped", map[string]any{"ended": r.meta.Ended})
+}
+
+// openRuns are the runs started and not yet ended.
+var openRuns = map[*run]bool{}
+
+// endOpenRuns ends every run still open as stopped: the harness stopped from
+// outside (its Job deleted) — else the run stayed "going" for good.
+func endOpenRuns() {
+	runsMu.Lock()
+	var rs []*run
+	for r := range openRuns {
+		rs = append(rs, r)
+	}
+	runsMu.Unlock()
+	for _, r := range rs {
+		if r.meta.Result == "" {
+			r.meta.Result = "stopped"
+		}
+		r.end("")
+	}
 }
 
 // commitOf is the commit checked out in dir, its subject and whether the tree

@@ -30,25 +30,43 @@ import (
 // field, the robot alive. Normal
 // difficulty all along. Long — two days and nights, an hour — it runs only
 // when named (e2e --only days).
-func scenarioDays(o Options, bin string) error { return lives(o, bin, "days", 2) }
+func scenarioDays(o Options, bin string) error { return lives(o, bin, "days", 2, false) }
+
+// scenarioLiveDays and scenarioLiveWeek are days and week with the robot
+// living by itself (its day loop, -days): the harness gives no order, it only
+// judges each morning (fitness), the deaths and standing still, and the end.
+func scenarioLiveDays(o Options, bin string) error { return lives(o, bin, "livedays", 2, true) }
+
+func scenarioLiveWeek(o Options, bin string) error {
+	return lives(o, bin, "liveweek", weekDays(), true)
+}
+
+// weekDays is MC26_DAYS (7: a week).
+func weekDays() int {
+	if v, err := strconv.Atoi(os.Getenv("MC26_DAYS")); err == nil && v >= 2 {
+		return v
+	}
+	return 7
+}
 
 // scenarioWeek lives on past the second day as the robot will live in a
 // world it plays in: each day up its stairs, its field harvested and sown
 // again (bread: it hunts nothing), wood till dusk, in; each night down its
 // stairs and mines. MC26_DAYS days (7: a week; two hours and more of the
 // game's clock); only when named (e2e --only week).
-func scenarioWeek(o Options, bin string) error {
-	days := 7
-	if v, err := strconv.Atoi(os.Getenv("MC26_DAYS")); err == nil && v >= 2 {
-		days = v
-	}
-	return lives(o, bin, "week", days)
-}
+func scenarioWeek(o Options, bin string) error { return lives(o, bin, "week", weekDays(), false) }
 
 // lives is days and week: the robot's first days, then the days after.
-func lives(o Options, bin, scenario string, days int) error {
+func lives(o Options, bin, scenario string, days int, live bool) error {
 	const name = "Settler"
-	srv, r, rcon, done, err := forestStart(o, bin, name, scenario+".log", true)
+	// live (or MC26_LIVE=1): the robot lives by itself (its day loop,
+	// -days); the harness only judges what the server sees
+	live = live || os.Getenv("MC26_LIVE") != ""
+	var extra []string
+	if live {
+		extra = append(extra, "-days")
+	}
+	srv, r, rcon, done, err := forestStart(o, bin, name, scenario+".log", true, extra...)
 	if err != nil {
 		return err
 	}
@@ -231,6 +249,8 @@ func lives(o Options, bin, scenario string, days int) error {
 		}
 		return strings.TrimSuffix(f[4], ";"), nil
 	}
+	// field is the farm's answer once it made one ("field at …"), "" till then
+	var field string
 	// busy keeps the robot at the chores of each round while the phase is
 	// while — a person playing is on the move day and night, not waiting
 	busy := func(while string, round func(i int) ([]string, error)) error {
@@ -248,13 +268,18 @@ func lives(o Options, bin, scenario string, days int) error {
 				must := strings.HasPrefix(c, "!")
 				c = strings.TrimPrefix(c, "!")
 				ans, err := do(c, 30*time.Minute) // a mine takes long
+				if c == "farm" && strings.Contains(ans, "field at") {
+					field = ans
+				}
 				if err != nil {
 					if must || strings.Contains(err.Error(), "the robot died") {
 						return err
 					}
 					o.Log(scenario+": %v (going on)", err) // a chore not done is not the end of it
 				}
-				if err != nil || !strings.HasPrefix(ans, "staying in") && !strings.HasPrefix(ans, "stopped:") {
+				// staying in, stopped, or the night's work done before the
+				// light ("(morning)": it comes up at tick 21000): waited out
+				if err != nil || !strings.HasPrefix(ans, "staying in") && !strings.HasPrefix(ans, "stopped:") && !strings.Contains(ans, "(morning)") {
 					idle = false
 				}
 			}
@@ -348,12 +373,107 @@ func lives(o Options, bin, scenario string, days int) error {
 		return nil
 	}
 
-	// day 1: wood and a wooden pickaxe, then the shelter dug into a hill —
-	// its room the first stone (the night's stairs give the rest) — a sword,
-	// an axe (the logs cut faster), torches (the room lit coming in). The
-	// animals are left alone: it eats the apples the leaves drop, and the
-	// field's bread
-	for _, c := range []string{"get wooden_pickaxe", "get logs 16", "shelter", "get stone_sword", "get stone_axe", "get torch 16", "get stick 8", "in"} {
+	// each morning, what it has done by then (fitness.go): a run that goes on
+	// but gets nowhere ends as one that stands still does
+	fit := func(morning int) error { return fitness(o, rcon, scenario, name, worldSeed(), morning) }
+
+	// the robot living by itself: each morning (its day count) the fitness,
+	// its deaths and standing still watched, the nights it waits out skipped
+	// — then the end's checks below
+	if live {
+		dayOf := func() (int, string, error) {
+			ans, err := r.ask("time", 5*time.Second)
+			if err != nil {
+				return 0, "", err
+			}
+			var d, t int
+			var ph string
+			if _, err := fmt.Sscanf(ans, "day %d tick %d %s", &d, &t, &ph); err != nil {
+				return 0, "", fmt.Errorf("time answered %q", ans)
+			}
+			return d, strings.TrimSuffix(ph, ";"), nil
+		}
+		// set up (its world, the difficulty): now it begins to live
+		if ans, err := r.ask("live", 10*time.Second); err != nil {
+			return fmt.Errorf("live: %w", err)
+		} else {
+			o.Log("%s: %s", scenario, ans)
+		}
+		first, _, err := dayOf()
+		if err != nil {
+			return err
+		}
+		from, morning, deaths, relogs := 0, 1, 0, 0
+		for morning <= days {
+			select {
+			case <-r.done:
+				// it ended itself to relog (its world and the server's
+				// disagreed): started again from its memory, its day loop on
+				if relogs >= maxRelogs || !strings.Contains(r.out.String(), "robot: relog:") {
+					return fmt.Errorf("the robot exited\n%s", tail(r.out.String(), 20))
+				}
+				relogs++
+				o.Log("%s: a relog (%d of %d): started again", scenario, relogs, maxRelogs)
+				nr, err := startRobot(o, bin, filepath.Join(o.WorkDir, scenario+".log"), srv, name, extra...)
+				if err != nil {
+					return err
+				}
+				r, from = nr, 0
+				if _, err := r.ask("live", 10*time.Second); err != nil {
+					return fmt.Errorf("live, after the relog: %w", err)
+				}
+				continue
+			case <-time.After(5 * time.Second):
+			}
+			out := r.out.String()
+			seen := out[from:]
+			from = len(out)
+			if strings.Contains(seen, "robot: waiting for the morning") {
+				skipTo(23000, "staying in for the night")
+			}
+			if strings.Contains(seen, "robot: waiting for the night") {
+				skipTo(13000, "home at dusk")
+			}
+			if n := strings.Count(seen, "Died"); n > 0 {
+				deaths += n
+				o.Log("%s: DIED (%d)", scenario, deaths)
+			}
+			for _, m := range stillRe.FindAllStringSubmatch(seen, -1) {
+				if n, _ := strconv.Atoi(m[1]); n >= 180 {
+					return fmt.Errorf("the robot has stood still %ds\n%s", n, tail(out, 20))
+				}
+			}
+			d, ph, err := dayOf()
+			if err != nil {
+				continue // a look refused a moment (a relog): asked again
+			}
+			if d-first+1 > morning && ph == "day" {
+				morning = d - first + 1
+				o.Log("%s: day %d", scenario, morning)
+				if err := fit(morning); err != nil {
+					return err
+				}
+			}
+		}
+		// judged by its milestones (each morning's fitness), its deaths and
+		// the server: not what it carries at the end (an iron pickaxe made,
+		// worn out on the way to the diamonds, is no failure)
+		if deaths > 0 {
+			return fmt.Errorf("lived the %d days, but died %d times on the way", days, deaths)
+		}
+		if bad := complaints(serverLogFrom(srv, logFrom), name); len(bad) > 0 {
+			return fmt.Errorf("the server objected:\n%s", strings.Join(bad, "\n"))
+		}
+		return nil
+	}
+
+	// day 1: a wooden pickaxe, then the shelter dug into a hill — its room
+	// the first stone (the night's stairs give the rest) — and the stone
+	// tools at once: pickaxe, axe, shovel, sword, so the logs, the dirt and
+	// the stone after them are dug with the right tool, not a day's work by
+	// hand; then wood, torches (the room lit coming in). The animals are
+	// left alone: it eats the apples the leaves drop, and the field's bread
+	for _, c := range []string{"get wooden_pickaxe", "shelter", "get stone_pickaxe", "get stone_axe", "get stone_shovel", "get stone_sword", "get logs 16", "get torch 16", "get stick 8", "in"} {
 		if _, err := do(c, 6*time.Minute); err != nil {
 			return err
 		}
@@ -384,6 +504,9 @@ func lives(o Options, bin, scenario string, days int) error {
 		return err
 	}
 	smelt() // the night's ore, before it goes up
+	if err := fit(2); err != nil {
+		return err
+	}
 	// day 2
 	if _, err := do("in", 10*time.Minute); err != nil { // up the stairs home
 		return err
@@ -391,7 +514,7 @@ func lives(o Options, bin, scenario string, days int) error {
 	if _, err := do("out", 4*time.Minute); err != nil {
 		return err
 	}
-	field, err := do("farm", 10*time.Minute)
+	field, err = do("farm", 10*time.Minute)
 	if err != nil {
 		return err
 	}
@@ -422,6 +545,9 @@ func lives(o Options, bin, scenario string, days int) error {
 		return err
 	}
 	smelt() // the night's ore, before it goes up
+	if err := fit(3); err != nil {
+		return err
+	}
 	// days 3, 4, …: up its stairs, the field, wood till dusk, in; down and
 	// mines by night
 	for d := 3; d <= days; d++ {
@@ -433,6 +559,11 @@ func lives(o Options, bin, scenario string, days int) error {
 			o.Log("%s: %v", scenario, err)
 		}
 		if err := busy("day", func(i int) ([]string, error) {
+			// no field yet (the farm stopped by the dusk, a day of other
+			// work): the field first, each day till there is one
+			if i == 0 && !strings.Contains(field, "field at") {
+				return []string{"farm", "harvest", fmt.Sprintf("scout %d", 48+16*(d-2)), "get logs +16"}, nil
+			}
 			if i == 0 && d >= 5 { // from day five: a village found, traded with
 				return []string{"harvest", "village 50", "tradeall", "in"}, nil
 			}
@@ -459,6 +590,9 @@ func lives(o Options, bin, scenario string, days int) error {
 			return err
 		}
 		smelt()
+		if err := fit(d + 1); err != nil {
+			return err
+		}
 	}
 	if err := have("minecraft:iron_pickaxe", 1); err != nil {
 		return err

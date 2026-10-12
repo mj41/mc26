@@ -79,6 +79,7 @@ func Run(o Options) error {
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
 	}
+	o.Log = teeLog(o.Log) // (the runs keep the harness's lines: harness.log)
 	v, err := build.ReadVersion(o.DataDir)
 	if err != nil {
 		return err
@@ -87,43 +88,9 @@ func Run(o Options) error {
 		bin string        // the built examples, once built
 		srv *smoke.Server // the flat world's server, once started
 	)
-	type scenario struct {
-		name string
-		long bool // run only when named (--only)
-		fn   func() error
-	}
-	// on the flat world's server
-	scenarios := []scenario{
-		{"mcping", false, func() error { return scenarioPing(o, bin, srv, v) }},
-		{"daze", false, func() error { return scenarioDaze(o, bin, srv) }},
-		{"twobots", false, func() error { return scenarioTwoBots(o, bin, srv) }},
-		{"minimal", false, func() error { return scenarioLogin(o, bin, srv, "minimal", "Minimal", 20*time.Second, "Login success") }},
-		{"autofish", false, func() error {
-			return scenarioLogin(o, bin, srv, "autofish", "Fisher", 25*time.Second, "Login success", "Game start")
-		}},
-		{"pressureTest", false, func() error { return scenarioPressure(o, bin, srv) }},
-		{"robot", false, func() error { return scenarioRobot(o, bin, srv) }},
-	}
-	// after it stopped: the world it wrote, then servers of their own
-	after := []scenario{
-		{"mcadump", false, func() error { return scenarioMcadump(o, bin, srv) }},
-		{"savechunk", false, func() error { return scenarioSaveChunk(o, srv) }},
-		{"saveschema", false, func() error { return scenarioSaveSchema(o, srv) }},
-		{"fixtures", false, func() error { return scenarioFixtures(o, srv) }},
-		{"survival", false, func() error { return scenarioSurvival(o, bin) }},
-		{"days", true, func() error { return scenarioDays(o, bin) }},
-		{"week", true, func() error { return scenarioWeek(o, bin) }},
-		{"village", true, func() error { return scenarioVillage(o, bin) }},
-		{"field", true, func() error { return scenarioField(o, bin) }},
-		{"fieldwild", true, func() error { return scenarioFieldWild(o, bin) }},
-		{"farmstart", true, func() error { return scenarioFarmStart(o, bin) }},
-		{"fish", true, func() error { return scenarioFish(o, bin) }},
-	}
+	scenarios, after := scenarioTable(o, v, &bin, &srv)
 	// a name not known (a typo) would run nothing and pass
-	var known []string
-	for _, sc := range append(scenarios, after...) {
-		known = append(known, sc.name)
-	}
+	known := scenarioNames(scenarios, after)
 	for _, n := range o.Only {
 		if !slices.Contains(known, n) {
 			return fmt.Errorf("--only: no scenario %q (known: %s)", n, strings.Join(known, ", "))
@@ -142,6 +109,7 @@ func Run(o Options) error {
 		s := <-stop
 		o.Log("e2e: %v: the robots stopped, their runs ended", s)
 		running.closeAll()
+		endOpenRuns() // the outside bot's runs (botday, botflat) too
 		servers.stopAll()
 		os.Exit(128 + int(s.(syscall.Signal)))
 	}()
@@ -270,7 +238,7 @@ func buildExamples(o Options) (string, error) {
 		if m, _ := filepath.Glob(filepath.Join(examples, e.Name(), "*.go")); len(m) == 0 {
 			continue
 		}
-		cmd := exec.Command("go", "build", "-o", filepath.Join(bin, e.Name()), "./examples/"+e.Name())
+		cmd := exec.Command("go", "build", "-trimpath", "-o", filepath.Join(bin, e.Name()), "./examples/"+e.Name())
 		cmd.Dir = kitDir
 		cmd.Env = kit.Env(kitDir)
 		if out, err := cmd.CombinedOutput(); err != nil {

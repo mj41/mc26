@@ -146,7 +146,7 @@ func goFile(path string) (lines int, generator string) {
 func readCopied(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("not a built library (no COPIED): %w", err)
+		return nil, fmt.Errorf("not a built library (no COPIED; mc26 build --data <version> first): %w", err)
 	}
 	origins := map[string]string{}
 	for _, line := range strings.Split(string(data), "\n") {

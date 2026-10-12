@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/mj41/mc26/gen/internal/extract"
@@ -100,38 +99,27 @@ func sharedWorld(o Options, from, seed string) (string, [2]int, error) {
 		return "", forest, fmt.Errorf("no forest: %q", resp)
 	}
 	fmt.Sscanf(m[1]+" "+m[2], "%d %d", &forest[0], &forest[1])
-	// every chunk round the forest, kept loaded till all are made: in squares
-	// of 5 by 5, as forceload makes a square's chunks before it answers
-	const square = 5
+	// every chunk round the forest, in squares of 3 by 3: forceload makes a
+	// square's chunks in one tick before it answers (a square of 25 took
+	// over the watchdog's minute on a slow node: the server killed itself;
+	// the test servers have no watchdog now), and lets them go again at once
+	// — all 441 kept loaded took more than the server's heap
+	const square = 3
 	cx, cz := forest[0]>>4, forest[1]>>4
-	var corners [][2]int
 	start := time.Now()
 	for x0 := cx - worldRadius; x0 <= cx+worldRadius; x0 += square {
 		for z0 := cz - worldRadius; z0 <= cz+worldRadius; z0 += square {
 			x1, z1 := min(x0+square-1, cx+worldRadius), min(z0+square-1, cz+worldRadius)
-			if resp, err := rc.command(fmt.Sprintf("forceload add %d %d %d %d", x0*16, z0*16, x1*16, z1*16)); err != nil || rconFailed(resp) {
-				return "", forest, fmt.Errorf("forceload: %q %v", resp, err)
+			area := fmt.Sprintf("%d %d %d %d", x0*16, z0*16, x1*16, z1*16)
+			for _, c := range []string{"forceload add " + area, "forceload remove " + area} {
+				if resp, err := rc.command(c); err != nil || rconFailed(resp) {
+					return "", forest, fmt.Errorf("%s: %q %v", c, resp, err)
+				}
 			}
-			corners = append(corners, [2]int{x0 * 16, z0 * 16}, [2]int{x1 * 16, z1 * 16})
 		}
 		o.Log("world: chunks %d..%d along x made (%s)", x0, min(x0+square-1, cx+worldRadius), time.Since(start).Round(time.Second))
 	}
-	for deadline := time.Now().Add(15 * time.Minute); ; time.Sleep(2 * time.Second) {
-		all := true
-		for _, c := range corners {
-			if resp, err := rc.command(fmt.Sprintf("execute if loaded %d 64 %d", c[0], c[1])); err != nil || !strings.Contains(resp, "passed") {
-				all = false
-				break
-			}
-		}
-		if all {
-			break
-		}
-		if time.Now().After(deadline) {
-			return "", forest, fmt.Errorf("the world round %v not made within 15 minutes", forest)
-		}
-	}
-	for _, c := range []string{"forceload remove all", "save-all flush"} {
+	for _, c := range []string{"save-all flush"} {
 		if resp, err := rc.command(c); err != nil || rconFailed(resp) {
 			return "", forest, fmt.Errorf("%s: %q %v", c, resp, err)
 		}

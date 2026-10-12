@@ -35,7 +35,7 @@ type robotBot struct {
 	once  sync.Once     // close's: a held robot is closed when held and at the end
 }
 
-func startRobot(o Options, bin, logPath string, srv *smoke.Server, name string) (*robotBot, error) {
+func startRobot(o Options, bin, logPath string, srv *smoke.Server, name string, extra ...string) (*robotBot, error) {
 	// twelve hours at most: the week scenario lives two weeks if asked
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Hour)
 	// its events beside its log, for go-mc26-robotview to follow — kept,
@@ -55,7 +55,7 @@ func startRobot(o Options, bin, logPath string, srv *smoke.Server, name string) 
 	// its memory beside its log too: a robot started again in the same run
 	// (held and resumed) goes on from it; a run's first starts without one
 	memory := strings.TrimSuffix(logPath, ".log") + ".memory.json"
-	cmd := exec.CommandContext(ctx, filepath.Join(bin, "robot"), "-address", srv.Addr(), "-name", name, "-events", events, "-memory", memory)
+	cmd := exec.CommandContext(ctx, filepath.Join(bin, "robot"), append([]string{"-address", srv.Addr(), "-name", name, "-events", events, "-memory", memory}, extra...)...)
 	out := &syncBuffer{}
 	cmd.Stdout, cmd.Stderr = out, out
 	stdin, err := cmd.StdinPipe()
@@ -281,7 +281,10 @@ func scenarioRobot(o Options, bin string, srv *smoke.Server) error {
 	// is laid out afresh each time; a search left at ring 4 went on looking
 	// far away for the logs beside it)
 	_ = os.Remove(filepath.Join(o.WorkDir, "robot.memory.json"))
-	if r, err = startRobot(o, bin, filepath.Join(o.WorkDir, "robot.log"), srv, name); err != nil {
+	// no reflexes nor watchdog on the course: its steps summon mobs, set
+	// dangers and stand still on purpose, to see what the robot's own
+	// commands do with them
+	if r, err = startRobot(o, bin, filepath.Join(o.WorkDir, "robot.log"), srv, name, "-reflexes=false", "-watchdog=false"); err != nil {
 		return err
 	}
 	defer r.close()
@@ -2221,20 +2224,12 @@ func robotDimensions(r *robotBot, rcon *rconClient, name string) error {
 // answer, decorated by its chat type, and the server must show the effect.
 func robotChat(r *robotBot, rcon *rconClient, name, bin string, srv *smoke.Server) error {
 	// the robot there first: a fill in chunks no one is near is refused
-	if _, err := rcon.command("tp " + name + " 402.5 -50 2.5 0 0"); err != nil {
-		return err
-	}
-	if _, err := r.ask("wait 20", 5*time.Second); err != nil {
-		return err
-	}
-	for _, c := range []string{
+	if err := r.prepare(rcon, name, 402.5, 2.5,
 		"fill 400 -63 -4 424 -50 12 minecraft:air",
 		"fill 400 -63 -4 424 -61 12 minecraft:grass_block",
-		"tp " + name + " 402.5 -60 2.5 0 0",
-	} {
-		if resp, err := rcon.command(c); err != nil || rconFailed(resp) {
-			return fmt.Errorf("rcon %q: %q %v", c, resp, err)
-		}
+		"tp "+name+" 402.5 -60 2.5 0 0",
+	); err != nil {
+		return err
 	}
 	d, err := startDaze(bin, srv, "Boss")
 	if err != nil {
@@ -2356,13 +2351,27 @@ func rconFailed(resp string) bool {
 }
 
 // prepare puts the robot near (x, z) first — a fill in chunks no player is
-// near is refused — then runs the commands.
+// near is refused — waits till the chunks round it are loaded (a second was
+// not always enough on a slow node), then runs the commands.
 func (b *robotBot) prepare(rcon *rconClient, name string, x, z float64, cmds ...string) error {
 	if _, err := rcon.command(fmt.Sprintf("tp %s %.1f -50 %.1f", name, x, z)); err != nil {
 		return err
 	}
 	if _, err := b.ask("wait 20", 5*time.Second); err != nil {
 		return err
+	}
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(250 * time.Millisecond) {
+		loaded := true
+		for _, c := range [][2]float64{{-12, -12}, {12, -12}, {-12, 12}, {12, 12}, {24, 12}} {
+			resp, err := rcon.command(fmt.Sprintf("execute if loaded %.0f -60 %.0f", x+c[0], z+c[1]))
+			if err != nil {
+				return err
+			}
+			loaded = loaded && strings.Contains(resp, "passed")
+		}
+		if loaded || time.Now().After(deadline) {
+			break
+		}
 	}
 	for _, c := range cmds {
 		if resp, err := rcon.command(c); err != nil || rconFailed(resp) {
@@ -2743,20 +2752,33 @@ func robotBoat(r *robotBot, rcon *rconClient, name string, srv *smoke.Server) er
 	return nil
 }
 
-// robotFrames are the lines of a goroutine dump in the robot's own code
-// (examples/robot/…), each once, at most n: where it is stuck.
+// robotFrames are the frames in the robot's own code (examples/robot/…) of
+// the goroutines running an order (through orders.go) — else of all of them
+// — each once, at most n: where it is stuck.
 func robotFrames(dump string, n int) string {
-	var out []string
-	seen := map[string]bool{}
-	for _, l := range strings.Split(dump, "\n") {
-		l = strings.TrimSpace(l)
-		if i := strings.Index(l, "examples/robot/"); i >= 0 && !seen[l] {
-			seen[l] = true
-			out = append(out, "  "+l[i:])
-			if len(out) == n {
-				break
+	pick := func(order bool) []string {
+		var out []string
+		seen := map[string]bool{}
+		for _, g := range strings.Split(dump, "\n\n") {
+			if order && !strings.Contains(g, "examples/robot/orders.go") {
+				continue
+			}
+			for _, l := range strings.Split(g, "\n") {
+				l = strings.TrimSpace(l)
+				if i := strings.Index(l, "examples/robot/"); i >= 0 && !seen[l] {
+					seen[l] = true
+					out = append(out, "  "+l[i:])
+					if len(out) == n {
+						return out
+					}
+				}
 			}
 		}
+		return out
+	}
+	out := pick(true)
+	if len(out) == 0 {
+		out = pick(false)
 	}
 	return strings.Join(out, "\n")
 }

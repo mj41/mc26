@@ -24,6 +24,7 @@ func scenarioField(o Options, bin string) error {
 		return err
 	}
 	defer done()
+	defer func() { r.close() }() // the robot as it is at the end (started again after a relog)
 	_ = srv
 	ans, err := r.ask("pos", 5*time.Second)
 	if err != nil {
@@ -56,7 +57,7 @@ func scenarioField(o Options, bin string) error {
 	if _, err := r.ask("wait 40", 10*time.Second); err != nil {
 		return err
 	}
-	ans, err = r.ask("farm 40", 20*time.Minute)
+	ans, err = relogAsk(o, bin, filepath.Join(o.WorkDir, "field.log"), srv, name, &r, "farm 40", 20*time.Minute) // a relog: started again, asked again
 	if err != nil {
 		return fmt.Errorf("farm: %w\n%s", err, tail(r.out.String(), 25))
 	}
@@ -130,11 +131,12 @@ var fieldChannelRows = []int{0, 3}
 // sown. Only when named (e2e --only fieldwild).
 func scenarioFieldWild(o Options, bin string) error {
 	const name = "Settler"
-	_, r, rcon, done, err := forestStart(o, bin, name, "fieldwild.log", false)
+	srv, r, rcon, done, err := forestStart(o, bin, name, "fieldwild.log", false)
 	if err != nil {
 		return err
 	}
 	defer done()
+	defer func() { r.close() }() // the robot as it is at the end (started again after a relog)
 	ans, err := r.ask("pos", 5*time.Second)
 	if err != nil {
 		return err
@@ -166,12 +168,12 @@ func scenarioFieldWild(o Options, bin string) error {
 	if _, err := r.ask("wait 40", 10*time.Second); err != nil {
 		return err
 	}
-	ans, err = r.ask("water", 6*time.Minute)
+	ans, err = relogAsk(o, bin, filepath.Join(o.WorkDir, "fieldwild.log"), srv, name, &r, "water", 6*time.Minute)
 	if err != nil {
 		return fmt.Errorf("water: %w\n%s", err, tail(r.out.String(), 20))
 	}
 	o.Log("fieldwild: water: %s", ans)
-	ans, err = r.ask("farm 24", 10*time.Minute)
+	ans, err = relogAsk(o, bin, filepath.Join(o.WorkDir, "fieldwild.log"), srv, name, &r, "farm 24", 10*time.Minute)
 	if err != nil {
 		return fmt.Errorf("farm: %w\n%s", err, tail(r.out.String(), 25))
 	}
@@ -203,11 +205,12 @@ func scenarioFieldWild(o Options, bin string) error {
 // found. Only when named (e2e --only farmstart).
 func scenarioFarmStart(o Options, bin string) error {
 	const name = "Settler"
-	_, r, rcon, done, err := forestStart(o, bin, name, "farmstart.log", true)
+	srv, r, rcon, done, err := forestStart(o, bin, name, "farmstart.log", true)
 	if err != nil {
 		return err
 	}
 	defer done()
+	defer func() { r.close() }() // the robot as it is at the end (started again after a relog)
 	rc := func(cmds ...string) error {
 		for _, c := range cmds {
 			if resp, err := rcon.command(c); err != nil || rconFailed(resp) {
@@ -241,7 +244,7 @@ func scenarioFarmStart(o Options, bin string) error {
 				return "", err
 			}
 			start := time.Now()
-			ans, err := r.ask(cmd, limit)
+			ans, err := relogAsk(o, bin, filepath.Join(o.WorkDir, "farmstart.log"), srv, name, &r, cmd, limit) // a relog: started again, asked again
 			if err != nil {
 				return "", fmt.Errorf("%s: %w\n%s", cmd, err, tail(r.out.String(), 25))
 			}

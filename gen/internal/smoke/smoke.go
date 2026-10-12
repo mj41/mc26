@@ -41,6 +41,9 @@ type Server struct {
 	// flat world every scenario but one plays on. Seed is its seed.
 	LevelType string
 	Seed      string
+	// Generator, for the flat world, is its generator-settings JSON (its
+	// layers, its biome); empty: the game's own flat world.
+	Generator string
 
 	cmd       *exec.Cmd
 	container string
@@ -49,6 +52,9 @@ type Server struct {
 
 // LogPath is the server's console output.
 func (s *Server) LogPath() string { return filepath.Join(s.WorkDir, "server.log") }
+
+// GCLogPath is the JVM's garbage-collection log: every pause, with its time (-Xlog:gc*).
+func (s *Server) GCLogPath() string { return filepath.Join(s.WorkDir, "gc.log") }
 
 // Addr is the address a bot connects to.
 func (s *Server) Addr() string { return fmt.Sprintf("127.0.0.1:%d", s.Port) }
@@ -128,6 +134,7 @@ level-seed=%s
 generate-structures=%t
 level-name=world
 spawn-protection=0
+enable-command-block=true
 max-players=20
 view-distance=6
 simulation-distance=4
@@ -136,7 +143,11 @@ difficulty=peaceful
 enforce-secure-profile=false
 network-compression-threshold=256
 sync-chunk-writes=false
+max-tick-time=-1
 `, port, rcon, s.RCONPassword, mgmtHost, mgmt, s.MgmtSecret, levelType, s.Seed, structures)
+	if s.Generator != "" { // a properties value: its colons escaped
+		props += "generator-settings=" + strings.ReplaceAll(s.Generator, ":", `\:`) + "\n"
+	}
 	if err := os.WriteFile(filepath.Join(s.WorkDir, "server.properties"), []byte(props), 0o644); err != nil {
 		return err
 	}
@@ -146,13 +157,17 @@ sync-chunk-writes=false
 	}
 	s.logFile = logFile
 
-	javaArgs := []string{"-Xms512M", "-Xmx1536M", "-jar", "", "--nogui"}
+	// the collector's log, with its pauses: a server that stops the world for seconds stops its ticks, and the bot
+	// that talks to it loses the same seconds (the file is in the work directory, seen from the host as gc.log)
+	gcLog := func(path string) string { return "-Xlog:gc*:file=" + path + ":time,uptime" }
+	javaArgs := []string{"-Xms512M", "-Xmx1536M", "", "-jar", "", "--nogui"}
 	if s.Runtime == "host" {
 		if err := checkHostJava(); err != nil {
 			return err
 		}
 		jar, _ := filepath.Abs(s.JarPath)
-		javaArgs[3] = jar
+		gc, _ := filepath.Abs(s.GCLogPath())
+		javaArgs[2], javaArgs[4] = gcLog(gc), jar
 		s.cmd = exec.Command("java", javaArgs...)
 		s.cmd.Dir = s.WorkDir
 	} else {
@@ -160,7 +175,7 @@ sync-chunk-writes=false
 		if err := linkOrCopy(s.JarPath, filepath.Join(s.WorkDir, "server.jar")); err != nil {
 			return err
 		}
-		javaArgs[3] = "/data/server.jar"
+		javaArgs[2], javaArgs[4] = gcLog("/data/gc.log"), "/data/server.jar"
 		s.container = fmt.Sprintf("mc26-%s-%d", strings.ReplaceAll(s.Version, ".", "-"), s.Port)
 		_ = exec.Command(s.Runtime, "rm", "-f", s.container).Run() // a leftover of an aborted run
 		work, _ := filepath.Abs(s.WorkDir)
