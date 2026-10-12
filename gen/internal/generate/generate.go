@@ -62,6 +62,7 @@ var Generators = []Generator{
 	{"blockbehaviour", genBlockBehaviour},
 	{"itemdefaults", genItemDefaults},
 	{"loot", genLoot},
+	{"tags", genTags},
 	{"componenthash", genComponentHash},
 	{"recipes", genRecipes},
 	{"rpc", genRPC},

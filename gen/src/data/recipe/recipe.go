@@ -16,6 +16,16 @@ type Recipe struct {
 	// empty cell), a shapeless recipe's items, a furnace's input. Each is the
 	// items that fit, a tag as "#minecraft:planks".
 	Ingredients [][]string
+	// Unlock are the items the player must hold before the server puts the
+	// recipe in its book, from the recipe's advancement: every group has to be
+	// met, one item of a group is enough (a tag as "#minecraft:oak_logs"; "@minecraft:enter_block" an event
+	// that unlocks it, not an item — a boat: entering water). The
+	// wooden pickaxe is unlocked by a stick, not by the planks it is made of.
+	// Nil: the recipe is unlocked at once (the crafting table's advancement
+	// has a tick criterion).
+	Unlock [][]string
+	// Cooking is a smelting, blasting, smoking or campfire recipe's time in ticks (the pack's cookingtime); 0 for the others.
+	Cooking int
 }
 
 // For returns the recipes that make item ("minecraft:stick").

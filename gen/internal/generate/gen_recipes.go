@@ -1,12 +1,16 @@
 // gen_recipes generates data/recipe/recipes_gen.go from the recipes of the
 // vanilla data pack (data/minecraft/recipe/*.json): crafting, smelting and
 // cutting recipes, their result and their ingredients (items or tags), which
-// data/recipe/recipe.go looks up.
+// data/recipe/recipe.go looks up — and, from the recipes' advancements
+// (data/minecraft/advancement/recipes/**.json), what unlocks each: the items a
+// player must hold (a stick for the wooden pickaxe, not the planks it is made
+// of) before the server puts the recipe in its book.
 package generate
 
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,6 +27,12 @@ func genRecipes(jsonDir, outRoot string) error {
 		name, kind, result string
 		count, w, h        int
 		ings               [][]string
+		unlock             [][]string
+		cooking            int // a cooking recipe's ticks
+	}
+	unlocks, err := recipeUnlocks(jsonDir)
+	if err != nil {
+		return fmt.Errorf("genRecipes: %w", err)
 	}
 	var out []rec
 	for _, e := range entries {
@@ -36,6 +46,7 @@ func genRecipes(jsonDir, outRoot string) error {
 			Ingredients []json.RawMessage          `json:"ingredients"`
 			Ingredient  json.RawMessage            `json:"ingredient"`
 			Result      json.RawMessage            `json:"result"`
+			CookingTime int                        `json:"cookingtime"`
 		}
 		if err := readJSON(filepath.Join(dir, e.Name()), &r); err != nil {
 			return fmt.Errorf("genRecipes: %w", err)
@@ -93,9 +104,15 @@ func genRecipes(jsonDir, outRoot string) error {
 				return fmt.Errorf("genRecipes: %s: %w", x.name, err)
 			}
 			x.ings = [][]string{ing}
+			// the cooking time of the pack: 200 ticks smelting, 100 blasting and smoking, 600 on a campfire when the file names none
+			x.cooking = r.CookingTime
+			if x.cooking == 0 {
+				x.cooking = map[string]int{"smelting": 200, "blasting": 100, "smoking": 100, "campfire_cooking": 600}[strings.TrimPrefix(r.Type, "minecraft:")]
+			}
 		default:
 			continue
 		}
+		x.unlock = unlocks[x.name]
 		out = append(out, x)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
@@ -122,7 +139,9 @@ func genRecipes(jsonDir, outRoot string) error {
 			}
 			sb.WriteString("}")
 		}
-		sb.WriteString("}},\n")
+		sb.WriteString("}, ")
+		writeStringLists(&sb, x.unlock)
+		fmt.Fprintf(&sb, ", %d},\n", x.cooking)
 		byResult[x.result] = append(byResult[x.result], i)
 	}
 	sb.WriteString("}\n\n// byResult indexes recipes by the item they make.\nvar byResult = map[string][]int{\n")
@@ -179,4 +198,104 @@ func ingredient(raw json.RawMessage) ([]string, error) {
 		return []string{o.Item}, nil
 	}
 	return nil, fmt.Errorf("ingredient %s", raw)
+}
+
+// writeStringLists writes a [][]string literal, nil when empty.
+func writeStringLists(sb *strings.Builder, ls [][]string) {
+	if len(ls) == 0 {
+		sb.WriteString("nil")
+		return
+	}
+	sb.WriteString("[][]string{")
+	for i, l := range ls {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("{")
+		for j, s := range l {
+			if j > 0 {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(sb, "%q", s)
+		}
+		sb.WriteString("}")
+	}
+	sb.WriteString("}")
+}
+
+// recipeUnlocks reads the recipes' advancements: for each recipe the server
+// gives, the groups of items it asks the player to hold (an inventory_changed
+// criterion) — every group has to be met, one item of a group is enough. A
+// recipe unlocked at once (a tick criterion) has no group.
+func recipeUnlocks(jsonDir string) (map[string][][]string, error) {
+	root := filepath.Join(jsonDir, "data", "minecraft", "advancement", "recipes")
+	out := map[string][][]string{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".json") {
+			return err
+		}
+		var adv struct {
+			Criteria map[string]struct {
+				Trigger    string `json:"trigger"`
+				Conditions struct {
+					Items []struct {
+						Items json.RawMessage `json:"items"`
+					} `json:"items"`
+				} `json:"conditions"`
+			} `json:"criteria"`
+			Requirements [][]string `json:"requirements"`
+			Rewards      struct {
+				Recipes []string `json:"recipes"`
+			} `json:"rewards"`
+		}
+		if err := readJSON(path, &adv); err != nil {
+			return err
+		}
+		if len(adv.Rewards.Recipes) == 0 {
+			return nil
+		}
+		var groups [][]string
+		for _, group := range adv.Requirements {
+			var items []string
+			met := false
+			for _, name := range group {
+				c, ok := adv.Criteria[name]
+				switch {
+				case !ok:
+					return fmt.Errorf("%s: requirement %q is no criterion", path, name)
+				case c.Trigger == "minecraft:recipe_unlocked":
+					continue // (the recipe given by the game: a command, a book)
+				case c.Trigger == "minecraft:tick":
+					items = nil
+					met = true // unlocked at once: nothing to hold
+				case c.Trigger == "minecraft:enter_block" || c.Trigger == "minecraft:impossible":
+					items = append(items, "@"+c.Trigger) // an event, not an item held (a boat: entering water)
+					continue
+				case c.Trigger != "minecraft:inventory_changed":
+					return fmt.Errorf("%s: criterion %q has the trigger %s, which the generator does not read", path, name, c.Trigger)
+				}
+				if met {
+					break
+				}
+				for _, it := range c.Conditions.Items {
+					ing, err := ingredient(it.Items)
+					if err != nil {
+						return fmt.Errorf("%s: %w", path, err)
+					}
+					items = append(items, ing...)
+				}
+			}
+			// a group met at once (a tick criterion) asks for nothing; the others are met
+			// by holding one of their items
+			if !met && len(items) > 0 {
+				sort.Strings(items)
+				groups = append(groups, items)
+			}
+		}
+		for _, r := range adv.Rewards.Recipes {
+			out[r] = groups
+		}
+		return nil
+	})
+	return out, err
 }
