@@ -38,8 +38,10 @@ import (
 // badlands, terracotta over the stone and few trees: the stone tools took
 // the day, the last log went to them, and the pickaxe wore out in the
 // night's stairs with no wood left — its botdayx run stood still till it
-// was called stalled)
-var botDaySeeds = []string{"26265", "8675309", "424242", "486922030", "413413217", "2666599"}
+// was called stalled. 960474411: a pillager outpost near the spawn — a
+// botdayx run was shot at by day from the structure, which a random world
+// cannot repeat)
+var botDaySeeds = []string{"26265", "8675309", "424242", "486922030", "413413217", "2666599", "960474411"}
 
 // botDayLength is how long a run lasts: a game day and its night (20
 // minutes), to the next morning.
