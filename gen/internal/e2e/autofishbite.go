@@ -45,11 +45,10 @@ func scenarioAutofishBite(o Options, bin string, srv *smoke.Server) error {
 	}
 	// far from the spawn the other scenarios use: the bot first, the land it stands on after
 	const far = 2000
-	if err := do(fmt.Sprintf("tp %s %d.5 100 %d.5 0 0", name, far, far)); err != nil {
-		return err
-	}
-	// the chunks round the pond are loaded (forceload: generated and kept), and the player has landed on them: a fill
-	// in a chunk not loaded is refused ("That position is not loaded"), and a player cannot fall through one
+	// the chunks round the pond are loaded (forceload: generated and kept) before anything is built in them: a fill in
+	// a chunk not loaded is refused ("That position is not loaded"). The bot is not needed there to load them: the
+	// example is a bare client that sends no movement, so the server never lets it fall (it hangs where it was put,
+	// OnGround 0b for good): it is put on the ground by the surface, not waited for.
 	if err := do(fmt.Sprintf("forceload add %d %d %d %d", far-16, far-16, far+16, far+32)); err != nil {
 		return err
 	}
@@ -59,25 +58,15 @@ func scenarioAutofishBite(o Options, bin string, srv *smoke.Server) error {
 			return fmt.Errorf("the pond's chunks: %w", err)
 		}
 	}
-	if err := pollRcon(rcon.command, 90*time.Second, "data get entity "+name+" OnGround", "1b"); err != nil {
-		return fmt.Errorf("the bot did not land: %w", err)
-	}
-	ans, err := rcon.command("data get entity " + name + " Pos")
-	if err != nil {
-		return err
-	}
-	m := posRe.FindStringSubmatch(ans)
-	if m == nil {
-		return fmt.Errorf("Pos answered %q", ans)
-	}
-	x, y, z := int(atof(m[1])), int(atof(m[2])), int(atof(m[3]))
-	// a pond ahead (south: the bot faces yaw 0), nine wide and fourteen long from three blocks away, two deep,
-	// its surface the ground's: a cast at the level lands in it
+	// a pond ahead (south: the bot faces yaw 0), nine wide and fourteen long from three blocks away, two deep, its
+	// surface the ground's: a cast at the level lands in it. Every command is relative to the surface over the spot
+	// (the first air above the highest block), so no height of the world is assumed.
+	at := fmt.Sprintf("execute positioned %d 0 %d positioned over motion_blocking_no_leaves run ", far, far)
 	for _, c := range []string{
-		fmt.Sprintf("fill %d %d %d %d %d %d minecraft:stone", x-5, y-4, z+2, x+5, y-1, z+17),
-		fmt.Sprintf("fill %d %d %d %d %d %d minecraft:water", x-4, y-3, z+3, x+4, y-1, z+16),
-		fmt.Sprintf("fill %d %d %d %d %d %d minecraft:air", x-5, y, z+2, x+5, y+3, z+17),
-		fmt.Sprintf("tp %s %d.5 %d %d.5 0 0", name, x, y, z),
+		at + "fill ~-5 ~-4 ~2 ~5 ~-1 ~17 minecraft:stone",
+		at + "fill ~-4 ~-3 ~3 ~4 ~-1 ~16 minecraft:water",
+		at + "fill ~-5 ~ ~2 ~5 ~3 ~17 minecraft:air",
+		at + fmt.Sprintf("tp %s ~0.5 ~ ~0.5 0 0", name), // on the ground by the pond, facing south
 		"time set 1000",
 		"weather clear",
 	} {
@@ -89,7 +78,7 @@ func scenarioAutofishBite(o Options, bin string, srv *smoke.Server) error {
 	if err := do(rod); err != nil {
 		return fmt.Errorf("a Lure III rod: %w", err)
 	}
-	o.Log("autofishbite: %s at %d %d %d facing a pond, a Lure III rod given; waiting for the example to cast (its watchdog, 45 s) and reel", name, x, y, z)
+	o.Log("autofishbite: %s on the ground at %d %d facing a pond, a Lure III rod given; waiting for the example to cast (its watchdog, 45 s) and reel", name, far, far)
 	if err := waitFor(out, 4*time.Minute, "gra~"); err != nil {
 		return fmt.Errorf("the example never reeled on a bite: %v\n%s", err, tail(out.String(), 20))
 	}
