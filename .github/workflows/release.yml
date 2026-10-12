@@ -2,9 +2,10 @@
 # tag v0.<YYN>.<n>), build go-mc26 from it (branch mc-<version>, tag
 # v0.<YYN>.<patch>), smoke-test the build, push. Tags are created only here.
 #
-# Needs three secrets, each the private half of a write deploy key on one target
+# Needs four secrets, each the private half of a write deploy key on one target
 # repository: MC26_DATA_DEPLOY_KEY (mj41/mc26-data), MC26_DATA_PRE_DEPLOY_KEY
-# (mj41/mc26-data-pre) and GO_MC26_DEPLOY_KEY (mj41/go-mc26).
+# (mj41/mc26-data-pre), GO_MC26_DEPLOY_KEY (mj41/go-mc26) and GO_MC26_LANG_DEPLOY_KEY
+# (mj41/go-mc26-lang: the languages' modules, tags and files, pushed before go-mc26).
 name: release
 on:
   workflow_dispatch:
@@ -35,27 +36,38 @@ jobs:
         run: |
           mkdir -p -m 700 ~/.ssh
           echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > ~/.ssh/known_hosts
-          clone() {
+          clone() { # name, key, depth ("" for the whole history)
             key=~/.ssh/deploy-$1
             printf '%s\n' "$2" > "$key" && chmod 600 "$key"
             ssh="ssh -i $key -o IdentitiesOnly=yes"
-            GIT_SSH_COMMAND="$ssh" git clone --depth 50 --no-single-branch "git@github.com:mj41/$1.git" "temp/repos/$1"
+            GIT_SSH_COMMAND="$ssh" git clone ${3:+--depth "$3"} --no-single-branch "git@github.com:mj41/$1.git" "temp/repos/$1"
             git -C "temp/repos/$1" config core.sshCommand "$ssh"
           }
-          clone mc26-data "$MC26_DATA_DEPLOY_KEY"
-          clone mc26-data-pre "$MC26_DATA_PRE_DEPLOY_KEY"
-          clone go-mc26 "$GO_MC26_DEPLOY_KEY"
+          clone mc26-data "$MC26_DATA_DEPLOY_KEY" 50
+          clone mc26-data-pre "$MC26_DATA_PRE_DEPLOY_KEY" 50
+          clone go-mc26 "$GO_MC26_DEPLOY_KEY" 50
+          # go-mc26-lang whole: the release finds a language's last tag and adds to its blobs there (16 MB). Without
+          # its key a dry run reads it anonymously (the repository is public); a release that pushes stops here.
+          if [ -n "$GO_MC26_LANG_DEPLOY_KEY" ]; then
+            clone go-mc26-lang "$GO_MC26_LANG_DEPLOY_KEY" ""
+          elif [ "${{ inputs.push }}" = true ]; then
+            echo "::error::GO_MC26_LANG_DEPLOY_KEY is not set: a release that pushes cannot publish go-mc26-lang"
+            exit 1
+          else
+            git clone --no-single-branch https://github.com/mj41/go-mc26-lang.git temp/repos/go-mc26-lang
+          fi
           git config --global user.name "mc26 release"
           git config --global user.email "mc26-release@users.noreply.github.com"
         env:
           MC26_DATA_DEPLOY_KEY: ${{ secrets.MC26_DATA_DEPLOY_KEY }}
           MC26_DATA_PRE_DEPLOY_KEY: ${{ secrets.MC26_DATA_PRE_DEPLOY_KEY }}
           GO_MC26_DEPLOY_KEY: ${{ secrets.GO_MC26_DEPLOY_KEY }}
+          GO_MC26_LANG_DEPLOY_KEY: ${{ secrets.GO_MC26_LANG_DEPLOY_KEY }}
       - name: release
         run: |
           go run ./gen/cmd/mc26 release --version "${{ inputs.version }}" --e2e --kit-src temp/kit-src \
             --data-repo temp/repos/mc26-data --data-pre-repo temp/repos/mc26-data-pre \
-            --lib-repo temp/repos/go-mc26 ${{ inputs.push && '--push' || '' }}
+            --lib-repo temp/repos/go-mc26 --lang-repo temp/repos/go-mc26-lang ${{ inputs.push && '--push' || '' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

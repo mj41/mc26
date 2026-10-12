@@ -130,3 +130,53 @@ func TestMissing(t *testing.T) {
 		t.Fatalf("a host answering 503: missing %v and no error", got)
 	}
 }
+
+// A release in a fresh clone (CI has no other kind) adds to the origin's blobs and mc-<version>: they are the
+// clone's origin/ branches, no local ones, and taking them for absent made a new orphan blobs the origin could not take.
+func TestReleaseInAFreshClone(t *testing.T) {
+	data := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(data, "lang"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeLangs(t, data, map[string]string{"en_us": `{"a":"A"}`, "cs_cz": `{"a":"Á"}`})
+	origin := t.TempDir()
+	git(t, origin, "init", "-q", "-b", "main")
+	git(t, origin, "config", "user.name", "test")
+	git(t, origin, "config", "user.email", "test@example.invalid")
+	if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, origin, "add", "-A")
+	git(t, origin, "commit", "-q", "-m", "init")
+	git(t, origin, "config", "receive.denyCurrentBranch", "ignore")
+
+	o := Options{DataDir: data, Version: "26.3", TagBase: "v0.263.", OutDir: filepath.Join(t.TempDir(), "out"), Generator: "test"}
+	run := func(clone string) {
+		t.Helper()
+		files, err := Write(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Release(o, clone, files); err != nil {
+			t.Fatal(err)
+		}
+		git(t, clone, "push", "-q", "origin", "refs/heads/blobs:refs/heads/blobs", "refs/heads/mc-26.3:refs/heads/mc-26.3")
+	}
+	clone := func() string {
+		dir := filepath.Join(t.TempDir(), "clone")
+		if out, err := exec.Command("git", "clone", "-q", "--no-single-branch", origin, dir).CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		git(t, dir, "config", "user.name", "test")
+		git(t, dir, "config", "user.email", "test@example.invalid")
+		return dir
+	}
+	run(clone())
+	first := git(t, origin, "rev-parse", "blobs")
+	// the next release, from a fresh clone, with one more language file: pushable, on top of the first
+	writeLangs(t, data, map[string]string{"de_de": `{"a":"Ä"}`})
+	run(clone())
+	if got := git(t, origin, "rev-list", "--count", first+"..blobs"); got != "1" {
+		t.Errorf("blobs after the second release is %s commits past the first, want 1", got)
+	}
+}

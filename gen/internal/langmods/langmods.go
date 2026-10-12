@@ -162,7 +162,7 @@ func Release(o Options, repo string, files map[string][]byte) ([]string, error) 
 	defer gitx.Run(repo, "checkout", "-q", start)
 
 	// the files by checksum
-	if !gitx.BranchExists(repo, "blobs") {
+	if !branchKnown(repo, "blobs") {
 		if _, err := gitx.Run(repo, "checkout", "-q", "--orphan", "blobs"); err != nil {
 			return nil, err
 		}
@@ -242,6 +242,16 @@ func lastTag(tags []string) string {
 		}
 	}
 	return best
+}
+
+// branchKnown reports whether the branch is in the checkout, as a local branch or as origin's (a fresh clone has
+// only the latter: taking it for absent made a new orphan blobs that the origin's could not take).
+func branchKnown(repo, name string) bool {
+	if gitx.BranchExists(repo, name) {
+		return true
+	}
+	_, err := gitx.Run(repo, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+name)
+	return err == nil
 }
 
 func clearTree(dir string) error {

@@ -941,6 +941,7 @@ func containerRuntime(r string) string { return r }
 // releaseOpts are release's flags; update fills them in too.
 type releaseOpts struct {
 	version, dataRepo, dataPreRepo, libRepo, runtime, langBase string
+	langRepo, langOut                                          string // a checkout of go-mc26-lang the release publishes (release_lang.go); langOut: where its modules are written
 	skipExtract, noSmoke, dataOnly, e2e, push                  bool
 }
 
@@ -963,6 +964,7 @@ func cmdRelease(args []string) error {
 	fs.BoolVar(&o.dataOnly, "data-only", false, "stop after the data commit and tag (a pre-release whose library needs work)")
 	fs.BoolVar(&o.e2e, "e2e", false, "also run the example bots against a vanilla server before committing the library")
 	fs.BoolVar(&o.push, "push", false, "push the branches and tags to origin")
+	fs.StringVar(&o.langRepo, "lang-repo", "", "a clean checkout of go-mc26-lang (with its branches and tags) to publish the languages in: the release makes the modules there, and with --push pushes them before go-mc26; without it the languages must be published already")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -1029,7 +1031,15 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	if *push && !*dataOnly {
+	var lang *langPlan
+	switch {
+	case o.langRepo != "" && !*dataOnly:
+		// the languages made into go-mc26-lang's modules here (a dry run does it too), pushed before go-mc26
+		if lang, err = prepareLang(o, dataDir); err != nil {
+			return "", "", err
+		}
+	case *push && !*dataOnly:
+		// or published beforehand, by hand
 		if err := langPublished(o.langBase, *version, dataDir); err != nil {
 			return "", "", err
 		}
@@ -1084,6 +1094,16 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 
 	// 3. push
 	if *push {
+		if lang != nil {
+			// before go-mc26: its manifest names these files, and langget and the modules fetch them
+			if err := lang.push(); err != nil {
+				return "", "", err
+			}
+			if err := awaitLang(o.langBase, lang.files, 5*time.Minute, 10*time.Second); err != nil {
+				return "", "", err
+			}
+			logf("release %s: go-mc26-lang serves all %d languages", *version, len(lang.files)-1)
+		}
 		if err := gitx.Push(repo, "main", branch, dataTag); err != nil {
 			return "", "", err
 		}
@@ -1093,6 +1113,9 @@ func runRelease(o releaseOpts) (dataTag, libTag string, err error) {
 		logf("pushed %s %s %s and go-mc26 %s %s", dataName, branch, dataTag, branch, libTag)
 	} else {
 		logf("release %s: %s %s / go-mc26 %s committed locally (not pushed)", *version, dataName, dataTag, libTag)
+		if lang != nil {
+			logf("release %s: dry run: a push would send go-mc26-lang's blobs, mc-%s and %d tags (%s) first", *version, *version, len(lang.refs)-2, strings.Join(lang.refs[min(2, len(lang.refs)):], " "))
+		}
 	}
 	return dataTag, libTag, nil
 }

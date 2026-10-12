@@ -70,9 +70,10 @@ build's renders (`chat/testdata/en_us_<version>.tsv.gz`).
 
 `mc26 build` writes en_us and the manifest into the library. `mc26 lang --version V` writes the other
 languages as modules into `temp/lang/V`; with `--repo ../go-mc26-lang` it commits them there (the branch
-`mc-V`, the new files on `blobs`) and tags each language whose file changed. Nothing is pushed: pushing the
-branch, `blobs` and the tags is a step of its own, and must come before a go-mc26 release whose manifest
-names those files, so that langget and the modules can find them.
+`mc-V`, the new files on `blobs`) and tags each language whose file changed. Nothing is pushed. A release
+does all of this itself with `--lang-repo` (docs/release.md, "go-mc26-lang"), including the push, which
+comes before go-mc26's: the manifest names those files, and langget and the modules must be able to find
+them. Without `--lang-repo` the push is a step of its own, made by hand before the release.
 
 Mojang changes a version's translations without a new version (2026-10-06 it refreshed 26.1, 26.2 and 26.3
 alike; the three share every translation but English), and `mc26 release` extracts afresh. So the modules
