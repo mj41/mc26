@@ -8,6 +8,7 @@
 | [new-version.md](new-version.md) | what to do when Mojang ships a new Minecraft version |
 | [testing.md](testing.md) | unit tests, the smoke test, the end-to-end scenarios, the cross-language check, and how to add one |
 | [release.md](release.md) | branches, tags, the release workflow and its secret |
+| [languages.md](languages.md) | English built in, the other languages registered: go-mc26-lang's modules, langget, the manifest, and how they are released |
 | [minecraft-data.md](minecraft-data.md) | the one hand-written description of the protocol this one is compared with, what the comparison found, and why the names differ |
 | [../gen/README.md](../gen/README.md) | the `gen/` tree: commands, generators, packet structs, overlays |
 | [../data-gen/README.md](../data-gen/README.md) | the Java extractors and what each writes |

@@ -60,7 +60,7 @@ assembled with), starts a server as above, and runs:
 | `twobots` | DazeOne and DazeTwo: each hears the other's chat (typed on the bots' consoles); DazeOne is made an operator, teleports itself to DazeTwo (checked with `data get entity DazeOne Pos`) and gives DazeTwo a diamond that DazeTwo's inventory events show |
 | `minimal` | logs in |
 | `autofish` | logs in, reaches game start |
-| `pressureTest` | three bots log in and reach game start |
+| `pressure` | three bots log in and reach game start |
 | `survival` | after the flat server, a second one of ordinary terrain (level type normal, seed 26265 or `MC26_SEED`, made by 26.1 for every version — below); the robot, `Settler`, is put in the nearest forest (`locate biome`, `spreadplayers`) with nothing, at noon with the clock stopped (`gamerule advance_time false`); its view of a cube of the terrain around it is judged block by block (`execute if block`: big palettes, many states), then `get wooden_pickaxe` (recipes not yet in the book: the ingredients first, from the game's recipes), `get cobblestone 25`, `get torch 4` (coal ore if some is in sight, else charcoal from a furnace it builds), `get stick 8` and `get oak_log 16`, then `shelter` — a room three by three and two high dug into a hill (a hut built round it on open ground): the server checks it closed on every side (walls, the way in, floor and roof, nothing a monster passes), furnished along its right wall going in (crafting table, chest, furnace) and lit (block light at least 8, an inline `location_check` predicate); `get stone_pickaxe 3` at its table; then normal difficulty and the night (`time set 13000`) and `descend 16`, a staircase down from the shelter lit as it goes — the server must have the robot no higher than y 16, alive, and the server log must hold no complaint |
 | `days` | only when named (`--only days`), about an hour: on its own ordinary-terrain server, the game's clock running from the first morning at normal difficulty, the robot `Settler` lives two days and nights as the kit's `examples/robot/SCENARIO.md` describes — a shelter dug into a hill, stairs and mines by night, a field by day, an iron pickaxe and diamonds on the second night; the server must show the iron pickaxe and a diamond, the robot must not die, and the server log must hold no complaint about it |
 | `week` | only when named (`--only week`), about two and a half hours: `days` and then the days after, as the kit's `SCENARIO.md` "Day 3 and on" says — each day up the stairs, the field harvested, sown and baked into bread, wood till dusk; each night down and mines — for `MC26_DAYS` days (7); the robot must not die |
@@ -86,13 +86,51 @@ go-mc26-robotview draws.
 That file is a link into the run's own directory: every robot run is kept in a directory of
 its own — in the mc26-runs repository beside this checkout when there is one (`MC26_RUNS`
 names another place; without either, `temp/e2e/runs/`), each run committed to it with its
-result — `<date>_<version>_<scenario>_<robot>/` — `events.jsonl`, `robot.log` and
+result — `<date>_<version>_<scenario>_<robot>/` — `events.jsonl`, `robot.log`, `harness.log` and
 `meta.json` (when it started and ended, the version, the scenario, the world's generator and
 seed, the mc26 and kit commits and whether their trees had changes). `robotview -replay
 <run>/events.jsonl -speed 20` plays a run again, faster than it ran — runs side by side, a
 night's mining in minutes. `MC26_SEED=<seed>` plays the ordinary-terrain scenarios on another
 world, or on a kept run's again: the same seed is the same world and the robot chooses the
 same on it; the mobs, the server's other chances and the timing are not the same.
+
+Fitness: a run that goes on but gets nowhere fails too. Each morning the `days` and `week`
+scenarios check the robot's advancements (the server keeps them: a death or a relog loses none)
+against the milestones due by then — a stone pickaxe after the first night, iron smelted, a field
+sown, an iron pickaxe, diamonds by the end of the week — and log the scorecard (`fitness,
+morning N: …`); one due and not done ends the run. The milestones are per seed
+(`gen/internal/e2e/fitness.go`: the scenarios' seed measured, a looser table for any other);
+`MC26_FITNESS=off` logs the scorecard and goes on.
+
+`livedays` and `liveweek` (or `MC26_LIVE=1` for `days` and `week`) start the robot with `-days`:
+it lives by itself, its day loop putting the day's and the night's work in its own queue, and
+the harness gives no order. It only judges what the server sees: the fitness each morning, by the
+robot's day count, the deaths, standing still for three minutes, and at the end an iron pickaxe and
+no complaint from the server. It also skips the nights the robot waits out ("waiting for the
+morning"), and starts a robot that ended itself to relog again from its memory.
+
+A botday run's milestones (a crafting table, stone, the stone pickaxe, iron smelted…) each have a time since the
+harness's start. It comes from the bot's own `advancement` event in the run's `events.jsonl` (its timestamp, to the
+millisecond: a table made at 22.5 s reads 22.5 s), and for a bot that announces none from the server's answer
+(`execute if entity @a[advancements=…]`) asked every second, so it is late by under a second. Before, the harness's
+10-second poll gave every milestone: up to ten seconds late, and a bench run's times could not be compared with the
+simulator's. The first sight of a milestone stays (a poll never moves an event's time). The run's `meta.json` keeps
+them as `milestones` (seconds) and `milestonesMs`.
+
+A downstream bot — a program built in the kit's workspace that botday, botflat and their kin run — agrees with the
+harness on this, and nothing else of its name or its output:
+
+| what | how the harness knows |
+|---|---|
+| its package | `MC26_BOT`, relative to the kit's directory (default `./bot/cmd/bot`) |
+| its own log lines | begin with `MC26_BOT_PREFIX` (default `bot: `), after any timestamp: the harness reads the lines that carry it (`task: …`, `do <skill>: done in …`, `<step>: done`, `job: …`, `status at …`) and no other of its output |
+| its command line | `-address`, `-name`, `-events` (the run's events file), `-debug`, `-explore-rings`, `-wait-at`, `-do <skill>` |
+| having joined | a line holding `loaded` |
+| a wait it announces | a `health` event `{"what":"waiting for dawn","detail":…}` in its events (the harness takes it only after checking night, shelter and the inventory over RCON) |
+| a milestone it earns | an `advancement` event (its timestamp is the milestone's time); without it the server is asked every second |
+
+A bot that joins and prints no line with the prefix is told at once ("the bot printed N lines and none holds …: set
+`MC26_BOT_PREFIX`"), not after a stage's limit.
 
 One world for every version: the same seed makes slightly different land in each Minecraft
 version, so the ordinary-terrain scenarios play a world the oldest version the library speaks
@@ -142,13 +180,15 @@ events in them are (the kit's `examples/robot/EVENTS.md`). A run's directory is 
 |---|---|
 | `events.jsonl` | the robot's events, the format of `EVENTS.md` |
 | `robot.log` | the robot's output, written when it stops |
+| `harness.log` | the harness's own lines from the run's start to its verdict (the start, the scenario's steps, the failures, the verdict), each with its time; written when the robot stops and again at the verdict. Scenarios running at once (the probe's bricks) share the lines of their time. Evidence for a pause (the server and the bot losing seconds together): a line for each "Can't keep up!", for each collector pause of a second or more, and, every 10 s, one when the pod's cgroup pressure (`/sys/fs/cgroup/{cpu,memory,io}.pressure`, avg10) is over 10% in any "some" or "full"; at the end a summary of each (the counts and longest pauses, the highest pressure) and the job's cgroup memory (`memory.peak`, `memory.current`, `memory.max`, `anon` and `file` of `memory.stat`; "not told" without the files) |
+| `server.log`, `gc.log` | the server's own console log (its "Can't keep up!" lines) and the JVM's collector log (`-Xlog:gc*`, every pause with its time), what they got while the run lived. Not shipped by a bench's store (it takes only the first four files): the same facts are in `harness.log` |
 | `meta.json` | what ran, below; written at the start and again with `ended` when it stops |
 
 `meta.json`: `started`, `ended` (RFC 3339; no `ended` while it runs or after a crash),
 `version` (the game's), `scenario`, `robot` (its name), `server` (address), `levelType` and
 `seed` (empty for the flat world), `mc26` and `kit` (`commit`, `subject`, `dirty`: whether the
 tree had changes not committed), `host`, `bench` (`MC26_BENCH`: the cluster test bench it ran
-on, absent on a workstation), `delivery` (`MC26_DELIVERY_FILE`: the JSON object a bench's
+on, absent on a workstation), `benchVersion` (`MC26_BENCH_VERSION`: the bench code's version, a tag such as `v0.5.23`, a revision with `-dirty` or `unknown`; absent on a workstation), `delivery` (`MC26_DELIVERY_FILE`: the JSON object a bench's
 supervisor wrote for the robot's code — commit, signer, who, when — as it stood when the run
 started), `resumes` (the held run this one goes on from). Fields may be added; none is renamed
 or removed without saying so here. `result` (`ok` or `fail`) and `error` are added when the
@@ -252,7 +292,7 @@ request. `release` runs the smoke test before it commits the library, and the e2
 ## Memory
 
 Everything the harness starts is bounded (`gen/internal/limits`): a go build, vet or test
-compiles four packages at a time (`GOFLAGS=-p=4` — a translation table is a large compile), a
+compiles four packages at a time (`GOFLAGS=-p=4`), a
 server's container has 2.5 GB and its JVM 1.5 GB of heap, the extraction container 6 GB and
 every JVM in it 4 GB. Run the versions one after the other, not side by side, which is what
 `verify` does: one full pass (build, smoke, cross-check, e2e) holds one server and one compile
@@ -270,8 +310,10 @@ then `mc26 e2e --version 26.3 --only robot` runs the scenario you are working on
 
 `gen/internal/e2e/e2e.go`: write a `func scenarioX(o Options, bin string, srv *smoke.Server)
 error` — `bin` holds one binary per example, `srv` gives the address and the RCON address — and
-add it to the `scenarios` list in `Run` (or to `after`, the ones run once the flat world's
-server has stopped; `long` runs one only when named). Start bots with `startDaze` (console on
+add it to the `scenarios` list in `scenarioTable` (`gen/internal/e2e/scenarios.go`; or to `after`, the ones run once the
+flat world's server has stopped; `long` runs one only when named), with a one-line `what` and a name of lower-case
+letters and digits (at most 32, starting with a letter: `mc26 e2e --list` prints every scenario as a JSON object a line
+— name, what, long — with no server, no build and no version, and a test holds the names to that). Start bots with `startDaze` (console on
 stdin, output in a `syncBuffer`) or `runFor` (run until every expected line appeared); drive
 the server with `dialRCON`. Keep every wait bounded; report the tail of the bot's output on
 failure.

@@ -22,8 +22,8 @@ that version's data comes out; every Minecraft version is a branch, every build 
    `data-gen/java`, which read the unobfuscated jar with reflection and `java.lang.classfile` and
    write the wire schemas of packets and data components. `_meta.json` records the jar's checksum
    and the extractor commit. Nothing in the output is code.
-2. **Build** (`mc26 build`). The hand-written packages of `gen/src` are copied, the twelve
-   generators write the generated packages next to them, templates render the README and the CI
+2. **Build** (`mc26 build`). The hand-written packages of `gen/src` are copied, the 24
+   generators (`Generators` in `gen/internal/generate`) write the generated packages next to them, templates render the README and the CI
    workflow, `go mod tidy`, `gofmt`, `go build`, `go vet` and `go test` run inside the result.
    The result is a complete module; it is never edited by hand. Then the kit (a checkout of
    `go-mc26-kit` next to this repository, `--kit-src` to point elsewhere: the bot, the server
@@ -47,7 +47,7 @@ The same command runs on a laptop and in GitHub Actions; the workflows are thin 
 | `mc26-data` | JSON of every Minecraft release | `main` = README; `mc-<version>`; `v0.<YYN>.<n>` (`n` counts re-extractions) |
 | `mc26-data-pre` | the same for snapshots and pre-releases | `mc-26.3-pre-2`; `v0.263.0-pre2.<n>` |
 | `go-mc26` | the generated library, module `github.com/mj41/go-mc26` | `main` = README; `mc-<version>`; `v0.<YYN>.<patch>` |
-| `go-mc26-kit` | the bot, the server framework, the account flows and the examples, module `github.com/mj41/go-mc26-kit`; hand-written source with its own history, which mc26 tests against but does not own | one branch, `main`; tags of its own (`v0.1.<n>`), not Minecraft versions; its `go.mod` requires the oldest supported library tag and its workflow builds it against every supported one |
+| `go-mc26-kit` | the bot, the server framework, the account flows and the examples, module `github.com/mj41/go-mc26-kit`; hand-written source with its own history, which mc26 tests against but does not own | one branch, `main`; tags of its own (`v0.<n>.<m>`), not Minecraft versions; its `go.mod` requires the oldest supported library tag and its workflow builds it against every supported one |
 
 Minecraft version ids are `YY.N` from 26.1 on; there is no 26.0 (the manifest goes from
 1.21.11 to the 26.1 snapshots). `YYN` in a tag is the version without the dot (26.2 →
@@ -58,7 +58,7 @@ newest versions receive fixes; older branches are frozen with their tags.
 
 ## Why one repository for the extractors, the generators and the sources
 
-Java extractors, Go generators, the library sources and the kit sources are one repository,
+Java extractors, Go generators and the library sources are one repository,
 not an umbrella of submodules or a Java repository and a Go repository. For one or two
 maintainers a cross-language change is one commit, and the tested set *is* the commit. The
 umbrella shape (a repository of submodule pins with the pipeline and release in one job) earns
@@ -115,8 +115,9 @@ after a version bump the compiler reports every packet field that came or went.
 
 `gen/src` is written for the newest version. When a later version changes a packet an older
 version's library needs differently, the older version keeps its own copy of the affected file
-under `gen/src/_versions/<version>/`, applied on top at build time. No version needs one at
-present; a file in `_versions` should be the exception, and if a difference is data-shaped,
+under `gen/src/_versions/<version>/`, applied on top at build time. One file has one at
+present, for 26.1 and 26.2: `level/savepalette.go`, since from 26.3 a saved block state without
+properties is its id alone; a file in `_versions` should be the exception, and if a difference is data-shaped,
 generate it instead.
 
 The kit has no overlays at all: one source builds against every supported library version.

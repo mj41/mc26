@@ -2,14 +2,24 @@
 
 The Go side of the repository (module `github.com/mj41/mc26`, rooted one level up, so every
 command runs as `go run ./gen/cmd/<name>` from the repository root). Its only inputs are a data
-directory (an extraction or an `mc26-data` checkout) and the sources in `src/`; it never needs
-Java itself.
+directory and the sources in `src/`; it never needs Java itself. The data directory is an
+extraction made by a compatible mc26 commit: an `mc26-data` branch works only when it was
+extracted by one (the data-pack generators need `data/`, `block_behaviour.json` and
+`component_hashes.json`, which mc26-data's `mc-26.3` of 2026-10-03 does not have).
 
 ```
 gen/
-├── cmd/mc26/            extract · build · smoke · crosscheck · e2e · verify · update · pipeline · release · report · commit · latest · tag · import-src
+├── cmd/mc26/            the chain's commands (`go run ./gen/cmd/mc26 help` lists them): extract, build, kit, smoke, e2e, crosscheck, fixtures, pipeline, verify, update, release, …
 ├── cmd/packetdiff/      wire-layout diff of two versions (packet_schema.json + packets.json)
 ├── cmd/nbtdiff/         what the registry elements and shared NBT types gained, lost or changed between two versions (nbt_schema.json)
+├── cmd/schemacov/       how much of packet_schema.json is fully typed
+├── cmd/prims/           whether every primitive a version's schema uses has a definition
+├── cmd/protodefdiff/    the extracted packet schema against minecraft-data's (docs/minecraft-data.md)
+├── cmd/mcmeta/          a version's changes previewed from misode/mcmeta, without Java
+├── cmd/source/          classes of a Minecraft jar decompiled into readable Java under temp/source/
+├── cmd/javap/           a class of a cached server jar disassembled
+├── cmd/runstats/        what a robot run's events are made of
+├── crosslang/           the reader that has only the JSON (its own module), for crosscheck and the save check
 ├── cmd/protodefdiff/    our packet schema against another description of the same version (docs/minecraft-data.md)
 ├── cmd/mcmeta/          registry preview and check against misode/mcmeta, no Java needed
 ├── cmd/schemacov/       how much of packet_schema.json is fully typed, and why the rest is not
@@ -24,15 +34,15 @@ gen/
 ├── internal/gitx/       branch, replace tree, commit, tag, push
 ├── internal/importsrc/  one-time import of the library sources from a go-mc tree
 ├── internal/paths/      <root>/temp layout (data/<version>, cache, lib/<version>, kit/<version>, smoke/<version>)
-├── hand-crafted/        prims.json (which jar members the primitives stand for) and nodes.json (the node kinds, the frame), see hand-crafted/hand-crafted.md)
-├── templates/           version.go, packetid.go, README.md, ci.yml, the data and index READMEs, … (text/template)
-├── src/_versions/<v>/   files an older version needs different from src/ (same relative paths), applied by build; none at present
+├── hand-crafted/        prims.json (which jar members the primitives stand for) and nodes.json (the node kinds, the frame); see hand-crafted/hand-crafted.md
+├── templates/           version.go, packetid.go, README.md, lib-ci.yml, the data and index READMEs, … (text/template)
+├── src/_versions/<v>/   files an older version needs different from src/ (same relative paths), applied by build; 26.1 and 26.2 have one (level/savepalette.go)
 └── src/                 the hand-written library packages; module github.com/mj41/go-mc26, no generated files
 ```
 
 `src/` is written for the newest Minecraft version. When a packet gained a field in a later
 version, the older version's copy of the file that uses it lives under `src/_versions/<version>/`
-(26.1: `server/login.go` without the session id). Check the packet with `schemacov -show
+(26.1 and 26.2: `level/savepalette.go`, from before a saved block state without properties became its id alone). Check the packet with `schemacov -show
 <flow/name> <version>` before writing an overlay: a struct literal that omits a field still
 compiles, so the compiler only reports fields that are *read*. Keeping the generated packet
 itself as the state (`basic.Player.Login`, `Player.Spawn`, the screen's `types.ItemStack` slots)
@@ -40,7 +50,8 @@ rather than copying its fields avoids most overlays.
 
 ## Generators
 
-`build` runs them in this order into the library tree:
+`build` runs them into the library tree in the order of `Generators`
+(`internal/generate/generate.go`); by what they make:
 
 | generator | input | output |
 |---|---|---|
@@ -48,16 +59,19 @@ rather than copying its fields avoids most overlays.
 | packetid | `packets.json` | `data/packetid/packetid.go` — ids per state and flow, `String()` |
 | soundid | `registries.json` | `data/soundid/soundid.go` |
 | recipes | `data/minecraft/recipe/*.json` (the data packs) | `data/recipe/recipes_gen.go` — every crafting, smelting and cutting recipe: result, count, grid, ingredients (items or tags); `data/recipe/recipe.go`: `For`, `All` — what a player can make before the server has put it in the recipe book |
-| loot | `data/minecraft/loot_table/blocks/*.json` (the data packs) | `data/loot/blocks_gen.go` — every block's possible drops and what each needs (nothing, silk touch, shears, chance); `data/loot/loot.go`: `BlockDrops`, `DroppedBy` |
-| item | `items.json` + `registries.json` | `data/item/item.go`; `data/item/defaults_gen.go`, every item's default components in their network encoding, decoded by `data/item/defaults.go` with the item-stack patch decoder (`DefaultComponents`, `DefaultComponent[*component.Tool]`) |
+| loot | `data/minecraft/loot_table/blocks/*.json`, `loot_table/entities/**.json` and the tables they name, `data/minecraft/predicate/**` (the data packs) | `data/loot/blocks_gen.go` — every block's possible drops and what each needs (nothing, silk touch, shears, chance); `data/loot/loot.go`: `BlockDrops`, `DroppedBy`; `data/loot/tables.json` — the tables whole, played by `data/loot/eval.go`: `Drops` (a block broken, with the tool and a chance), `EntityDrops` (a mob killed: by whom, with what, how it was) |
+| tags | `data/minecraft/tags/block/**.json`, `tags/item/**.json`, `tags/entity_type/**.json`, `tags/enchantment/**.json` (the data packs) | `data/tags/tags_gen.go` — every block, item, entity type and enchantment tag resolved to the names it holds, tags inside tags followed; `data/tags/tags.go`: `Block`, `Item`, `BlockHas`, `ItemHas`, `EntityTypeHas`, `EnchantmentHas` — what a tool mines, what a block needs, what a recipe takes, what a loot table asks of a killer |
+| item, itemdefaults | `items.json` + `registries.json` | `data/item/item.go`; `data/item/defaults_gen.go`, every item's default components in their network encoding, decoded by `data/item/defaults.go` with the item-stack patch decoder (`DefaultComponents`, `DefaultComponent[*component.Tool]`) |
 | blocks | `blocks.json` + `block_properties.json` | `level/block/blocks.go`, `block_states.nbt`, `properties_enum.go` |
 | entity | `entities.json` | `data/entity/entity.go` |
 | componenthash | `component_hashes.json` | `level/component/hash_gen_test.go` — decodes every sample and checks `HashWith` gives the game's hash |
 | component | `components.json` + the `components` section of `packet_schema.json` (the stream codec of every `DataComponents` registration) | `level/component/components.go` (registry), one `<name>_gen.go` per component, `enums_gen.go`, `structs_gen.go`, a round-trip test |
+| componentwire | the `prims` section of `packet_schema.json` | `level/component/wire_gen.go` — the item stack, the component patch, one typed component and their delimited forms, from their definitions in the jar |
 | blockentities | `block_entities.json` | `level/block/blockentity.go`, `blockentities.go` |
 | registryid | `registries.json` | `data/registryid/*.go` |
 | biome | `biomes.json` | `level/biome/list.go` |
-| lang | `lang/*.json` | `data/lang/<locale>/<locale>.go` |
+| chunkstatus | `registries.json` (`minecraft:chunk_status`) | `level/chunkstatus_gen.go` — a chunk's generation stage, as a saved chunk's `Status` tag holds it |
+| lang | `lang/*.json` | `data/lang/en_us.lang` (English, built in) and `data/lang/manifest_gen.go` (every language's checksum); the other languages are `mc26 lang`'s, go-mc26-lang's modules (docs/languages.md) |
 | packets | `packet_schema.json` (its `prims` section defines the primitives; one with no Go type of its own, `CHUNK_SECTIONS`, is rendered from its definition) + `packets.json` | `protocol/<state>/{clientbound,serverbound}_gen.go` (+ round-trip tests), `protocol/types/{enums,structs}_gen.go`, `level/section_gen.go` (the chunk section and its paletted containers, with the width function of each packed run) |
 | entity data (inside packets) | `entity_data.json` | `protocol/types/entitydata_gen.go` (serializer names, `NewEntityDataValue`), `data/entitydata/entitydata_gen.go` (field index constants per class, the fields of every entity type) |
 | block behaviour | `block_behaviour.json` | `level/block/behaviour_gen.go` — the shape table and per block its behaviour and per-state values; looked up by `level/block/behaviour.go` (`CollisionShape`, `OutlineShape`, `BehaviourOf`, `DestroySpeed`, `RequiresCorrectTool`, `SturdyFaces`, `MapColor`, `FluidOf`) |
@@ -288,3 +302,12 @@ go run ./gen/cmd/mc26 release --version 26.3    # 6. branches + tags in ../mc26-
   (1.12.0 handles the 26.x class files on JDK 25).
 - [misode/mcmeta](https://github.com/misode/mcmeta) — processed data-generator reports for every
   release and snapshot (`cmd/mcmeta` reads them).
+
+## The scratch trees are swapped in whole
+
+`temp/lib/<version>` and `temp/kit/<version>` are what other sessions build and test against while a build runs.
+`mc26 build` (and `mc26 kit`) therefore make the tree beside the old one (`…/26.3.new`), check it there, and take its
+place in one step (`renameat2` with `RENAME_EXCHANGE` on Linux, two renames elsewhere): a reader sees the old tree or
+the new one, never a half-made one, and a build that fails leaves the old tree alone and no stage behind. The library
+is swapped in first, then the kit tree, whose workspace names the library's final path. A build into some other
+directory (`--out`, a repository checkout whose `.git` is kept) is made in place, as before.

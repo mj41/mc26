@@ -60,7 +60,7 @@ published lines; a laptop release with `--push` is for bootstrapping.
 ## The kit
 
 `go-mc26-kit` is not released by this repository: it is hand-written source with its own
-history, committed and tagged there (`v0.1.<n>`, its own line). What this repository does is
+history, committed and tagged there (`v0.<n>.<m>`, its own line). What this repository does is
 test it: `verify` builds and runs it against every extracted version, so run `verify` before
 tagging the kit. When a new library version is published, add its tag to the matrix in the
 kit's `.github/workflows/ci.yml` (three lines, maintained by hand) and tag the kit if its
@@ -76,7 +76,7 @@ with the new generator and produces `v0.261.<patch+1>`.
 ## Go module consumers
 
 ```
-go get github.com/mj41/go-mc26@v0.262.0
+go get github.com/mj41/go-mc26@v0.263     # the newest v0.263.x
 ```
 
 The first fetch after a push makes the Go proxy and checksum database record the tag; from

@@ -1,7 +1,8 @@
 # A new Minecraft version
 
-Mojang ships 26.3. Everything below runs from the `mc26` checkout; the sibling checkouts
-`../mc26-data`, `../mc26-data-pre`, `../go-mc26` and `../go-mc26-kit` are where releases land.
+Mojang ships a new version (26.4, say). Everything below runs from the `mc26` checkout; the
+sibling checkouts `../mc26-data`, `../mc26-data-pre` and `../go-mc26` are where releases land,
+and `../go-mc26-kit` is where a fix to the kit goes (it is released from its own repository).
 
 ## One command
 
@@ -29,7 +30,7 @@ go run ./gen/cmd/mc26 update --pre            # the newest snapshot or pre-relea
    the new version *and* the older supported ones: the kit has one source for all of them, so a shape that differs
    between versions is written field by field under a check of `version.ProtocolVersion`
    (see the login finished packet in `server/login.go`), never as two copies. Check the packet
-   in both versions first (`schemacov -show clientbound/minecraft:login 26.2`). A struct literal
+   in both versions first (`schemacov -show clientbound/minecraft:login_finished 26.2`). A struct literal
    that omits a field compiles, so only *reads* of a vanished field are reported. Then
    `update --version 26.3 --skip-extract` to go on;
 5. **verify** every extracted version — build, smoke, cross-check, e2e — since the sources

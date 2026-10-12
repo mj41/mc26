@@ -80,4 +80,4 @@ description, checked the way the JSON-only reader is. Most of our node kinds map
 work is in a dispatch on a registry (their switch is over a mapper of the id, which needs the
 registry's names inlined), `packed` and `rest` (natives they do not have), and `guard` (their
 switch over `../field`). Kaitai would be the read direction only. Whether to do it is in the
-backlog (`wip/exports.md`); nothing is visible to anyone until the data repository is public.
+backlog (`wip/exports.md`).

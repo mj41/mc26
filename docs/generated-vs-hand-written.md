@@ -21,7 +21,9 @@ examples), see [architecture.md](architecture.md).
 | new in this project | 13 | 2,227 |
 
 Generated share of the library's lines: 98.9 % overall, 81.7 % without the translations
-(`mc26 report --version 26.3-pre-3`, 2026-09-09).
+(`mc26 report --version 26.3-pre-3`, 2026-09-09). Since 2026-10-12 the translations are not in the
+library: English is one embedded file, the other languages are go-mc26-lang's modules
+([languages.md](languages.md)), so "without the translations" is what the library is.
 
 | go-mc26-kit | files | lines |
 |---|---:|---:|

@@ -12,7 +12,9 @@ below is the order to do them. A finished task is removed: what is worth keeping
 
 ## 2. Defects found on the way
 
-None open.
+| task | what is asked |
+|---|---|
+| [docs-review.md](docs-review.md) | the docs and the command line as a new user reads them (can a 26.3 bot be written from the docs alone?): 31 findings, ranked by when a user meets them; fixed in twelve topics on the docs-review branches of mc26 and the kit, for the owner to review |
 
 ## 3. Research
 
