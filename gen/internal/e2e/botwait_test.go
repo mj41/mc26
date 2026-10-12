@@ -200,3 +200,21 @@ func TestWaitTailReadsTheBotsHealthEvents(t *testing.T) {
 		t.Error("a consumed announcement came back (the half line is not whole yet)")
 	}
 }
+
+func TestPollRcon(t *testing.T) {
+	n := 0
+	cmd := func(string) (string, error) {
+		n++
+		if n < 3 {
+			return "Test failed", nil
+		}
+		return "Test passed", nil
+	}
+	if err := pollRcon(cmd, 10*time.Second, "execute if loaded 0 0 0", "passed"); err != nil || n != 3 {
+		t.Errorf("after %d asks: %v", n, err)
+	}
+	err := pollRcon(func(string) (string, error) { return "No entity", nil }, 600*time.Millisecond, "data get entity X OnGround", "1b")
+	if err == nil || !strings.Contains(err.Error(), "OnGround") || !strings.Contains(err.Error(), "No entity") {
+		t.Errorf("never: %v", err)
+	}
+}

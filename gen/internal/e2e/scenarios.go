@@ -30,8 +30,8 @@ func scenarioTable(o Options, v *build.Info, bin *string, srv **smoke.Server) (s
 		{name: "mcping", what: "server list ping: the status reply of the vanilla server, read by the kit", long: false, fn: func() error { return scenarioPing(o, *bin, *srv, v) }},
 		{name: "daze", what: "a bot joins, stands, looks and answers chat", long: false, fn: func() error { return scenarioDaze(o, *bin, *srv) }},
 		{name: "twobots", what: "two bots on one server see and talk to each other", long: false, fn: func() error { return scenarioTwoBots(o, *bin, *srv) }},
-		{name: "minimal", what: "the smallest bot logs in", long: false, fn: func() error {
-			return scenarioLogin(o, *bin, *srv, "minimal", "Minimal", 20*time.Second, "Login success")
+		{name: "minimal", what: "the smallest bot joins the game", long: false, fn: func() error {
+			return scenarioLogin(o, *bin, *srv, "minimal", "Minimal", 20*time.Second, "joined")
 		}},
 		{name: "autofish", what: "the fishing bot logs in and starts the game", long: false, fn: func() error {
 			return scenarioLogin(o, *bin, *srv, "autofish", "Fisher", 25*time.Second, "Login success", "Game start")

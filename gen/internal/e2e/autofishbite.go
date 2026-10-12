@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mj41/mc26/gen/internal/smoke"
@@ -47,7 +48,20 @@ func scenarioAutofishBite(o Options, bin string, srv *smoke.Server) error {
 	if err := do(fmt.Sprintf("tp %s %d.5 100 %d.5 0 0", name, far, far)); err != nil {
 		return err
 	}
-	time.Sleep(6 * time.Second) // (the chunks load, it lands)
+	// the chunks round the pond are loaded (forceload: generated and kept), and the player has landed on them: a fill
+	// in a chunk not loaded is refused ("That position is not loaded"), and a player cannot fall through one
+	if err := do(fmt.Sprintf("forceload add %d %d %d %d", far-16, far-16, far+16, far+32)); err != nil {
+		return err
+	}
+	defer rcon.command(fmt.Sprintf("forceload remove %d %d %d %d", far-16, far-16, far+16, far+32))
+	for _, c := range []string{fmt.Sprintf("execute if loaded %d 0 %d", far-5, far+2), fmt.Sprintf("execute if loaded %d 0 %d", far+5, far+17)} {
+		if err := pollRcon(rcon.command, 90*time.Second, c, "passed"); err != nil {
+			return fmt.Errorf("the pond's chunks: %w", err)
+		}
+	}
+	if err := pollRcon(rcon.command, 90*time.Second, "data get entity "+name+" OnGround", "1b"); err != nil {
+		return fmt.Errorf("the bot did not land: %w", err)
+	}
 	ans, err := rcon.command("data get entity " + name + " Pos")
 	if err != nil {
 		return err
@@ -96,4 +110,22 @@ func scenarioAutofishBite(o Options, bin string, srv *smoke.Server) error {
 		return fmt.Errorf("the example reeled (gra~) but the server gave nothing: %v\n%s", inv, tail(out.String(), 20))
 	}
 	return nil
+}
+
+// pollRcon runs a server command till its answer holds want, at most limit: what the harness waits for in the
+// server's world (a chunk loaded, a player landed) instead of a sleep that a slow machine outlasts.
+func pollRcon(cmd rconCmd, limit time.Duration, command, want string) error {
+	deadline := time.Now().Add(limit)
+	var last string
+	var lastErr error
+	for {
+		last, lastErr = cmd(command)
+		if lastErr == nil && strings.Contains(last, want) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%q still answers %q (%v) after %s, want it to hold %q", command, last, lastErr, limit, want)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
