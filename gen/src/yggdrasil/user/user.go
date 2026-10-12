@@ -1,3 +1,6 @@
+// Package user is a player's profile properties (skins) and chat-signing public
+// key as they travel in packets, and the key pair a client signs chat with,
+// fetched from Minecraft services with an access token (GetOrFetchKeyPair).
 package user
 
 import (

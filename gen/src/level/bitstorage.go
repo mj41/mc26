@@ -15,7 +15,7 @@ const (
 
 // BitStorage implement the compacted data array used in chunk storage and heightmaps.
 // You can think of this as a []intN whose N is indicated by "bits".
-// For more info, see: https://wiki.vg/Chunk_Format
+// For more info, see: https://minecraft.wiki/w/Java_Edition_protocol/Chunk_format
 // This implementation is compatible with the format since Minecraft 1.16
 type BitStorage struct {
 	data []uint64

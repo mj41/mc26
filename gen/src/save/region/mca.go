@@ -1,3 +1,6 @@
+// Package region reads and writes Anvil region files (r.<x>.<z>.mca): 32×32
+// chunks a file, each stored as compressed NBT in a sector (ReadSector,
+// WriteSector); In and At find a chunk's region and its place there.
 package region
 
 import (

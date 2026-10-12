@@ -46,10 +46,12 @@ func genRegistryID(jsonDir, goMCRoot string) error {
 		data := struct {
 			Header   string
 			TypeName string
+			Registry string
 			Entries  []string
 		}{
 			Header:   generatedHeader("gen_registryid.go", "registries.json"),
 			TypeName: typeName,
+			Registry: key,
 			Entries:  entries,
 		}
 
@@ -63,6 +65,15 @@ func genRegistryID(jsonDir, goMCRoot string) error {
 			return fmt.Errorf("genRegistryID: %w", err)
 		}
 		totalEntries += len(entries)
+	}
+
+	doc := generatedHeader("gen_registryid.go", "registries.json") +
+		"// Package registryid lists every built-in registry of Minecraft " + jsonVersion + " by name\n" +
+		"// (Block, Item, EntityType, …): the element names in protocol-id order, so an id\n" +
+		"// the protocol carries turns into its name and back.\n" +
+		"package registryid\n"
+	if err := writeFile(filepath.Join(outDir, "doc_gen.go"), []byte(doc)); err != nil {
+		return fmt.Errorf("genRegistryID: %w", err)
 	}
 
 	// The glue that fills a registry container from those tables: both sides of

@@ -1,3 +1,8 @@
+// Package level is a chunk column as the protocol and the region files carry it:
+// a Chunk of Sections, each a block-state and a biome PaletteContainer, with its
+// heightmaps and block entities. WireSections and PutSections convert to and from
+// a chunk packet's sections, ChunkFromSave and ChunkToSave to and from a saved
+// chunk (package save).
 package level
 
 import (
@@ -37,6 +42,8 @@ func (c *ChunkPos) ReadFrom(r io.Reader) (int64, error) {
 	return n, nil
 }
 
+// Chunk is a chunk column: its sections from the bottom of the world up, its
+// heightmaps and its block entities.
 type Chunk struct {
 	Sections    []Section
 	HeightMaps  HeightMaps
@@ -44,6 +51,7 @@ type Chunk struct {
 	Status      ChunkStatus
 }
 
+// EmptyChunk returns a chunk of secs sections of air.
 func EmptyChunk(secs int) *Chunk {
 	sections := make([]Section, secs)
 	for i := range sections {
@@ -361,6 +369,8 @@ func PackBlockEntityXZ(X, Z int) (pk.Byte, bool) {
 	return pk.Byte(X<<4 | Z), true
 }
 
+// Section is 16×16×16 blocks of a chunk: their states, their biomes (by 4×4×4)
+// and their light.
 type Section struct {
 	BlockCount int16
 	// FluidCount is the number of non-empty fluid states in the section (26.1+, protocol 775+).

@@ -1,3 +1,7 @@
+// Package registry is the registries the server sends in the configuration phase
+// (biomes, chat types, damage types, the mob variants, …) as typed Go values:
+// Registries holds one Registry per registry, filled from the registry data
+// packets and the tags. NewNetworkCodec gives an empty set to read them into.
 package registry
 
 import (
@@ -7,6 +11,9 @@ import (
 	"github.com/mj41/go-mc26/nbt"
 )
 
+// Registry is one registry: its entries by id and by name (Get, GetByID, KeyOf),
+// and its tags (Tag). It is filled from the network (ReadFrom, ReadTagsFrom) or by
+// Put.
 type Registry[E any] struct {
 	keys    map[string]int32
 	values  []E
@@ -17,6 +24,7 @@ type Registry[E any] struct {
 	raws    []nbt.RawMessage // the NBT of every entry, when keepRaw is set
 }
 
+// NewRegistry returns an empty registry.
 func NewRegistry[E any]() Registry[E] {
 	return Registry[E]{
 		keys:    make(map[string]int32),

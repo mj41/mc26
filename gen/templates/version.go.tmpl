@@ -3,7 +3,7 @@
 package version
 
 const (
-	// Name is the Minecraft version id ("26.2").
+	// Name is the Minecraft version id, as Mojang's version manifest names it.
 	Name = {{printf "%q" .V.ID}}
 	// ProtocolVersion is the network protocol number sent in the handshake.
 	ProtocolVersion = {{.V.ProtocolVersion}}

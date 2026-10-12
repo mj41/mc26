@@ -1,3 +1,8 @@
+// Package save is a world's files: level.dat (ReadLevel), player data
+// (ReadPlayerData) and a saved chunk (Chunk.Load, Chunk.Data), in the shapes
+// Mojang's own readers take (generated into save_gen.go). Package save/region
+// reads the region files the chunks are stored in, package level turns a saved
+// chunk into the chunk the protocol carries.
 package save
 
 import (

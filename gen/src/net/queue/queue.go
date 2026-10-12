@@ -1,3 +1,6 @@
+// Package queue is the packet queue between a connection and the goroutine that
+// reads or writes it: a linked list that never blocks a push (NewLinkedQueue), or
+// a channel of a fixed size (NewChannelQueue).
 package queue
 
 import (

@@ -1,10 +1,15 @@
 {{.Header}}
+// Package packetid holds the packet ids of every protocol state of this Minecraft
+// version as typed constants (ClientboundPlaySystemChat, ServerboundLoginHello, …):
+// what a packet handler is registered for and what pk.Marshal writes first.
 package packetid
 
 import "strconv"
 
 type (
+	// ClientboundPacketID is the id of a packet the server sends, within its state.
 	ClientboundPacketID int32
+	// ServerboundPacketID is the id of a packet the client sends, within its state.
 	ServerboundPacketID int32
 )
 {{range .Sections}}

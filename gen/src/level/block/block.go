@@ -1,3 +1,9 @@
+// Package block is every block of this Minecraft version as a Go type
+// (block.Stone{}, block.OakStairs{Facing: …}) and its state ids. FromID gives a
+// block by name; ToStateID and StateList convert between a block with its
+// properties and the StateID chunks and packets carry. Solid, CollisionShape,
+// DestroySpeed and the other functions of a StateID answer what the game knows
+// of a state.
 package block
 
 import (
@@ -10,6 +16,8 @@ import (
 	"github.com/mj41/go-mc26/nbt"
 )
 
+// Block is a block with its properties, one Go type per block of this version;
+// ID is its resource location ("minecraft:stone").
 type Block interface {
 	ID() string
 }
@@ -22,7 +30,9 @@ type Block interface {
 var blockStates []byte
 
 var (
+	// ToStateID gives the state id of a block with its properties.
 	ToStateID map[Block]StateID
+	// StateList gives the block, with its properties, of a state id.
 	StateList []Block
 )
 
@@ -31,8 +41,10 @@ var (
 var BitsPerBlock int
 
 type (
+	// StateID is a block state's id: what chunks and packets carry for a block.
 	StateID int
-	State   struct {
+	// State is a block state by name and properties, as NBT carries it.
+	State struct {
 		Name       string
 		Properties nbt.RawMessage
 	}

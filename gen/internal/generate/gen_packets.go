@@ -2105,7 +2105,16 @@ func renderPacketFile(state, flow string, pkts []packetDef, skipped []string) st
 	body := sb.String()
 	var out strings.Builder
 	out.WriteString(generatedHeader("gen_packets.go", "packet_schema.json + packets.json"))
-	fmt.Fprintf(&out, "// Package %s holds the generated %s packets of the %s state.\n", state, jsonVersion, state)
+	if flow == "serverbound" { // every state has serverbound packets; the package comment once
+		fmt.Fprintf(&out, `// Package %[1]s holds the packets of the %[1]s state of Minecraft %[2]s, one struct a
+// packet, named after Mojang's packet class without its direction and "Packet" (Java
+// ClientboundSystemChatPacket is SystemChat), each with PacketID, ReadFrom and WriteTo.
+//
+// A received packet is decoded with p.Scan(&v) into the struct its id names (NewClientbound
+// and NewServerbound give an empty one for an id); one is sent as pk.Marshal(v.PacketID(), v).
+// The ids are in data/packetid, the shared field types in protocol/types.
+`, state, jsonVersion)
+	}
 	fmt.Fprintf(&out, "package %s\n\n", state)
 	imports := []string{"\t\"github.com/mj41/go-mc26/data/packetid\"", "\tpk \"github.com/mj41/go-mc26/net/packet\"", "\t\"github.com/mj41/go-mc26/protocol/types\""}
 	for _, p := range []struct{ prefix, path string }{

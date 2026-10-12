@@ -1,6 +1,6 @@
 # NBT [![Go Reference](https://pkg.go.dev/badge/github.com/Tnze/go-mc/nbt.svg)](https://pkg.go.dev/github.com/Tnze/go-mc/nbt)
 
-This package implements the [Named Binary Tag](https://wiki.vg/NBT) format of Minecraft.
+This package implements the [Named Binary Tag](https://minecraft.wiki/w/NBT_format) format of Minecraft.
 
 The API is very similar to the standard library `encoding/json`.
 (But fix some its problem)

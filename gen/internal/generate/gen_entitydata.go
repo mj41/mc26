@@ -98,14 +98,14 @@ func (gs *genState) genEntityData(jsonDir, outRoot string) error {
 	imports += ")\n\n"
 	var hdr strings.Builder
 	hdr.WriteString(generatedHeader("gen_entitydata.go", "entity_data.json"))
-	hdr.WriteString("\n// The entity metadata serializers: what a set_entity_data value is, by serializer id.\n")
+	hdr.WriteString("// The entity metadata serializers: what a set_entity_data value is, by serializer id.\n")
 	if len(untyped) > 0 {
 		hdr.WriteString("//\n// Serializers the schema cannot type (their values cannot be decoded):\n")
 		for _, u := range untyped {
 			hdr.WriteString("//   " + u + "\n")
 		}
 	}
-	hdr.WriteString("package types\n\n")
+	hdr.WriteString("\npackage types\n\n") // a file comment, not the package's
 	if err := writeGo(filepath.Join(outRoot, "protocol", "types", "entitydata_gen.go"), hdr.String()+imports+body); err != nil {
 		return fmt.Errorf("genEntityData: %w", err)
 	}

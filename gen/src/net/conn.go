@@ -1,4 +1,7 @@
-// Package net pack network connection for Minecraft.
+// Package net is the Minecraft connection: DialMC and ListenMC give a Conn that
+// reads and writes packets (ReadPacket, WritePacket), compressed past a threshold
+// (SetThreshold) and encrypted once login has set a cipher (SetCipher). It also has
+// an RCON client and server (DialRCON, ListenRCON).
 package net
 
 import (
@@ -66,7 +69,7 @@ func DialMCTimeout(addr string, timeout time.Duration) (*Conn, error) {
 // [Dialer] is its default implementation, and support SRV lookup.
 //
 // Typically, if you want to use built-in proxies or custom dialer,
-// you can hook go-mc/bot package by implement this interface.
+// implement this interface and give it to the kit's bot (JoinOptions.MCDialer).
 // When implementing a custom MCDialer, SRV lookup is optional.
 type MCDialer interface {
 	// The DialMCContext dial TCP connection to a minecraft server, and warp the net.Conn by calling [WrapConn].

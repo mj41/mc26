@@ -1,6 +1,8 @@
 {{.Header}}
 package registryid
 
+// {{.TypeName}} is the {{.Registry}} registry: its element names in protocol-id
+// order, so the index is the id.
 var {{.TypeName}} = []string{
 {{- range .Entries}}
 	{{printf "%q" .}},

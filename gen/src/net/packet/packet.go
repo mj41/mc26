@@ -1,3 +1,11 @@
+// Package packet is a Minecraft packet and its field types. A Packet is an id and
+// its payload: Marshal builds one from fields, Packet.Scan reads fields back out,
+// Pack and UnPack frame it on the wire, compressed past a threshold.
+//
+// The field types (VarInt, String, Position, UUID, NBTField, …) are io.WriterTo
+// and io.ReaderFrom, and so are the generated packet structs of the protocol
+// packages, so either can be passed to Marshal and Scan. Ary, Opt and Tuple
+// combine fields.
 package packet
 
 import (

@@ -1,5 +1,6 @@
-// Package nbt implement the Named Binary Tag format of Minecraft.
-// It provides api like encoding/json package.
+// Package nbt implements Minecraft's Named Binary Tag format, with an API like
+// encoding/json's: Marshal and Unmarshal, an Encoder and a Decoder, struct tags
+// (`nbt:"name"`), RawMessage, and the stringified form (SNBT).
 package nbt
 
 import (

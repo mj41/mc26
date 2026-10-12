@@ -1033,7 +1033,7 @@ func (g *nbtGen) renderFrom(p *nbtPkg, doc, generator, source string) string {
 	}
 	var out strings.Builder
 	out.WriteString(generatedHeader(generator, source))
-	out.WriteString("\n" + doc + "package " + p.name + "\n\n")
+	out.WriteString(doc + "\npackage " + p.name + "\n\n") // doc describes the file: a blank line keeps it off the package clause
 	if len(imports) > 0 {
 		sort.Strings(imports)
 		out.WriteString("import (\n" + strings.Join(imports, "\n") + "\n)\n\n")
