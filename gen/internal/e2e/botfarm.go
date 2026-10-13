@@ -17,7 +17,9 @@ import (
 //
 //   - botfarmfast: the day held at morning (advance_time false) and the crops
 //     growing ten times as fast (random_tick_speed 30): a field's whole cycle,
-//     sown, ripe, harvested and sown again, in 20 minutes;
+//     sown, ripe, harvested and sown again, in 30 minutes (the bot's own
+//     harvest timer is ten minutes of its rounds, and the server under the
+//     fast ticks runs them at about half speed: the first came at 18 minutes);
 //   - botfarmnobucket: botfarmfast without the bucket: the field by water it
 //     finds, or dry by home;
 //   - botfarmdays: two days and their nights at the game's own pace: the
@@ -50,13 +52,13 @@ var botFarmScenarios = map[string]farmSetup{
 	"botfarmfast": {
 		give:    append(append([]string{}, botFarmKit...), "minecraft:bucket 1"),
 		rules:   []string{"advance_time false", "random_tick_speed 30"},
-		length:  20 * time.Minute,
+		length:  30 * time.Minute,
 		harvest: 6,
 	},
 	"botfarmnobucket": {
 		give:    botFarmKit,
 		rules:   []string{"advance_time false", "random_tick_speed 30"},
-		length:  20 * time.Minute,
+		length:  30 * time.Minute,
 		harvest: 6,
 	},
 	"botfarmdays": {
@@ -68,7 +70,7 @@ var botFarmScenarios = map[string]farmSetup{
 
 // botFarmWhat says what a farm scenario is.
 var botFarmWhat = map[string]string{
-	"botfarmfast":     "the field from minute one (hoe, seeds, bucket handed), day held, crops 10x: sown, cut, sown again",
+	"botfarmfast":     "the field from minute one (hoe, seeds, bucket handed), day held, crops 10x: sown, cut, sown again, 30 min",
 	"botfarmnobucket": "botfarmfast without a bucket: the field by water it finds, or dry by home",
 	"botfarmdays":     "the field from minute one (hoe, seeds, bucket handed), two days and nights: the wheat each day",
 }
