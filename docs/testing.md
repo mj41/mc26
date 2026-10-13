@@ -127,7 +127,7 @@ alone — enough wheat picked up, seeds sown again after it, no death:
 
 | scenario | world | length | to pass |
 |---|---|---|---|
-| `botfarmfast` | the day held (`advance_time false`), crops 10× (`random_tick_speed 30`) | 30 min | wheat 6 |
+| `botfarmfast` | crops 10× (`random_tick_speed 30`), the game's own days and nights | 30 min | wheat 6 |
 | `botfarmnobucket` | as botfarmfast, no bucket handed | 30 min | wheat 6 |
 | `botfarmdays` | the game's own pace, two days and nights | 41 min | wheat 3 |
 
