@@ -12,7 +12,7 @@ import (
 // (a table, stone tools, logs, cobblestone, torches, bread) and the farm's
 // tools (a hoe, seeds, a bucket), so its field comes in its first minutes,
 // not after a day. They are judged by the server's own counts (farmCounters):
-// the farmland tilled, the seeds sown, the wheat cut and picked up, and the
+// the hoe used, the seeds sown, the wheat cut and picked up, and the
 // seeds sown again after the first harvest.
 //
 //   - botfarmfast: the day held at morning (advance_time false) and the crops
@@ -89,7 +89,9 @@ type farmCounter struct{ objective, criterion, what string }
 // farmCounters are kept on every botday run, farm or not: the wheat a day is
 // a fitness of its own.
 var farmCounters = []farmCounter{
-	{"ftilled", "minecraft.used:minecraft.stone_hoe", "tilled"},
+	// (the game has no count of the farmland tilled: a hoe is "used" for a
+	// cell tilled and for a block broken with it — leaves, moss — alike)
+	{"fhoe", "minecraft.used:minecraft.stone_hoe", "hoe"},
 	{"fsown", "minecraft.used:minecraft.wheat_seeds", "sown"},
 	{"fcut", "minecraft.mined:minecraft.wheat", "cut"},
 	{"fwheat", "minecraft.picked_up:minecraft.wheat", "wheat"},
@@ -145,8 +147,8 @@ func (t *farmTally) fitness() map[string]any {
 
 // String says the tally in a line.
 func (t *farmTally) String() string {
-	return fmt.Sprintf("tilled %d, sown %d, cut %d, wheat %d, sown again %d",
-		t.n["tilled"], t.n["sown"], t.n["cut"], t.n["wheat"], t.sownAgain())
+	return fmt.Sprintf("hoe used %d, sown %d, cut %d, wheat %d, sown again %d",
+		t.n["hoe"], t.n["sown"], t.n["cut"], t.n["wheat"], t.sownAgain())
 }
 
 // farmPassed: wheat picked up, at least the setup's, and seeds sown again

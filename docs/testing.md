@@ -118,7 +118,8 @@ simulator's. The first sight of a milestone stays (a poll never moves an event's
 them as `milestones` (seconds) and `milestonesMs`.
 
 Every botday run also keeps the server's own farm counts in its scorecard (`fitness.farm`, from scoreboard
-objectives on the game's statistics): `tilled` (the stone hoe used), `sown` (wheat seeds used), `cut` (wheat broken),
+objectives on the game's statistics): `hoe` (the stone hoe used: a cell tilled, or a block broken with it — the game
+counts no tilling of its own), `sown` (wheat seeds used), `cut` (wheat broken),
 `wheat` (wheat picked up), `sownAgain` (seeds sown after the first wheat) and `firstWheat` (seconds to it). The farm
 scenarios (`gen/internal/e2e/botfarm.go`) are botday runs of seed 8675309, mobs off, with the first day's tools, a
 stone hoe, 8 seeds and a bucket handed at the start, so the field comes in the first minutes; they pass on the farm

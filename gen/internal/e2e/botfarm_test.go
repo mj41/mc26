@@ -23,9 +23,9 @@ func TestFarmTally(t *testing.T) {
 	if tl.n["sown"] != 0 || tl.sownAtHarvest != -1 {
 		t.Fatalf("nothing set: %v %d", tl.n, tl.sownAtHarvest)
 	}
-	score["ftilled"], score["fsown"] = 4, 4
+	score["fhoe"], score["fsown"] = 4, 4
 	tl.read(cmd, "Builder", 2*time.Minute)
-	if tl.n["tilled"] != 4 || tl.n["sown"] != 4 || tl.sownAgain() != 0 {
+	if tl.n["hoe"] != 4 || tl.n["sown"] != 4 || tl.sownAgain() != 0 {
 		t.Fatalf("sown: %v, again %d", tl.n, tl.sownAgain())
 	}
 	score["fcut"], score["fwheat"] = 4, 4
