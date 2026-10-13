@@ -108,16 +108,36 @@ func scenarioBotDay(o Options, n, days int, mobs string) error {
 	} else {
 		seed, scenario = botDaySeeds[n-1], fmt.Sprintf("botday%d", n)
 	}
-	length, milestones := botDayLength, botDayMilestones
 	if days > 1 {
 		scenario = "botdaysx"
 		if n > 0 {
 			scenario = fmt.Sprintf("botdays%d", n)
 		}
-		length, milestones = time.Duration(days)*20*time.Minute+time.Minute, botDaysMilestones
 	}
 	if mobs != mobsNatural {
 		scenario += mobs // botday1off, botdays2script
+	}
+	return runBotDay(o, botDayRun{scenario: scenario, seed: seed, days: days, mobs: mobs})
+}
+
+// botDayRun is what a botday run is: its name, its world, its days, the mobs,
+// and for a farm scenario (botfarm.go) what that changes.
+type botDayRun struct {
+	scenario, seed string
+	days           int
+	mobs           string
+	farm           *farmSetup
+}
+
+// runBotDay runs a botday run: the bot in a new world of the seed, judged.
+func runBotDay(o Options, r botDayRun) error {
+	scenario, seed, days, mobs := r.scenario, r.seed, r.days, r.mobs
+	length, milestones := botDayLength, botDayMilestones
+	if days > 1 {
+		length, milestones = time.Duration(days)*20*time.Minute+time.Minute, botDaysMilestones
+	}
+	if r.farm != nil {
+		length, milestones = r.farm.length, botDaysMilestones
 	}
 	name := "Builder"
 	dir := filepath.Join(o.WorkDir, "server-"+scenario)
@@ -149,6 +169,14 @@ func scenarioBotDay(o Options, n, days int, mobs string) error {
 	if mobs != mobsNatural {
 		setup = append(setup, "gamerule spawn_monsters false")
 	}
+	for _, c := range farmCounters { // the wheat a day, on every run (botfarm.go)
+		setup = append(setup, "scoreboard objectives add "+c.objective+" "+c.criterion)
+	}
+	if r.farm != nil {
+		for _, rule := range r.farm.rules {
+			setup = append(setup, "gamerule "+rule)
+		}
+	}
 	for _, c := range setup {
 		if resp, err := rcon.command(c); err != nil || rconFailed(resp) {
 			return fmt.Errorf("rcon %q: %q %v", c, resp, err)
@@ -157,6 +185,12 @@ func scenarioBotDay(o Options, n, days int, mobs string) error {
 	conditions := map[string]any{"seed": seed, "difficulty": "normal", "mobs": mobs, "days": max(days, 1)}
 	if mobs == mobsScript {
 		conditions["script"] = botDayScriptVersion
+	}
+	if r.farm != nil {
+		conditions["farm"] = r.scenario
+		if len(r.farm.rules) > 0 {
+			conditions["rules"] = r.farm.rules
+		}
 	}
 
 	logPath := filepath.Join(o.WorkDir, scenario+".log")
@@ -209,9 +243,18 @@ func scenarioBotDay(o Options, n, days int, mobs string) error {
 	if err := waitBotPrefix(out, 30*time.Second); err != nil {
 		return fmt.Errorf("%s: %v\n%s", scenario, err, tail(out.String(), 20))
 	}
+	if r.farm != nil { // handed at its start: the farm from its first minute
+		for _, g := range r.farm.give {
+			if resp, err := rcon.command("give " + name + " " + g); err != nil || rconFailed(resp) {
+				return fmt.Errorf("%s: give %s: %q %v", scenario, g, resp, err)
+			}
+		}
+		o.Log("%s: handed %v; rules %v", scenario, r.farm.give, r.farm.rules)
+	}
 	o.Log("%s: seed %s, the bot in, %d day(s) and their nights to live", scenario, seed, max(days, 1))
 
 	start := time.Now()
+	tally := newFarmTally()
 	var lastPos string
 	stillSince, longestStill := time.Now(), time.Duration(0)
 	deaths := "0"
@@ -243,7 +286,7 @@ func scenarioBotDay(o Options, n, days int, mobs string) error {
 		}
 		d, _ := strconv.Atoi(deaths)
 		run.score(conditions, map[string]any{"seed": seed, "milestones": ms, "milestonesMs": msMs, "deaths": d,
-			"longestStill": int(longestStill.Seconds()), "length": int(time.Since(start).Seconds())})
+			"longestStill": int(longestStill.Seconds()), "length": int(time.Since(start).Seconds()), "farm": tally.fitness()})
 	}()
 	scripted := make([]bool, len(botDayScript))
 	for time.Since(start) < length {
@@ -278,6 +321,7 @@ func scenarioBotDay(o Options, n, days int, mobs string) error {
 				deaths = f[2]
 			}
 		}
+		tally.read(rcon.command, name, time.Since(start))
 		if resp, err := rcon.command("data get entity " + name + " Pos"); err == nil {
 			if m := posRe.FindStringSubmatch(resp); m != nil {
 				pos := fmt.Sprintf("%.0f %.0f %.0f", atof(m[1]), atof(m[2]), atof(m[3]))
@@ -306,11 +350,12 @@ func scenarioBotDay(o Options, n, days int, mobs string) error {
 			}
 		}
 		if int(time.Since(start).Seconds())%60 < 10 {
-			o.Log("%s: minute %d at %s, still %s, deaths %s, milestones %d of %d", scenario,
-				int(time.Since(start).Minutes()), lastPos, time.Since(stillSince).Round(time.Second), deaths, reached.Count(), len(milestones))
+			o.Log("%s: minute %d at %s, still %s, deaths %s, milestones %d of %d; farm: %s", scenario,
+				int(time.Since(start).Minutes()), lastPos, time.Since(stillSince).Round(time.Second), deaths, reached.Count(), len(milestones), tally)
 		}
 	}
 	reached.poll() // (the last second)
+	tally.read(rcon.command, name, time.Since(start))
 	var card []string
 	for _, ms := range milestones {
 		if t, ok := reached.Reached(ms.id); ok {
@@ -319,8 +364,14 @@ func scenarioBotDay(o Options, n, days int, mobs string) error {
 			card = append(card, ms.what+": not")
 		}
 	}
-	summary := fmt.Sprintf("seed %s: %s; deaths %s; longest standing still %s", seed, strings.Join(card, ", "), deaths, longestStill.Round(time.Second))
+	summary := fmt.Sprintf("seed %s: %s; deaths %s; longest standing still %s; farm: %s", seed, strings.Join(card, ", "), deaths, longestStill.Round(time.Second), tally)
 	o.Log("%s: %s", scenario, summary)
+	if r.farm != nil { // a farm run passes by its field: the wheat, and sown again
+		if !tally.farmPassed(r.farm) || deaths != "0" {
+			return fmt.Errorf("%s (to pass: wheat %d or more, sown again, no death)\n%s", summary, r.farm.harvest, tail(out.String(), 25))
+		}
+		return nil
+	}
 	if _, ok := reached.Reached("minecraft:story/upgrade_tools"); !ok || deaths != "0" {
 		return fmt.Errorf("%s\n%s", summary, tail(out.String(), 25))
 	}

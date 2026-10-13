@@ -117,6 +117,19 @@ millisecond: a table made at 22.5 s reads 22.5 s), and for a bot that announces 
 simulator's. The first sight of a milestone stays (a poll never moves an event's time). The run's `meta.json` keeps
 them as `milestones` (seconds) and `milestonesMs`.
 
+Every botday run also keeps the server's own farm counts in its scorecard (`fitness.farm`, from scoreboard
+objectives on the game's statistics): `tilled` (the stone hoe used), `sown` (wheat seeds used), `cut` (wheat broken),
+`wheat` (wheat picked up), `sownAgain` (seeds sown after the first wheat) and `firstWheat` (seconds to it). The farm
+scenarios (`gen/internal/e2e/botfarm.go`) are botday runs of seed 8675309, mobs off, with the first day's tools, a
+stone hoe, 8 seeds and a bucket handed at the start, so the field comes in the first minutes; they pass on the farm
+alone — enough wheat picked up, seeds sown again after it, no death:
+
+| scenario | world | length | to pass |
+|---|---|---|---|
+| `botfarmfast` | the day held (`advance_time false`), crops 10× (`random_tick_speed 30`) | 20 min | wheat 6 |
+| `botfarmnobucket` | as botfarmfast, no bucket handed | 20 min | wheat 6 |
+| `botfarmdays` | the game's own pace, two days and nights | 41 min | wheat 3 |
+
 A downstream bot — a program built in the kit's workspace that botday, botflat and their kin run — agrees with the
 harness on this, and nothing else of its name or its output:
 
