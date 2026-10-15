@@ -284,3 +284,17 @@ func TestOpenSpaceLeaks(t *testing.T) {
 		t.Errorf("a room open on a side: leaks %v ok %v; want a leak", leaks, ok)
 	}
 }
+
+// TestOpenSpaceAtNightNeverFailsARun: only the open sky ends a run (after the grace); an open space — however
+// long, a cave system's flood — is told. botday2off 1015-140706 and 11 more runs failed on the leak variant.
+func TestOpenSpaceAtNightNeverFailsARun(t *testing.T) {
+	if runFailsAtNight("leak", time.Hour) {
+		t.Errorf("an hour in an open space at night fails the run")
+	}
+	if !runFailsAtNight("sky", botDayNightGrace) {
+		t.Errorf("the open sky for the grace does not fail the run")
+	}
+	if runFailsAtNight("sky", botDayNightGrace-time.Second) {
+		t.Errorf("the open sky within the grace fails the run")
+	}
+}

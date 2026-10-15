@@ -300,7 +300,7 @@ func runBotDay(o Options, r botDayRun) error {
 		// a night out under the sky ends the run at once: a bot without a
 		// shelter at night is no bot to go on watching
 		if kind := nightOutside(rcon, name); kind != "" {
-			if kind == "leak" {
+			if kind != "sky" {
 				// a space open to the outside, not under the open sky: told, not failed (its flood past a
 				// cave system's size ended botday2off 1015-140706 with a bot in its own mine); the bot's
 				// own check has the sky and the open land
@@ -312,7 +312,7 @@ func runBotDay(o Options, r botDayRun) error {
 				if skySince.IsZero() {
 					skySince = time.Now()
 				}
-				if s := time.Since(skySince); s >= botDayNightGrace {
+				if s := time.Since(skySince); runFailsAtNight(kind, s) {
 					o.Log("%s: OUT AT NIGHT under the sky for %s at %s, after %s", scenario, s.Round(time.Second), lastPos, time.Since(start).Round(time.Second))
 					return fmt.Errorf("%s: out under the sky at night for %s at %s (deaths %s)\n%s", scenario,
 						s.Round(time.Second), lastPos, deaths, tail(out.String(), 30))
@@ -446,6 +446,13 @@ func nightOutside(rcon *rconClient, name string) string {
 		return "leak"
 	}
 	return ""
+}
+
+// runFailsAtNight says whether a night spent so long in the state ends the run: only the open sky ("sky") does,
+// after botDayNightGrace; an open space ("leak") is told, never failed. With d 0 it answers whether the state
+// can fail a run at all.
+func runFailsAtNight(kind string, d time.Duration) bool {
+	return kind == "sky" && d >= botDayNightGrace
 }
 
 // botDayLeakGrace is how long a bot may stand in a space open to the outside at night: it dug into a cave and
