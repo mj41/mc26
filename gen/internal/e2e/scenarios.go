@@ -60,6 +60,7 @@ func scenarioTable(o Options, v *build.Info, bin *string, srv **smoke.Server) (s
 		{name: "botdaysx", what: "two days from nothing on a new random world, natural mobs", long: true, fn: func() error { return scenarioBotDay(o, 0, 2, mobsNatural) }},
 		{name: "botfarmfast", what: botFarmWhat["botfarmfast"], long: true, fn: func() error { return scenarioBotFarm(o, "botfarmfast") }},
 		{name: "botfarmnobucket", what: botFarmWhat["botfarmnobucket"], long: true, fn: func() error { return scenarioBotFarm(o, "botfarmnobucket") }},
+		{name: "botfarmempty", what: botFarmWhat["botfarmempty"], long: true, fn: func() error { return scenarioBotFarm(o, "botfarmempty") }},
 		{name: "botfarmdays", what: botFarmWhat["botfarmdays"], long: true, fn: func() error { return scenarioBotFarm(o, "botfarmdays") }},
 		{name: "botflat", what: "every stage and brick of the flat world, in turn", long: true, fn: func() error { return scenarioBotFlat(o) }},
 		{name: "botflat1", what: "flat world stage: " + flatStages[0].name, long: true, fn: func() error { return scenarioBotFlat(o, 1) }},

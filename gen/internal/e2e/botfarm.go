@@ -24,6 +24,8 @@ import (
 //     stall limit ended the run before its harvest (botfarmfast 1013-231946);
 //   - botfarmnobucket: botfarmfast without the bucket: the field by water it
 //     finds, or dry by home;
+//   - botfarmempty: botfarmnobucket without the bread, the hoe and the seeds: the whole
+//     chain is the bot's own;
 //   - botfarmdays: two days and their nights at the game's own pace: the
 //     field tended through them, the wheat each day.
 //
@@ -63,6 +65,19 @@ var botFarmScenarios = map[string]farmSetup{
 		length:  30 * time.Minute,
 		harvest: 6,
 	},
+	// the farm from an empty start: the first day's plan handed, but no bread, no hoe,
+	// no seeds, no bucket — the chain (hoe, seeds from the grass, the field by water
+	// found, bread from the wheat) is the bot's own
+	"botfarmempty": {
+		give: []string{
+			"minecraft:crafting_table 1", "minecraft:stone_pickaxe 1", "minecraft:stone_axe 1",
+			"minecraft:stone_shovel 1", "minecraft:stone_sword 1", "minecraft:oak_log 16",
+			"minecraft:cobblestone 32", "minecraft:torch 16",
+		},
+		rules:   []string{"random_tick_speed 30"},
+		length:  30 * time.Minute,
+		harvest: 3,
+	},
 	"botfarmdays": {
 		give:    append(append([]string{}, botFarmKit...), "minecraft:bucket 1"),
 		length:  2*20*time.Minute + time.Minute,
@@ -74,6 +89,7 @@ var botFarmScenarios = map[string]farmSetup{
 var botFarmWhat = map[string]string{
 	"botfarmfast":     "the field from minute one (hoe, seeds, bucket handed), crops 10x: sown, cut at dawn, sown again, 30 min",
 	"botfarmnobucket": "botfarmfast without a bucket: the field by water it finds, or dry by home",
+	"botfarmempty":    "the farm from an empty start: no bread, hoe, seeds or bucket handed; crops 10x, 30 min",
 	"botfarmdays":     "the field from minute one (hoe, seeds, bucket handed), two days and nights: the wheat each day",
 }
 
