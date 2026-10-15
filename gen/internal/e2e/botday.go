@@ -298,13 +298,17 @@ func runBotDay(o Options, r botDayRun) error {
 		}
 		// a night out under the sky ends the run at once: a bot without a
 		// shelter at night is no bot to go on watching
-		if nightOutside(rcon, name) {
+		if kind := nightOutside(rcon, name); kind != "" {
 			if skySince.IsZero() {
 				skySince = time.Now()
 			}
-			if s := time.Since(skySince); s >= botDayNightGrace {
-				o.Log("%s: OUT AT NIGHT under the sky for %s at %s, after %s", scenario, s.Round(time.Second), lastPos, time.Since(start).Round(time.Second))
-				return fmt.Errorf("%s: out under the sky at night for %s at %s (deaths %s)\n%s", scenario,
+			grace := botDayNightGrace
+			if kind == "leak" {
+				grace = botDayLeakGrace
+			}
+			if s := time.Since(skySince); s >= grace {
+				o.Log("%s: OUT AT NIGHT (%s) for %s at %s, after %s", scenario, kind, s.Round(time.Second), lastPos, time.Since(start).Round(time.Second))
+				return fmt.Errorf("%s: out under the sky at night (%s) for %s at %s (deaths %s)\n%s", scenario, kind,
 					s.Round(time.Second), lastPos, deaths, tail(out.String(), 30))
 			}
 		} else {
@@ -421,19 +425,25 @@ const botDayNightGrace = 20 * time.Second
 
 // nightOutside: the night (13000 to 23000 of the day, when mobs spawn) and
 // the player under the open sky — nothing over its head but air (leaves are
-// no roof: the world surface without leaves is at its feet) — or in a space open
-// to the outside (openSpaceLeaks).
-func nightOutside(rcon *rconClient, name string) bool {
+// no roof: the world surface without leaves is at its feet) — "sky"; or in a
+// space open to the outside (openSpaceLeaks) — "leak"; "" else.
+func nightOutside(rcon *rconClient, name string) string {
 	if night, ok := serverNight(rcon.command); !ok || !night {
-		return false
+		return ""
 	}
 	if underOpenSky(rcon.command, name) {
-		return true
+		return "sky"
 	}
 	// a roof is not a shelter (the owner, 2026-10-15, bot-48): the space it stands in open to the outside
-	leaks, ok := openSpaceLeaks(rcon.command, name)
-	return ok && leaks
+	if leaks, ok := openSpaceLeaks(rcon.command, name); ok && leaks {
+		return "leak"
+	}
+	return ""
 }
+
+// botDayLeakGrace is how long a bot may stand in a space open to the outside at night: it dug into a cave and
+// digs itself a shelter (half a minute), longer than under the open sky (botDayNightGrace).
+const botDayLeakGrace = 60 * time.Second
 
 // buildBot builds the outside bot (MC26_BOT) in the kit's workspace.
 func buildBot(o Options, scenario string) (string, error) {
