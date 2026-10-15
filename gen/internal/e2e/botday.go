@@ -366,6 +366,12 @@ func runBotDay(o Options, r botDayRun) error {
 	}
 	summary := fmt.Sprintf("seed %s: %s; deaths %s; longest standing still %s; farm: %s", seed, strings.Join(card, ", "), deaths, longestStill.Round(time.Second), tally)
 	o.Log("%s: %s", scenario, summary)
+	if r.farm != nil && r.farm.goal { // a goal run is judged by its scorecard: it lives (the summary says how far)
+		if _, ok := reached.Reached("minecraft:story/upgrade_tools"); !ok || deaths != "0" {
+			return fmt.Errorf("%s\n%s", summary, tail(out.String(), 25))
+		}
+		return nil
+	}
 	if r.farm != nil { // a farm run passes by its field: the wheat, and sown again
 		if !tally.farmPassed(r.farm) || deaths != "0" {
 			return fmt.Errorf("%s (to pass: wheat %d or more, sown again, no death)\n%s", summary, r.farm.harvest, tail(out.String(), 25))

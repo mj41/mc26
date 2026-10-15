@@ -52,7 +52,7 @@ func TestFarmScenarioNames(t *testing.T) {
 				t.Errorf("%q: not letters and digits", name)
 			}
 		}
-		if botFarmWhat[name] == "" || f.length == 0 || f.harvest == 0 {
+		if botFarmWhat[name] == "" || f.length == 0 || f.harvest == 0 && !f.goal {
 			t.Errorf("%q: not described or no length/harvest", name)
 		}
 	}

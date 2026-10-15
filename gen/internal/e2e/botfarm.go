@@ -29,7 +29,10 @@ import (
 //   - botfarmdays: two days and their nights at the game's own pace: the
 //     field tended through them, the wheat each day.
 //
-// Mobs are off in all three: they measure the farm, not the fights.
+//   - botgoalfast and botgoal: botfarmempty's start, run for three days (crops 10x) or four (the game's
+//     own speed) and scored by the goal milestones (botgoal.go), not by the farm.
+//
+// Mobs are off in all of them: they measure the farm, not the fights.
 
 // farmSetup is what a farm scenario changes of a botday run.
 type farmSetup struct {
@@ -53,6 +56,13 @@ var botFarmKit = []string{
 	"minecraft:stone_hoe 1", "minecraft:wheat_seeds 8",
 }
 
+// botFarmEmptyGive is the first day's plan, made, and nothing of the farm's: no bread, hoe, seeds or bucket.
+var botFarmEmptyGive = []string{
+	"minecraft:crafting_table 1", "minecraft:stone_pickaxe 1", "minecraft:stone_axe 1",
+	"minecraft:stone_shovel 1", "minecraft:stone_sword 1", "minecraft:oak_log 16",
+	"minecraft:cobblestone 32", "minecraft:torch 16",
+}
+
 // botFarmScenarios are the farm scenarios by name.
 var botFarmScenarios = map[string]farmSetup{
 	"botfarmfast": {
@@ -71,14 +81,27 @@ var botFarmScenarios = map[string]farmSetup{
 	// no seeds, no bucket — the chain (hoe, seeds from the grass, the field by water
 	// found, bread from the wheat) is the bot's own
 	"botfarmempty": {
-		give: []string{
-			"minecraft:crafting_table 1", "minecraft:stone_pickaxe 1", "minecraft:stone_axe 1",
-			"minecraft:stone_shovel 1", "minecraft:stone_sword 1", "minecraft:oak_log 16",
-			"minecraft:cobblestone 32", "minecraft:torch 16",
-		},
+		give:    botFarmEmptyGive,
 		rules:   []string{"random_tick_speed 30"},
 		length:  30 * time.Minute,
 		harvest: 3,
+	},
+	// the goal runs: botfarmempty's start, scored by how far the run gets toward a stack of
+	// bread and full iron armor (botgoal.go): crops 10x for three days, or the game's own
+	// speed for four. They pass by living (no death, a stone pickaxe), not by the farm: the
+	// scorecard says how far.
+	"botgoalfast": {
+		give:   botFarmEmptyGive,
+		rules:  []string{"random_tick_speed 30"},
+		length: 3*20*time.Minute + time.Minute,
+		goal:   true,
+		days:   3,
+	},
+	"botgoal": {
+		give:   botFarmEmptyGive,
+		length: 4*20*time.Minute + time.Minute,
+		goal:   true,
+		days:   4,
 	},
 	"botfarmdays": {
 		give:    append(append([]string{}, botFarmKit...), "minecraft:bucket 1"),
@@ -92,6 +115,8 @@ var botFarmWhat = map[string]string{
 	"botfarmfast":     "the field from minute one (hoe, seeds, bucket handed), crops 10x: sown, cut at dawn, sown again, 30 min",
 	"botfarmnobucket": "botfarmfast without a bucket: the field by water it finds, or dry by home",
 	"botfarmempty":    "the farm from an empty start: no bread, hoe, seeds or bucket handed; crops 10x, 30 min",
+	"botgoalfast":     "goal run: a stack of bread and full iron armor, from an empty start; crops 10x, 3 days",
+	"botgoal":         "goal run: a stack of bread and full iron armor, from an empty start; normal crop speed, 4 days",
 	"botfarmdays":     "the field from minute one (hoe, seeds, bucket handed), two days and nights: the wheat each day",
 }
 
@@ -101,7 +126,7 @@ func scenarioBotFarm(o Options, name string) error {
 	if !ok {
 		return fmt.Errorf("no farm scenario %q", name)
 	}
-	return runBotDay(o, botDayRun{scenario: name, seed: botFarmSeed, days: 1, mobs: mobsOff, farm: &f})
+	return runBotDay(o, botDayRun{scenario: name, seed: botFarmSeed, days: max(f.days, 1), mobs: mobsOff, farm: &f})
 }
 
 // farmCounter is one of the server's statistics a farm is judged by, kept as a

@@ -2,9 +2,12 @@ package e2e
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mj41/mc26/gen/internal/smoke"
 )
 
 // invSample is the server's answer to "data get entity Builder Inventory" for the items given as
@@ -149,5 +152,45 @@ func TestGoalOnlyInGoalRuns(t *testing.T) {
 	got := botRunMilestones(botDayRun{scenario: "goal", days: 1, farm: &f})
 	if len(got) != len(botDaysMilestones)+len(goalMilestones) || !same(got[:len(botDaysMilestones)], botDaysMilestones) {
 		t.Errorf("goal run: %v", got)
+	}
+}
+
+// TestGoalScenarios: botgoalfast and botgoal are botfarmempty's start (no bread, hoe, seeds or bucket), mobs off
+// like the farm scenarios, three days with crops at 10x and four at the game's own speed; both are listed.
+func TestGoalScenarios(t *testing.T) {
+	empty := botFarmScenarios["botfarmempty"]
+	for name, c := range map[string]struct {
+		days  int
+		rules []string
+	}{"botgoalfast": {3, []string{"random_tick_speed 30"}}, "botgoal": {4, nil}} {
+		f, ok := botFarmScenarios[name]
+		if !ok {
+			t.Fatalf("no scenario %s", name)
+		}
+		if !f.goal || f.days != c.days || !slices.Equal(f.rules, c.rules) || !slices.Equal(f.give, empty.give) {
+			t.Errorf("%s: %+v", name, f)
+		}
+		if want := time.Duration(c.days)*20*time.Minute + time.Minute; f.length != want {
+			t.Errorf("%s lasts %s, want %d days and a minute: %s", name, f.length, c.days, want)
+		}
+		if botFarmWhat[name] == "" {
+			t.Errorf("%s: not described", name)
+		}
+		got := botRunMilestones(botDayRun{scenario: name, days: f.days, farm: &f})
+		if len(got) != len(botDaysMilestones)+len(goalMilestones) {
+			t.Errorf("%s: milestones %v", name, got)
+		}
+	}
+	for _, name := range []string{"botfarmfast", "botfarmnobucket", "botfarmempty", "botfarmdays"} {
+		if botFarmScenarios[name].goal {
+			t.Errorf("%s is a goal run", name)
+		}
+	}
+	scenarios, after := scenarioTable(Options{}, nil, new(string), new(*smoke.Server))
+	known := scenarioNames(scenarios, after)
+	for _, n := range []string{"botgoalfast", "botgoal"} {
+		if !slices.Contains(known, n) {
+			t.Errorf("%s is not in the scenario table", n)
+		}
 	}
 }

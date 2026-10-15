@@ -132,6 +132,14 @@ alone — enough wheat picked up, seeds sown again after it, no death:
 | `botfarmempty` | as botfarmnobucket, and no bread, hoe or seeds handed: the whole chain is the bot's | 30 min | wheat 3 |
 | `botfarmdays` | the game's own pace, two days and nights | 41 min | wheat 3 |
 
+Two goal runs start as `botfarmempty` does (nothing of the farm handed, mobs off) and are scored by how far they get
+toward the owner's milestone, a stack of bread and full iron armor: `botgoalfast` (crops 10×, 3 days, 61 min) and
+`botgoal` (the game's own crop speed, 4 days, 81 min). Their scorecard adds the milestones "a stack of bread" (64
+bread in the pack), "an iron helmet", "an iron chestplate", "iron leggings", "iron boots" (worn or held) and "full iron
+armor", each with the second it was first seen, or `null` when not reached; the inventory is read once a second, a
+chest's content is not counted. No other scenario has these milestones. A goal run passes when the bot lives (no
+death, a stone pickaxe); the scorecard says how far it got.
+
 A downstream bot — a program built in the kit's workspace that botday, botflat and their kin run — agrees with the
 harness on this, and nothing else of its name or its output:
 
