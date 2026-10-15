@@ -421,12 +421,18 @@ const botDayNightGrace = 20 * time.Second
 
 // nightOutside: the night (13000 to 23000 of the day, when mobs spawn) and
 // the player under the open sky — nothing over its head but air (leaves are
-// no roof: the world surface without leaves is at its feet).
+// no roof: the world surface without leaves is at its feet) — or in a space open
+// to the outside (openSpaceLeaks).
 func nightOutside(rcon *rconClient, name string) bool {
 	if night, ok := serverNight(rcon.command); !ok || !night {
 		return false
 	}
-	return underOpenSky(rcon.command, name)
+	if underOpenSky(rcon.command, name) {
+		return true
+	}
+	// a roof is not a shelter (the owner, 2026-10-15, bot-48): the space it stands in open to the outside
+	leaks, ok := openSpaceLeaks(rcon.command, name)
+	return ok && leaks
 }
 
 // buildBot builds the outside bot (MC26_BOT) in the kit's workspace.
