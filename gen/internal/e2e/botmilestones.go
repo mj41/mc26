@@ -127,7 +127,7 @@ func (m *milestoneTimes) fromServer() {
 		return
 	}
 	for _, ms := range m.list {
-		if _, ok := m.Reached(ms.id); ok {
+		if _, ok := m.Reached(ms.id); ok || isGoalID(ms.id) {
 			continue
 		}
 		resp, err := m.cmd(fmt.Sprintf("execute if entity @a[name=%s,advancements={%s=true}]", m.name, ms.id))
@@ -137,11 +137,44 @@ func (m *milestoneTimes) fromServer() {
 	}
 }
 
+// fromInventory asks for the bot's inventory when a goal milestone (botgoal.go) is still open, and takes each
+// the counts now show, as of now.
+func (m *milestoneTimes) fromInventory() {
+	if m.cmd == nil {
+		return
+	}
+	var open []goalMilestone
+	for _, ms := range m.list {
+		if g, ok := goalByID(ms.id); ok {
+			if _, done := m.Reached(ms.id); !done {
+				open = append(open, g)
+			}
+		}
+	}
+	if len(open) == 0 {
+		return
+	}
+	resp, err := m.cmd("data get entity " + m.name + " Inventory")
+	if err != nil {
+		return
+	}
+	have, ok := inventoryCounts(resp)
+	if !ok {
+		return
+	}
+	for _, g := range open {
+		if g.reached(have) {
+			m.note(g.id, m.now().Sub(m.start), "the inventory")
+		}
+	}
+}
+
 // poll is one round: the bot's events first (their times are the exact ones), then the server's answer for
-// what no event told.
+// what no event told, then the inventory for the goal milestones.
 func (m *milestoneTimes) poll() {
 	m.fromEvents()
 	m.fromServer()
+	m.fromInventory()
 }
 
 // run polls every period till stop is closed.

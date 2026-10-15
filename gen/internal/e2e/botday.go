@@ -132,12 +132,12 @@ type botDayRun struct {
 // runBotDay runs a botday run: the bot in a new world of the seed, judged.
 func runBotDay(o Options, r botDayRun) error {
 	scenario, seed, days, mobs := r.scenario, r.seed, r.days, r.mobs
-	length, milestones := botDayLength, botDayMilestones
+	length, milestones := botDayLength, botRunMilestones(r)
 	if days > 1 {
-		length, milestones = time.Duration(days)*20*time.Minute+time.Minute, botDaysMilestones
+		length = time.Duration(days)*20*time.Minute + time.Minute
 	}
 	if r.farm != nil {
-		length, milestones = r.farm.length, botDaysMilestones
+		length = r.farm.length
 	}
 	name := "Builder"
 	dir := filepath.Join(o.WorkDir, "server-"+scenario)

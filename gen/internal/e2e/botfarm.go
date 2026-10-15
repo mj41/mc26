@@ -37,6 +37,8 @@ type farmSetup struct {
 	rules   []string      // game rules: "random_tick_speed 30"
 	length  time.Duration // the run's length
 	harvest int           // wheat picked up, at least, to pass
+	goal    bool          // a goal run: judged by the stack of bread and the iron armor too
+	days    int           // the game's days it lasts (0: one)
 }
 
 // botFarmSeed is the farm scenarios' world: botday2's (8675309), water a
