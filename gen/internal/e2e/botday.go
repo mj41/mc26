@@ -259,7 +259,8 @@ func runBotDay(o Options, r botDayRun) error {
 	stillSince, longestStill := time.Now(), time.Duration(0)
 	deaths := "0"
 	var skySince time.Time // out under the sky at night since
-	var waits *waitTail    // the bot's announced waits (botwait.go)
+	var skyLeakLogged time.Time
+	var waits *waitTail // the bot's announced waits (botwait.go)
 	if run != nil {
 		waits = &waitTail{path: run.events()}
 	}
@@ -299,17 +300,23 @@ func runBotDay(o Options, r botDayRun) error {
 		// a night out under the sky ends the run at once: a bot without a
 		// shelter at night is no bot to go on watching
 		if kind := nightOutside(rcon, name); kind != "" {
-			if skySince.IsZero() {
-				skySince = time.Now()
-			}
-			grace := botDayNightGrace
 			if kind == "leak" {
-				grace = botDayLeakGrace
-			}
-			if s := time.Since(skySince); s >= grace {
-				o.Log("%s: OUT AT NIGHT (%s) for %s at %s, after %s", scenario, kind, s.Round(time.Second), lastPos, time.Since(start).Round(time.Second))
-				return fmt.Errorf("%s: out under the sky at night (%s) for %s at %s (deaths %s)\n%s", scenario, kind,
-					s.Round(time.Second), lastPos, deaths, tail(out.String(), 30))
+				// a space open to the outside, not under the open sky: told, not failed (its flood past a
+				// cave system's size ended botday2off 1015-140706 with a bot in its own mine); the bot's
+				// own check has the sky and the open land
+				if skyLeakLogged.IsZero() || time.Since(skyLeakLogged) > 30*time.Second {
+					skyLeakLogged = time.Now()
+					o.Log("%s: open space at night at %s (the flood passed %d cells): told, not failed", scenario, lastPos, watcherSpaceCells)
+				}
+			} else {
+				if skySince.IsZero() {
+					skySince = time.Now()
+				}
+				if s := time.Since(skySince); s >= botDayNightGrace {
+					o.Log("%s: OUT AT NIGHT under the sky for %s at %s, after %s", scenario, s.Round(time.Second), lastPos, time.Since(start).Round(time.Second))
+					return fmt.Errorf("%s: out under the sky at night for %s at %s (deaths %s)\n%s", scenario,
+						s.Round(time.Second), lastPos, deaths, tail(out.String(), 30))
+				}
 			}
 		} else {
 			skySince = time.Time{}
