@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -69,6 +70,56 @@ func serverNight(cmd rconCmd) (night, ok bool) {
 func underOpenSky(cmd rconCmd, name string) bool {
 	resp, err := cmd(fmt.Sprintf("execute at %s positioned over motion_blocking_no_leaves if entity %s[distance=..1.5]", name, name))
 	return err == nil && strings.Contains(resp, "passed")
+}
+
+// watcherSpaceCells is the most open cells the watcher lets a bot's own space hold: the night's mine (stairs, room,
+// tunnels, branches) is some 1500 cells; the open land, or a pit open on a side to it, is more.
+const watcherSpaceCells = 3000
+
+// openSpaceLeaks reports whether the cells a mob can walk or fall through, from the player's feet and head cells
+// (cells the game calls replaceable: air, plants, water, snow), are more than a space of its own holds
+// (watcherSpaceCells) — a roof is not a shelter: a room open on a side to the outside lets the night in. The
+// flood asks the server one cell at a time (`execute if block`); true also when the player's place cannot be read
+// is NOT assumed: ok false then.
+func openSpaceLeaks(cmd rconCmd, name string) (leaks, ok bool) {
+	resp, err := cmd("data get entity " + name + " Pos")
+	if err != nil {
+		return false, false
+	}
+	m := posRe.FindStringSubmatch(resp)
+	if m == nil {
+		return false, false
+	}
+	f := func(s string) int { v, _ := strconv.ParseFloat(s, 64); return int(math.Floor(v)) }
+	start := [3]int{f(m[1]), f(m[2]), f(m[3])}
+	seen := map[[3]int]bool{}
+	queue := [][3]int{start, {start[0], start[1] + 1, start[2]}}
+	for _, c := range queue {
+		seen[c] = true
+	}
+	for len(queue) > 0 {
+		c := queue[0]
+		queue = queue[1:]
+		for _, d := range [6][3]int{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}} {
+			n := [3]int{c[0] + d[0], c[1] + d[1], c[2] + d[2]}
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			r, err := cmd(fmt.Sprintf("execute if block %d %d %d #minecraft:replaceable", n[0], n[1], n[2]))
+			if err != nil {
+				return false, false
+			}
+			if !strings.Contains(r, "passed") {
+				continue
+			}
+			if len(seen) > watcherSpaceCells {
+				return true, true
+			}
+			queue = append(queue, n)
+		}
+	}
+	return false, true
 }
 
 var invIDRe = regexp.MustCompile(`id: "([^"]+)"`)

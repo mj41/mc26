@@ -255,3 +255,46 @@ func TestServerClock(t *testing.T) {
 		t.Error("a night read from a failed call")
 	}
 }
+
+// openSpaceLeaks: a flood of the cells the game calls replaceable from the player's cells.
+func TestOpenSpaceLeaks(t *testing.T) {
+	// a room 3 x 2 x 3 of air in stone; with a side open to a big open space, or shut
+	world := func(openSide bool) rconCmd {
+		return func(c string) (string, error) {
+			if strings.HasPrefix(c, "data get entity") {
+				return "Builder has the following entity data: [1.5d, 64.0d, 1.5d]", nil
+			}
+			var x, y, z int
+			if _, err := fmt.Sscanf(c, "execute if block %d %d %d #minecraft:replaceable", &x, &y, &z); err != nil {
+				return "", err
+			}
+			in := x >= 0 && x <= 2 && y >= 64 && y <= 65 && z >= 0 && z <= 2
+			outside := openSide && x >= 3 && y >= 64 && z >= 0 && z <= 2 // a wall's cell open to the land beyond (a big open space)
+			outside = outside || openSide && x >= 3 && y >= 64 && y <= 200 && z >= -100 && z <= 100 && x <= 200
+			if in || outside {
+				return "Test passed", nil
+			}
+			return "Test failed", nil
+		}
+	}
+	if leaks, ok := openSpaceLeaks(world(false), "Builder"); !ok || leaks {
+		t.Errorf("a shut room: leaks %v ok %v; want enclosed", leaks, ok)
+	}
+	if leaks, ok := openSpaceLeaks(world(true), "Builder"); !ok || !leaks {
+		t.Errorf("a room open on a side: leaks %v ok %v; want a leak", leaks, ok)
+	}
+}
+
+// TestOpenSpaceAtNightNeverFailsARun: only the open sky ends a run (after the grace); an open space — however
+// long, a cave system's flood — is told. botday2off 1015-140706 and 11 more runs failed on the leak variant.
+func TestOpenSpaceAtNightNeverFailsARun(t *testing.T) {
+	if runFailsAtNight("leak", time.Hour) {
+		t.Errorf("an hour in an open space at night fails the run")
+	}
+	if !runFailsAtNight("sky", botDayNightGrace) {
+		t.Errorf("the open sky for the grace does not fail the run")
+	}
+	if runFailsAtNight("sky", botDayNightGrace-time.Second) {
+		t.Errorf("the open sky within the grace fails the run")
+	}
+}
