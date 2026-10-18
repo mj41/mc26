@@ -78,6 +78,7 @@ func scenarioTable(o Options, v *build.Info, bin *string, srv **smoke.Server) (s
 		{name: "botbuild", what: "the construction plans: a room in a hill, a hut", long: true, fn: func() error { return scenarioBotFlat(o, flatGroups["botbuild"]...) }},
 		{name: "botfarm", what: "the field bricks: sow, bucket, seeds, plan built, harvest", long: true, fn: func() error { return scenarioBotFlat(o, flatGroups["botfarm"]...) }},
 		{name: "botwaterexit", what: "out of a pond onto a bank: a cow, its control, the bot", long: true, fn: func() error { return scenarioBotFlat(o, flatGroups["botwaterexit"]...) }},
+		{name: "botarenas3", what: "three bots, three walled arenas on one flat world, one server, 20 minutes", long: true, fn: func() error { return scenarioBotArenas(o) }},
 		{name: "botprobe", what: "every brick, five rounds, for measurement", long: true, fn: func() error { return scenarioBotFlatRounds(o, "botprobe", probeRounds, probeBricks()...) }},
 		{name: "botprobetrace", what: "the four bricks the small game is held to, five rounds", long: true, fn: func() error { return scenarioBotFlatRounds(o, "botprobetrace", probeRounds, probeTraceBricks...) }},
 	}

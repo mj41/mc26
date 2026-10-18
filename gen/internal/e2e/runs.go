@@ -64,6 +64,9 @@ type runMeta struct {
 	// Bench is the test bench it ran on (MC26_BENCH: a cluster's
 	// "bench-1"), empty on a workstation
 	Bench string `json:"bench,omitempty"`
+	// Job is the bench job that started the run (MC26_JOB): the runs one job
+	// starts together share it; empty outside a bench job
+	Job string `json:"job,omitempty"`
 	// BenchVersion is the version of the bench's code that ran it
 	// (MC26_BENCH_VERSION: a release tag such as "v0.5.23", a revision
 	// with "-dirty" when not built from a tag, or "unknown"); left out on
@@ -161,7 +164,7 @@ func newRun(o Options, scenario, robot string, srv *smoke.Server) (*run, error) 
 		Started: now.Format(time.RFC3339), Version: o.Version, Scenario: scenario, Robot: robot,
 		Server: srv.Addr(), LevelType: srv.LevelType, Seed: srv.Seed,
 		Mc26: commitOf(paths.MustRoot()), Kit: commitOf(o.KitSrc), Host: host,
-		Bench: os.Getenv("MC26_BENCH"), BenchVersion: os.Getenv("MC26_BENCH_VERSION"), Delivery: deliveryOf(os.Getenv("MC26_DELIVERY_FILE")),
+		Bench: os.Getenv("MC26_BENCH"), Job: os.Getenv("MC26_JOB"), BenchVersion: os.Getenv("MC26_BENCH_VERSION"), Delivery: deliveryOf(os.Getenv("MC26_DELIVERY_FILE")),
 	}}
 	r.hmark = harnessMark()
 	noteHarness(fmt.Sprintf("run started: scenario %s, robot %s, server %s, %s", scenario, robot, r.meta.Server, dir))
