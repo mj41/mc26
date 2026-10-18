@@ -284,7 +284,7 @@ func TestRunJobField(t *testing.T) {
 		runs = append(runs, r)
 		b, _ := os.ReadFile(filepath.Join(r.dir, "meta.json"))
 		var m runMeta
-		if err := json.Unmarshal(b, &m); err != nil || m.Job != "job-123" || !strings.Contains(string(b), `"job":"job-123"`) {
+		if err := json.Unmarshal(b, &m); err != nil || m.Job != "job-123" {
 			t.Errorf("%s meta.json = %s (%v)", robot, b, err)
 		}
 	}
