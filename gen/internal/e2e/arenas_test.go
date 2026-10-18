@@ -33,7 +33,7 @@ func TestArenaBuildCoversWallsRoofFloor(t *testing.T) {
 			t.Errorf("arenas share one clock, got %q", c)
 		}
 		m := reFill.FindStringSubmatch(c)
-		if m == nil || !strings.Contains(m[7], "barrier") && !strings.Contains(m[7], "bedrock") {
+		if m == nil {
 			continue
 		}
 		v := make([]int, 6)

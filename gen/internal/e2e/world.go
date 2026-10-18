@@ -170,3 +170,53 @@ func copyDir(src, dst string) error {
 		return out.Close()
 	})
 }
+
+// sharedArenaWorld is the flat world of n walled arenas (arenas.go) made by
+// the version from, built the first time and kept for the next runs; the
+// directory holds the world to copy into a server. recipeHash names the
+// arenas' recipe (arenaRecipeHash).
+func sharedArenaWorld(o Options, from, recipeHash string, n int) (string, error) {
+	return arenaWorld(o.WorkDir, from, recipeHash, n, func(dir string) error {
+		jar, err := extract.ServerJar(filepath.Dir(o.JarPath), from, o.Log)
+		if err != nil {
+			return err
+		}
+		o.Log("world: %s builds %d walled arenas", from, n)
+		gen := filepath.Join(dir, "gen")
+		srv := &smoke.Server{
+			Version: from, JarPath: jar, WorkDir: gen,
+			Port: o.Port, Runtime: o.Runtime, Log: o.Log, Generator: flatLayers,
+		}
+		if err := servers.start(srv); err != nil {
+			return err
+		}
+		stopped := false
+		defer func() {
+			if !stopped {
+				servers.stop(srv)
+			}
+		}()
+		if err := srv.WaitReady(6 * time.Minute); err != nil {
+			return err
+		}
+		rc, err := dialRCON(srv.RCONAddr(), srv.RCONPassword)
+		if err != nil {
+			return fmt.Errorf("rcon: %w", err)
+		}
+		defer rc.close()
+		rc.timeout = 3 * time.Minute // forceload makes its chunks before it answers
+		err = buildArenaWorld(n, rc, func() error {
+			rc.close()
+			servers.stop(srv) // saves the world as it stops
+			stopped = true
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if err := copyDir(filepath.Join(gen, "world"), filepath.Join(dir, "world")); err != nil {
+			return err
+		}
+		return os.RemoveAll(gen)
+	})
+}
