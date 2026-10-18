@@ -268,3 +268,31 @@ func TestRunMetaBenchVersion(t *testing.T) {
 		})
 	}
 }
+
+// TestRunJobField: the runs one bench job starts together (MC26_JOB) carry
+// the same job in their meta.json and their run-started lines, each in a
+// directory of its own.
+func TestRunJobField(t *testing.T) {
+	t.Setenv("MC26_JOB", "job-123")
+	dir := t.TempDir()
+	var runs []*run
+	for _, robot := range []string{"Settler", "Miner"} {
+		r, err := newRun(Options{RunsDir: dir, Version: "26.3"}, "days", robot, &smoke.Server{Port: 25650})
+		if err != nil || r == nil {
+			t.Fatalf("newRun %s: %v", robot, err)
+		}
+		runs = append(runs, r)
+		b, _ := os.ReadFile(filepath.Join(r.dir, "meta.json"))
+		var m runMeta
+		if err := json.Unmarshal(b, &m); err != nil || m.Job != "job-123" || !strings.Contains(string(b), `"job":"job-123"`) {
+			t.Errorf("%s meta.json = %s (%v)", robot, b, err)
+		}
+	}
+	if filepath.Base(runs[0].dir) == filepath.Base(runs[1].dir) {
+		t.Errorf("both runs in %s", runs[0].dir)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "runs.jsonl"))
+	if n := strings.Count(string(b), `"job":"job-123"`); n != 2 {
+		t.Errorf("runs.jsonl has job in %d lines, want 2:\n%s", n, b)
+	}
+}
