@@ -447,7 +447,7 @@ func nightOutside(rcon *rconClient, name string) string {
 	if underOpenSky(rcon.command, name) {
 		return "sky"
 	}
-	// a roof is not a shelter (the owner, 2026-10-15, bot-48): the space it stands in open to the outside
+	// a roof is not a shelter (2026-10-15): the space it stands in open to the outside
 	if leaks, ok := openSpaceLeaks(rcon.command, name); ok && leaks {
 		return "leak"
 	}
